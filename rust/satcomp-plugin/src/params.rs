@@ -76,6 +76,9 @@ pub struct SatCompParams {
     /// Colour scheme index (0 Black, 1 White, 2.. see palette table); UI-only, saved with the project.
     #[persist = "palette"]
     pub palette: Arc<AtomicI32>,
+    /// Name of the last loaded/saved preset (display only).
+    #[persist = "preset-name"]
+    pub preset_name: Arc<parking_lot::Mutex<String>>,
     /// Out-stage gain-match trim (dB) written by the 3 s measurement; saved with the project.
     #[persist = "match-trim"]
     pub match_trim: Arc<AtomicF32>,
@@ -204,6 +207,7 @@ impl Default for SatCompParams {
         Self {
             editor_state: EguiState::from_size(700, 420),
             palette: Arc::new(AtomicI32::new(0)),
+            preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             match_trim: Arc::new(AtomicF32::new(0.0)),
             shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 13 }),
             drive: FloatParam::new("Drive", 25.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),

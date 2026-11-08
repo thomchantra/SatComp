@@ -62,6 +62,7 @@ o.append("];\n")
 o.append("#[derive(Params)]\npub struct SatCompParams {")
 o.append('    #[persist = "editor-state"]\n    pub editor_state: Arc<EguiState>,')
 o.append('    /// Colour scheme index (0 Black, 1 White, 2.. see palette table); UI-only, saved with the project.\n    #[persist = "palette"]\n    pub palette: Arc<AtomicI32>,')
+o.append('    /// Name of the last loaded/saved preset (display only).\n    #[persist = "preset-name"]\n    pub preset_name: Arc<parking_lot::Mutex<String>>,')
 o.append('    /// Out-stage gain-match trim (dB) written by the 3 s measurement; saved with the project.\n    #[persist = "match-trim"]\n    pub match_trim: Arc<AtomicF32>,')
 for n, fl, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{fl}"]\n    pub {fl}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
@@ -69,6 +70,7 @@ o.append("}\n")
 o.append("impl Default for SatCompParams {\n    fn default() -> Self {\n        Self {")
 o.append("            editor_state: EguiState::from_size(700, 420),")
 o.append("            palette: Arc::new(AtomicI32::new(0)),")
+o.append("            preset_name: Arc::new(parking_lot::Mutex::new(String::new())),")
 o.append("            match_trim: Arc::new(AtomicF32::new(0.0)),")
 for n, fl, name, k, mn, mx, df, st, u in P:
     if k == "int":

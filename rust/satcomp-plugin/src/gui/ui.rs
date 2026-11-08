@@ -3,6 +3,7 @@
 
 use super::canvas::{Canvas, PALETTES};
 use crate::params::{SatCompParams, TABLE};
+use crate::presets::{self, Preset};
 use crate::Shared;
 use nih_plug::prelude::*;
 use satcomp_dsp::biquad::{eq_coef, mag_db};
@@ -28,7 +29,19 @@ enum MenuKind {
     Shape,
     Palette,
     Size,
+    Preset,
 }
+
+/// kind: 0 selectable item, 1 header (dim, not selectable), 2 separator
+#[derive(Clone)]
+struct MItem {
+    label: String,
+    kind: u8,
+    id: i32,
+}
+
+const MENU_ROWS: usize = 18;
+const MENU_ROW_H: f32 = 14.0;
 
 /// Window scale steps (percent of the 560x336 base size).
 const SIZES: [f32; 6] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5];
@@ -37,8 +50,9 @@ struct Menu {
     kind: MenuKind,
     x: f32,
     y: f32,
-    items: Vec<String>,
-    checked: usize,
+    items: Vec<MItem>,
+    checked: i32,
+    scroll: usize,
 }
 
 pub struct State {
@@ -120,6 +134,11 @@ pub struct State {
     resizing: bool,
     resize_off: (f32, f32),
     pub ptr_pt: (f32, f32),
+    // presets
+    factory: Vec<Preset>,
+    user: Vec<(String, std::path::PathBuf)>,
+    /// 1 = load dialog, 2 = save dialog (run after the frame is drawn, they block)
+    pending: u8,
 }
 
 impl State {
@@ -261,6 +280,9 @@ impl State {
             resizing: false,
             resize_off: (0.0, 0.0),
             ptr_pt: (0.0, 0.0),
+            factory: presets::factory(),
+            user: presets::scan_user(),
+            pending: 0,
         }
     }
 }
@@ -618,7 +640,8 @@ impl<'a> Gui<'a> {
     }
 
     fn open_menu(&mut self, kind: MenuKind, x: f32, y: f32, items: Vec<String>, checked: usize) {
-        self.menu = Some(Menu { kind, x, y, items, checked });
+        let items = items.into_iter().enumerate().map(|(i, label)| MItem { label, kind: 0, id: i as i32 }).collect();
+        self.menu = Some(Menu { kind, x, y, items, checked: checked as i32, scroll: 0 });
     }
 
     /// shape selector: [<] NAME [>]
@@ -650,7 +673,7 @@ impl<'a> Gui<'a> {
         self.cv.tri((x + w - aw * 0.5 - 2.0, cy - 3.0), (x + w - aw * 0.5 - 2.0, cy + 3.0), (x + w - aw * 0.5 + 2.0, cy));
         self.cv.set_font(2);
         let name = SHAPER_NAMES[sel.clamp(0, 13) as usize].to_uppercase();
-        self.cv.textc(x + aw, y + 2.0, w - 2.0 * aw, &name);
+        self.cv.textc(x + aw, y + ((h - 8.0) * 0.5).floor(), w - 2.0 * aw, &name);
     }
 
     /// filter glyphs traced from svg/*.svg. kind: 0 HPF, 1 LPF, 2 low shelf, 3 high shelf, 4 bell
@@ -1410,98 +1433,305 @@ impl<'a> Gui<'a> {
     }
 
     // ------------------------------------------------------------------ popup menu (replaces gfx_showmenu)
+    /// (x, y, w, h, visible rows) of the open menu, clamped to the canvas.
+    fn menu_geom(&self) -> Option<(f32, f32, f32, f32, usize)> {
+        let m = self.menu.as_ref()?;
+        let tw = m.items.iter().map(|i| self.cv.text_w(&i.label)).fold(0.0, f32::max);
+        let rows = m.items.len().min(MENU_ROWS);
+        let (mw, mh) = (tw + 26.0, MENU_ROW_H * rows as f32 + 2.0);
+        let x = m.x.min(560.0 - mw).max(0.0);
+        let y = m.y.min(336.0 - mh).max(0.0);
+        Some((x, y, mw, mh, rows))
+    }
+
     fn menu_frame(&mut self) {
-        let Some(m) = self.menu.as_ref() else { return };
-        let ih = 14.0;
-        let tw = m.items.iter().map(|s| self.cv.text_w(s)).fold(0.0, f32::max);
-        let (mw, mh) = (tw + 26.0, ih * m.items.len() as f32 + 2.0);
-        let mut x = m.x;
-        let mut y = m.y;
-        if y + mh > 336.0 {
-            y = (336.0 - mh).max(0.0);
-        }
-        if x + mw > 560.0 {
-            x = 560.0 - mw;
-        }
+        let Some((x, y, mw, mh, rows)) = self.menu_geom() else { return };
         let inside = self.hit(x, y, mw, mh);
-        let idx = ((self.my - y - 1.0) / ih).floor() as i32;
-        let mut chosen: Option<usize> = None;
+        let row = ((self.my - y - 1.0) / MENU_ROW_H).floor() as i32;
+        let mut chosen: Option<(i32, u8)> = None;
         let mut close = false;
-        if self.press {
-            if inside && idx >= 0 && (idx as usize) < m.items.len() {
-                chosen = Some(idx as usize);
+        let (wheel, press, rpress) = (self.wheel, self.press, self.rpress);
+        if let Some(m) = self.menu.as_mut() {
+            if wheel != 0 && m.items.len() > rows {
+                let max = m.items.len() - rows;
+                m.scroll = (m.scroll as i32 - wheel).clamp(0, max as i32) as usize;
             }
-            close = true;
+            if press {
+                if inside && row >= 0 && (row as usize) < rows {
+                    if let Some(it) = m.items.get(m.scroll + row as usize) {
+                        if it.kind == 0 {
+                            chosen = Some((it.id, match m.kind {
+                                MenuKind::Shape => 0,
+                                MenuKind::Palette => 1,
+                                MenuKind::Size => 2,
+                                MenuKind::Preset => 3,
+                            }));
+                        } else {
+                            return self.eat_menu_input();
+                        }
+                    }
+                }
+                close = true;
+            }
+            if rpress {
+                close = true;
+            }
         }
-        if self.rpress {
-            close = true;
-        }
-        if chosen.is_some() || close {
-            let kind = match m.kind {
-                MenuKind::Shape => 0,
-                MenuKind::Palette => 1,
-                MenuKind::Size => 2,
-            };
+        if close || chosen.is_some() {
             self.menu = None;
-            if let Some(i) = chosen {
-                if kind == 0 {
-                    self.click_set(1, i as f32);
-                } else if kind == 1 {
-                    self.set_pal(i);
-                } else {
-                    self.request_scale(SIZES[i.min(SIZES.len() - 1)]);
+            if let Some((id, kind)) = chosen {
+                match kind {
+                    0 => self.click_set(1, id as f32),
+                    1 => self.set_pal(id as usize),
+                    2 => self.request_scale(SIZES[(id as usize).min(SIZES.len() - 1)]),
+                    _ => self.preset_action(id),
                 }
             }
-            self.press = false;
-            self.rpress = false;
-            self.wheel = 0;
-            return;
         }
-        // consume input while open
+        self.eat_menu_input();
+    }
+
+    fn eat_menu_input(&mut self) {
         self.press = false;
         self.rpress = false;
         self.wheel = 0;
-        // draw (overlay, after everything else: queued via `menu_draw`)
     }
 
     fn menu_draw(&mut self) {
+        let Some((x, y, mw, mh, rows)) = self.menu_geom() else { return };
         let Some(m) = self.menu.as_ref() else { return };
-        let ih = 14.0;
-        let tw = m.items.iter().map(|s| self.cv.text_w(s)).fold(0.0, f32::max);
-        let (mw, mh) = (tw + 26.0, ih * m.items.len() as f32 + 2.0);
-        let mut x = m.x;
-        let mut y = m.y;
-        if y + mh > 336.0 {
-            y = (336.0 - mh).max(0.0);
-        }
-        if x + mw > 560.0 {
-            x = 560.0 - mw;
-        }
-        let items = m.items.clone();
+        let items: Vec<MItem> = m.items.iter().skip(m.scroll).take(rows).cloned().collect();
         let checked = m.checked;
+        let (more_up, more_down) = (m.scroll > 0, m.scroll + rows < m.items.len());
         self.cv.dk = 1.0;
         self.cv.setbg();
         self.cv.fill(x, y, mw, mh);
         self.setc(false);
         self.cv.boxr(x, y, mw, mh);
         self.cv.set_font(1);
-        let hov = ((self.my - y - 1.0) / ih).floor() as i32;
-        for (i, s) in items.iter().enumerate() {
-            let iy = y + 1.0 + i as f32 * ih;
-            let hot = self.hit(x, y, mw, mh) && hov == i as i32;
-            if hot {
-                self.setc(false);
-                self.cv.fill(x + 1.0, iy, mw - 2.0, ih);
-                self.cv.setbg();
-            } else {
-                self.setc(false);
+        let hov = ((self.my - y - 1.0) / MENU_ROW_H).floor() as i32;
+        for (i, it) in items.iter().enumerate() {
+            let iy = y + 1.0 + i as f32 * MENU_ROW_H;
+            match it.kind {
+                2 => {
+                    self.setc(false);
+                    self.cv.fill(x + 4.0, iy + 6.0, mw - 8.0, 1.0);
+                }
+                1 => {
+                    self.cv.dk = 0.5;
+                    self.setc(false);
+                    self.cv.text(x + 6.0, iy + 1.0, &it.label);
+                    self.cv.dk = 1.0;
+                }
+                _ => {
+                    let hot = self.hit(x, y, mw, mh) && hov == i as i32;
+                    self.setc(false);
+                    if hot {
+                        self.cv.fill(x + 1.0, iy, mw - 2.0, MENU_ROW_H);
+                        self.cv.setbg();
+                    }
+                    if it.id == checked {
+                        self.cv.fill(x + 5.0, iy + 5.0, 4.0, 4.0);
+                    }
+                    self.cv.text(x + 14.0, iy + 1.0, &it.label);
+                }
             }
-            if i == checked {
-                self.cv.fill(x + 5.0, iy + 5.0, 4.0, 4.0);
-            }
-            self.cv.text(x + 14.0, iy + 1.0, s);
         }
         self.setc(false);
+        if more_up {
+            self.cv.tri((x + mw - 10.0, y + 7.0), (x + mw - 4.0, y + 7.0), (x + mw - 7.0, y + 3.0));
+        }
+        if more_down {
+            self.cv.tri((x + mw - 10.0, y + mh - 7.0), (x + mw - 4.0, y + mh - 7.0), (x + mw - 7.0, y + mh - 3.0));
+        }
+    }
+
+    // ------------------------------------------------------------------ presets
+    fn preset_name(&self) -> String {
+        self.env.params.preset_name.lock().clone()
+    }
+
+    fn set_preset_name(&mut self, n: &str) {
+        *self.env.params.preset_name.lock() = n.to_string();
+    }
+
+    /// Write every stored parameter of `p` (missing ids -> default). Bypass / Gain Match are left alone.
+    fn apply_preset(&mut self, p: &Preset) {
+        for &(n, id, mn, mx, df) in TABLE {
+            if presets::EXCLUDED.contains(&id) {
+                continue;
+            }
+            let v = p.params.get(id).copied().unwrap_or(df).clamp(mn, mx);
+            self.click_set(n, v);
+        }
+        self.set_preset_name(&p.name);
+    }
+
+    fn capture(&self, name: &str) -> Preset {
+        let params = TABLE
+            .iter()
+            .filter(|e| !presets::EXCLUDED.contains(&e.1))
+            .map(|e| (e.1.to_string(), self.sget(e.0)))
+            .collect();
+        Preset::new(name, params)
+    }
+
+    fn preset_count(&self) -> usize {
+        self.factory.len() + self.user.len()
+    }
+
+    fn preset_at(&self, i: usize) -> Option<Preset> {
+        if i < self.factory.len() {
+            Some(self.factory[i].clone())
+        } else {
+            let (name, path) = self.user.get(i - self.factory.len())?;
+            presets::load_file(path).map(|mut p| {
+                p.name = name.clone();
+                p
+            })
+        }
+    }
+
+    fn preset_index(&self) -> Option<usize> {
+        let cur = self.preset_name();
+        let cur = if cur.is_empty() { "INIT".to_string() } else { cur };
+        self.factory
+            .iter()
+            .position(|p| p.name == cur)
+            .or_else(|| self.user.iter().position(|u| u.0 == cur).map(|i| i + self.factory.len()))
+    }
+
+    fn step_preset(&mut self, dir: i32) {
+        self.user = presets::scan_user();
+        let n = self.preset_count() as i32;
+        let next = match self.preset_index() {
+            Some(i) => (i as i32 + dir).rem_euclid(n),
+            None => if dir > 0 { 0 } else { n - 1 },
+        };
+        if let Some(p) = self.preset_at(next as usize) {
+            self.apply_preset(&p);
+        }
+    }
+
+    fn open_preset_menu(&mut self, x: f32, y: f32) {
+        self.user = presets::scan_user();
+        let mut items = vec![
+            MItem { label: "Load preset...".into(), kind: 0, id: 0 },
+            MItem { label: String::new(), kind: 2, id: -1 },
+            MItem { label: "FACTORY".into(), kind: 1, id: -1 },
+        ];
+        for (i, p) in self.factory.iter().enumerate() {
+            items.push(MItem { label: p.name.clone(), kind: 0, id: 1000 + i as i32 });
+        }
+        if !self.user.is_empty() {
+            items.push(MItem { label: String::new(), kind: 2, id: -1 });
+            items.push(MItem { label: "USER".into(), kind: 1, id: -1 });
+            for (i, u) in self.user.iter().enumerate() {
+                items.push(MItem { label: u.0.clone(), kind: 0, id: 2000 + i as i32 });
+            }
+        }
+        let checked = match self.preset_index() {
+            Some(i) if i < self.factory.len() => 1000 + i as i32,
+            Some(i) => 2000 + (i - self.factory.len()) as i32,
+            None => -1,
+        };
+        self.menu = Some(Menu { kind: MenuKind::Preset, x, y, items, checked, scroll: 0 });
+    }
+
+    fn preset_action(&mut self, id: i32) {
+        match id {
+            0 => self.pending = 1,
+            1000..=1999 => {
+                if let Some(p) = self.preset_at((id - 1000) as usize) {
+                    self.apply_preset(&p);
+                }
+            }
+            2000.. => {
+                if let Some(p) = self.preset_at(self.factory.len() + (id - 2000) as usize) {
+                    self.apply_preset(&p);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// File dialogs block, so they run after the frame has been drawn.
+    fn run_pending(&mut self) {
+        let what = std::mem::take(&mut self.pending);
+        match what {
+            1 => {
+                if let Some(path) = presets::open_dialog() {
+                    if let Some(mut p) = presets::load_file(&path) {
+                        if let Some(stem) = path.file_stem() {
+                            p.name = stem.to_string_lossy().into_owned();
+                        }
+                        self.apply_preset(&p);
+                    }
+                }
+            }
+            2 => {
+                let cur = self.preset_name();
+                let def = if cur.is_empty() || cur == "INIT" { "My preset".to_string() } else { cur };
+                if let Some(path) = presets::save_dialog(&def) {
+                    let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(def);
+                    if presets::save_file(&path, &self.capture(&name)).is_ok() {
+                        self.set_preset_name(&name);
+                        self.user = presets::scan_user();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Header preset bar (save icon | name | prev next) and the window-scale button.
+    fn preset_bar(&mut self) {
+        let (y, h) = (8.0, 16.0);
+        // save icon
+        if self.btn(152.0, y, 26.0, h, "", 0) {
+            self.pending = 2;
+        }
+        self.setc(false);
+        self.cv.boxr(160.0, y + 3.0, 10.0, 10.0);
+        self.cv.fill(163.0, y + 3.0, 4.0, 3.0);
+        self.cv.boxr(162.0, y + 8.0, 6.0, 5.0);
+        // name -> dropdown
+        let name = self.preset_name();
+        let shown = if name.is_empty() || name == "INIT" { "-- INIT --".to_string() } else { name };
+        let hv = self.hit(178.0, y, 142.0, h);
+        if hv && self.press && self.act == 0 {
+            self.open_preset_menu(178.0, y + h);
+            self.press = false;
+        }
+        self.setc(false);
+        self.cv.boxr(178.0, y, 142.0, h);
+        self.cv.set_font(2);
+        let mut t = shown;
+        while self.cv.text_w(&t) > 136.0 && t.chars().count() > 3 {
+            t.pop();
+        }
+        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 142.0, &t);
+        // prev / next
+        for (i, dir) in [(0, -1), (1, 1)] {
+            let x = 320.0 + i as f32 * 25.0;
+            if self.btn(x, y, 25.0, h, "", 0) {
+                self.step_preset(dir);
+            }
+            self.setc(false);
+            let (cx, cy) = (x + 12.5, y + h * 0.5);
+            if dir < 0 {
+                self.cv.tri((cx + 2.0, cy - 3.0), (cx + 2.0, cy + 3.0), (cx - 2.0, cy));
+            } else {
+                self.cv.tri((cx - 2.0, cy - 3.0), (cx - 2.0, cy + 3.0), (cx + 2.0, cy));
+            }
+        }
+        // window scale
+        let label = format!("{:.0}%", self.cur_scale() * 100.0);
+        if self.btn(376.0, y, 42.0, h, &label, 0) {
+            let cur = SIZES.iter().position(|v| (v - self.cur_scale()).abs() < 0.13).unwrap_or(0);
+            let items = SIZES.iter().map(|v| format!("{:.0}%", v * 100.0)).collect();
+            self.open_menu(MenuKind::Size, 376.0, y + h, items, cur);
+        }
     }
 
     // ------------------------------------------------------------------ main frame
@@ -1560,7 +1790,8 @@ impl<'a> Gui<'a> {
         self.logo(10.0, 5.0);
         self.setc(false);
         self.cv.set_font(3);
-        self.cv.text(38.0, 7.0, "SATCOMP 0.3");
+        self.cv.text(38.0, 10.0, "SATCOMP 0.3");
+        self.preset_bar();
         self.out_meter(430.0, 8.0, 120.0, 16.0);
 
         // ---------- tab row
@@ -1685,6 +1916,7 @@ impl<'a> Gui<'a> {
 
         self.resize_grip();
         self.menu_draw();
+        self.run_pending();
     }
 }
 
