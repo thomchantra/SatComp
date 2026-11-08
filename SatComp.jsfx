@@ -84,7 +84,7 @@ function lutf(x) local(p, i, f) (
 
 // ---- biquads (TDF2). state s[0..1], coeffs c[0..4] = b0 b1 b2 a1 a2
 function bq(s, c, x) local(y) (
-  y = c[0]*x + s[0] + 1e-30;
+  y = c[0]*x + s[0] + 0.000000000000000000000000000001;
   s[0] = c[1]*x - c[3]*y + s[1];
   s[1] = c[2]*x - c[4]*y;
   y;
@@ -397,7 +397,7 @@ mk_taps(tpB, 8, 6);
 
 // ---- state defaults
 last_shape = -1; last_os = -1; dirty = 1; sr_prev = 0; wp = 0;
-ims = oms = 1e-9; og = 1; atrim = 0; meas = 0; match_req = 0; prev_gmode = 0;
+ims = oms = 0.000000001; og = 1; atrim = 0; meas = 0; match_req = 0; prev_gmode = 0;
 prevL = prevR = 0; grfL = grfR = grsL = grsR = 0; rmL = rmR = 0;
 pk_env = 0; ms_env = 0; gavg = 0; dcxL = dcyL = dcxR = dcyR = 0;
 gr_blk = 0; gr_pk = 0; diff_db = 0; gate_open = 0; macc = 0; mt = 0;
@@ -435,9 +435,9 @@ dirty || srate != sr_prev ? (
   sh2 = slider14*0.02;
   sh2 <= 1 ? ( kc0 = 1 - sh2; kc1 = sh2; kc2 = 0; ) : ( kc0 = 0; kc1 = 2 - sh2; kc2 = sh2 - 1; );
   spd = pow(4, (slider12 - 50)/50);                       // 0.25x .. 4x, low = fast
-  a_att = 1 - exp(-1/(srate*max(slider10*0.001*spd, 1e-5)));
+  a_att = 1 - exp(-1/(srate*max(slider10*0.001*spd, 0.00001)));
   auto_rel = slider11 >= 1990;
-  a_rel = 1 - exp(-1/(srate*max(slider11*0.001*spd, 1e-5)));
+  a_rel = 1 - exp(-1/(srate*max(slider11*0.001*spd, 0.00001)));
   a_relF = auto_rel ? 1 - exp(-1/(srate*0.04*spd)) : a_rel;
   a_relS = 1 - exp(-1/(srate*0.6*spd));
   rms_c = 1 - exp(-1/(srate*0.01));
@@ -460,8 +460,8 @@ dirty || srate != sr_prev ? (
 );
 
 // =========================================================== gain diff / auto / match
-gate_open = ims > 1e-6;
-gate_open ? ( diff_db = 4.3429448*log(max(oms, 1e-12)/max(ims, 1e-12)); );
+gate_open = ims > 0.000001;
+gate_open ? ( diff_db = 4.3429448*log(max(oms, 0.000000000001)/max(ims, 0.000000000001)); );
 gmode == 1 && gate_open ? (
   atrim += (min(max(-diff_db, -12), 12) - atrim)*(1 - exp(-samplesblock/(srate*1.5)));
 );
@@ -477,7 +477,7 @@ gr_pk = max(gr_pk, gr_blk); gr_blk = 0;
 
 @sample
 inL = spl0; inR = spl1;
-ims += ((inL*inL + inR*inR)*0.5 + 1e-30 - ims)*rmsg_c;
+ims += ((inL*inL + inR*inR)*0.5 + 0.000000000000000000000000000001 - ims)*rmsg_c;
 
 wp = (wp + 1) & 63;
 dryL[wp] = inL; dryR[wp] = inR;
@@ -493,8 +493,8 @@ sat_on ? (
   shL = sh_proc(stAL, stBL, bpL*pre + bias);
   shR = sh_proc(stAR, stBR, bpR*pre + bias);
   // DC blocker after shaper (always on in this path)
-  yL = shL - dcxL + dcR*dcyL + 1e-30; dcxL = shL; dcyL = yL;
-  yR = shR - dcxR + dcR*dcyR + 1e-30; dcxR = shR; dcyR = yR;
+  yL = shL - dcxL + dcR*dcyL + 0.000000000000000000000000000001; dcxL = shL; dcyL = yL;
+  yR = shR - dcxR + dcR*dcyR + 0.000000000000000000000000000001; dcxR = shR; dcyR = yR;
   use_tone ? ( yL = bq(tnsL, tnc, yL); yR = bq(tnsR, tnc, yR); );
   cL = resL[rd] + yL; cR = resR[rd] + yR;
 ) : (
@@ -507,8 +507,8 @@ xdL = cL + fb*(prevL - cL);
 xdR = cR + fb*(prevR - cR);
 use_dhp ? ( xdL = bq(dhsL, dhc, xdL); xdR = bq(dhsR, dhc, xdR); );
 aL = abs(xdL); aR = abs(xdR);
-rmL += (xdL*xdL + 1e-30 - rmL)*rms_c;
-rmR += (xdR*xdR + 1e-30 - rmR)*rms_c;
+rmL += (xdL*xdL + 0.000000000000000000000000000001 - rmL)*rms_c;
+rmR += (xdR*xdR + 0.000000000000000000000000000001 - rmR)*rms_c;
 det_m > 0 ? (
   lvL = aL + det_m*(1.41421356*sqrt(rmL) - aL);
   lvR = aR + det_m*(1.41421356*sqrt(rmR) - aR);
@@ -516,20 +516,20 @@ det_m > 0 ? (
 lmx = max(lvL, lvR);
 lvL += link*(lmx - lvL); lvR += link*(lmx - lvR);
 
-tgL = gcomp(8.6858896*log(max(lvL, 1e-6)));
-tgR = link_full ? tgL : gcomp(8.6858896*log(max(lvR, 1e-6)));
+tgL = gcomp(8.6858896*log(max(lvL, 0.000001)));
+tgR = link_full ? tgL : gcomp(8.6858896*log(max(lvR, 0.000001)));
 
 tgL > grfL ? ( grfL += (tgL - grfL)*a_att; ) : ( grfL += (tgL - grfL)*a_relF; );
 tgR > grfR ? ( grfR += (tgR - grfR)*a_att; ) : ( grfR += (tgR - grfR)*a_relF; );
-grfL < 1e-9 ? ( grfL = 0; ); grfR < 1e-9 ? ( grfR = 0; );
+grfL < 0.000000001 ? ( grfL = 0; ); grfR < 0.000000001 ? ( grfR = 0; );
 
 auto_rel ? (
   tgL > grsL ? ( grsL += (tgL - grsL)*a_att; ) : ( grsL += (tgL - grsL)*a_relS; );
   tgR > grsR ? ( grsR += (tgR - grsR)*a_att; ) : ( grsR += (tgR - grsR)*a_relS; );
-  grsL < 1e-9 ? ( grsL = 0; ); grsR < 1e-9 ? ( grsR = 0; );
+  grsL < 0.000000001 ? ( grsL = 0; ); grsR < 0.000000001 ? ( grsR = 0; );
   pk_env = max(lmx, pk_env*pk_d);
-  ms_env += (lmx*lmx + 1e-30 - ms_env)*ms_c;
-  crest = pk_env/(sqrt(ms_env) + 1e-9);
+  ms_env += (lmx*lmx + 0.000000000000000000000000000001 - ms_env)*ms_c;
+  crest = pk_env/(sqrt(ms_env) + 0.000000001);
   cn = min(max((crest - 1.5)*0.2857, 0), 1);            // sine ~1.4 -> 0, sharp transients (>=5) -> 1
   gavg += (max(grfL, grfR) - gavg)*avg_c;
   wgt = 0.1 + 0.75*min(gavg*0.1111, 1)*(1 - cn);         // clamped 0.1 .. 0.85: deep+sustained -> slow
@@ -551,7 +551,7 @@ prevL = yL; prevR = yR;                  // feedback tap: pre-makeup, previous s
 wL = yL*mk; wR = yR*mk;
 oL = dlL + (wL - dlL)*mix;
 oR = dlR + (wR - dlR)*mix;
-oms += ((oL*oL + oR*oR)*0.5 + 1e-30 - oms)*rmsg_c;     // measured before out gain
+oms += ((oL*oL + oR*oR)*0.5 + 0.000000000000000000000000000001 - oms)*rmsg_c;     // measured before out gain
 og += (og_t - og)*og_c;
 spl0 = oL*og; spl1 = oR*og;
 gr_blk = max(gr_blk, max(gL, gR));
