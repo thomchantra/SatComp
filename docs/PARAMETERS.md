@@ -1,6 +1,6 @@
 # SatComp — parameter reference (internal, for audit)
 
-**Version: v0.2** (v0.1 = first prototype). Shown next to the title in the UI.
+**Version: v0.3** (v0.2 = grid UI, v0.1 = first prototype). Shown in the UI header (`SATCOMP 0.3`). The `desc:` line is intentionally still `SatComp` (see HANDOFF).
 
 Describes what the code in `SatComp.jsfx` does **today**, not what the spec intends. Section/line pointers are by name (`@sample`, `gcomp`, ...) so they survive edits. Anything marked **AUDIT** is a behaviour worth a second look.
 
@@ -12,8 +12,8 @@ in ──┬──────────────────────�
      └─ [SAT HP/LP split] ─ band ─ drive+bias ─ shaper (opt. OS) ─ DC block ─ TONE ─┐
               │                                                                      ├─ SAT MIX ─ + residual ─ cL
               └─ residual (outside HP/LP band) ───────────────── delayed ───────────┘   (clean band leg ↗)
-cL ─ SAT OUT (sat module master, always applied) ─ [detector: FF/FB → DET HP → PEAK/RMS → LINK] ─ gain computer ─ attack/release ─ gain ─ GR DIST ─ MAKEUP
-   ─ MIX (vs dry) ─ OUT GAIN (+ auto/match trim) ─ BYPASS (equal-loudness dry) ─ out
+cL ─ SAT OUT (sat module master, always applied) ─ [EQ PRE] ─ [detector: FF/FB → DET HP → PEAK/RMS → LINK] ─ gain computer ─ attack/release ─ gain ─ GR DIST ─ MAKEUP
+   ─ MIX (vs dry) ─ [EQ POST] ─ OUT GAIN (+ auto/match trim) ─ BYPASS (equal-loudness dry) ─ out
 ```
 
 Everything between "SAT" and "MAKEUP" is skipped for sat when `Drive = 0 && Bias = 0` (see Drive).
@@ -58,8 +58,9 @@ Detector chain order (per sample): **FF/FB mix → Det HP → peak/RMS blend →
 | **K.Shape** | 0–100 %, 0 | Knee curve family, C1-continuous at both ends: 0 = quadratic (classic), 50 = smoothstep, 100 = smootherstep (more gradual onset, steeper middle). |
 | **Detect** *(label: "PEAK>RMS")* | 0–100 %, 30 | Detector type blend: 0 % = instantaneous peak `\|x\|`, 100 % = RMS (10 ms window, scaled ×√2 so a sine reads the same as its peak). |
 | **Det HP** *(label: "LOW CUT")* | OFF–400 Hz, OFF | 12 dB/oct HP in the **detector path only** (audio is untouched). Raising it makes the comp ignore low end so kicks/bass stop driving GR. Shown OFF ≤ 15 Hz. |
-| **Link** | 0–100 %, 100 | Stereo link. Each channel's detector level is pulled toward the louder of L/R: `lv += link·(max − lv)`. 100 % = identical GR on both channels; 0 % = fully independent. **AUDIT:** ≥ 99.9 % takes a shortcut and applies L's computed gain to R. |
+| **Link** *(retired in v0.3)* | locked at 0 % | Stereo link is **no longer exposed and is fixed at 0 %** (L/R fully independent) — the expected material is mostly summed-mono drums, so it rarely matters. Slider 17 is kept (hidden, reserved) so automation/projects keep their mapping; its value is ignored. The freed grid cell now holds **Lookahead** (below). |
 | **FF>FB** | 0–100 %, 0 | Detector topology. 0 = feed-forward (detect on the comp input). 100 = feedback (detect on the compressor's own previous-sample output, pre-makeup). In between = linear blend of the two detector signals. Feedback gets gentler/more "vintage" and effectively raises the ratio less than the dial says. |
+| **Lookahead** *(v0.3, slider 59, cell `L.AHEAD`)* | 0–10 ms, OFF | The **detector sees the signal now, the gain is applied to a copy delayed by this time**, so the comp can already be down when the transient arrives (attack effectively starts early). Reported as plug-in latency (`pdc_delay = OS latency + lookahead`); the Mix dry leg and Bypass dry are delayed by the same total, so Mix stays phase-aligned. Delta monitors the delayed comp input minus the output. **AUDIT:** changing it while playing changes PDC and clicks (the delay line jumps); with FF>FB > 0 the feedback tap compares the delayed output with the undelayed input, so lookahead and feedback detection do not combine meaningfully. Max 1900 samples (10 ms up to 190 kHz). |
 | **GR Dist** | 0–100 %, 0 | Soft saturation (`x/(1+0.5\|x\|)`) applied **after** gain reduction, amount `GRDist · min(GR/12 dB, 1)` per channel — grit that grows with how hard the comp is working; zero when GR = 0. Post-comp, pre-makeup, and *inside* the feedback tap when FF>FB > 0. |
 
 Live viz (TRANSFER plot): red fill under the curve up to the current detector level (L/R max after FF/FB, Det HP and Detect blend, **before** Link, ~150 ms decay); the dot is the operating point on the curve; the tick at the bottom is Thresh. Dotted line = 1:1.
@@ -75,10 +76,10 @@ GR meter (right of the plot): shows max(L,R) GR, with peak-hold line (1 s hold, 
 | **Makeup** | 0–24 dB, 0 | Gain after the comp (and after GR Dist). Feedback tap is taken *before* this. |
 | **Mix** | 0–100 %, 100 | Global dry/wet: linear blend of the latency-aligned **input** (before sat) and the full wet chain (sat + comp + makeup). **AUDIT:** because dry is the raw input, Mix < 100 % also bypasses the saturation, not just the comp. Not level-compensated. |
 | **Out Gain** | −24…+12 dB, 0 | Final gain, plus the Auto/Match trim below. Smoothed (20 ms). |
-| **MAN / AUTO / MATCH** | Manual | Loudness-matching mode for the output: **MAN** = Out Gain only. **AUTO** = continuously trims by `−IN>OUT` (clamped ±12 dB, ~1.5 s time constant), frozen while the input is silent. **MATCH** = measures IN>OUT over 3 s of programme (button blinks, "MEAS"), then stores a static trim (±12 dB, hidden param *Match Trim*, saved with the project, shown as "LOCK"). Clicking MATCH again re-measures. |
+| **GAIN MATCH** *(v0.3, replaces MAN / AUTO / MATCH)* | off | Button above IN>OUT. Click = measures IN>OUT over 3 s of programme (button blinks, "MEAS"), then stores a static trim (±12 dB, hidden param *Match Trim*, saved with the project, shown as "LOCK", button red). Click while measuring = cancel; click while locked = off (trim ignored, value kept). **Auto was retired**: a project saved in Auto loads as Manual. Measurement point is after EQ POST, so the EQ's level change is matched too. |
 | **DELTA** | toggle (red when on) | Compressor delta monitor: the output is replaced by what the compressor is removing — comp input minus comp output, taken **before** Makeup (so it includes GR Dist's effect). Silence = no gain reduction. Overrides Bypass, ignores Mix and Out Gain. UI-only (not a saved/automatable parameter) so a project can never reload silent-by-accident; it resets to off when the plug-in is reloaded. 10 ms crossfade. Output meters/PK/RMS read the delta signal while it is on. |
 | **IN>OUT** | readout | Net loudness change of the whole chain: RMS (0.5 s) of the processed output vs the input, in dB, measured **after** Sat, Comp, Makeup, Mix, Out Gain and Auto/Match trim (and before Bypass/Delta). Holds its last value when the input is below −60 dBFS RMS. Centre-tap bar: grows right = output louder, left = quieter, ±12 dB full scale, tick = 0. **Note:** Auto/Match deliberately use a *separate* pre-Out-Gain measurement (`diff_db` in code); if they used this display value they would chase their own correction. So in Auto the display settles at ≈ your Out Gain setting, in Match at ≈ Out Gain once locked. |
-| **TRIM** | readout | Current Auto trim (`TRIM +x dB`), Match state (`MEAS` / `LOCK`), or `---` in Manual. |
+| **TRIM** | readout | Match state (`MEAS` / `LOCK`), or `---` when off. |
 | **BYPASS** | toggle | Equal-loudness bypass: crossfades (10 ms) from the processed signal to the latency-aligned dry input **scaled to the processed output's RMS** (post Out Gain). The scale (`BYP ±x dB`, clamped ±24 dB, 200 ms smoothing) is held while the input is silent. The effect keeps running while bypassed, so meters/GR stay live and unbypassing is click-free. **AUDIT:** loudness matching is RMS over 0.5 s, so it is a steady-state match; it will not be right instant-to-instant on transient material. |
 
 ### Output metering (header + info area)
@@ -92,8 +93,14 @@ GR meter (right of the plot): shows max(L,R) GR, with peak-hold line (1 s hold, 
 
 - Drag a cell = value (fine with Shift), mouse wheel = step (Shift = fine), double-click = reset to default. Touch/release is reported to the host for automation latch/touch.
 - Layout is drawn on a fixed 560×336 logical canvas at a scale that steps in 0.25× increments (min 0.5×) and is centred. A resized window keeps proportion (letterboxed, scale follows the window in 0.25× steps; rect edges snap to whole device pixels so borders stay crisp). JSFX has no API to constrain the host window, so it cannot be hard-locked; it can only never distort.
-- **Palette:** the header **LIGHT/DARK** button inverts the UI (black on white / white on black); red accents are unchanged. The choice is stored with the project/preset (`@serialize`), not as an automatable parameter.
-- Hidden params (automatable, no on-screen widget): *Match Trim* (slider 24).
+- **Colour schemes (v0.3):** 10 palettes from `docs/colorscheme.md` (Black, White, Teal, Cadmium, Ultramarine, Azure, Magenta, Sulfur, Uranium, Midnight; each = BG / UI / ACCENT). **Left-click the header logo** = next scheme, **right-click** = dropdown with the current one ticked. Stored with the project as the scheme index (old files stored 0/1 = Black/White, same indices). Sulfur's accent equals its UI colour, so red-style highlights/fills do not stand out there by design of the palette.
+- **EQ bypass dimming (v0.3):** a bypassed stage dims the 4x3 EQ grid while that stage is viewed; module bypass dims the whole EQ page (viewport + grid). Combines with the global Bypass dim.
+- **Bypass dimming (v0.3):** while Bypass is on, the shape selector, OS buttons, EQ button, sat plot, comp/EQ viewport and the SAT / COMP / EQ cells draw at 50 % (colours blended toward the background); header, meters, DELTA/BYPASS and the OUT column stay at full strength. Display only.
+- **Readouts (v0.3):** the comp viewport metrics (`LVL +00.0  OUT +00.0  GR 00.0dB`) and the OUT info lines (GR, TRIM/LOCK, PK, RMS, BYP: label left, value right-aligned, zero padded, placeholders `-----`) are **snapshotted ~8x/s** (`rd_*`, 0.12 s) so they are readable; meters, bars and the sat-plot SAT figure use the same snapshot cadence for numbers only. IN>OUT, MAKEUP, MIX and OUT GAIN cells are not zero padded. OUT column order: MAKEUP, MIX, OUT GAIN (bottom, inverted).
+- **SAT block layout (v0.3):** DRIVE/BIAS, then `HP|LP` stacked in one cell + TONE, then SAT MIX + **OUT GAIN** (= Sat Out, slider 27, same parameter as dragging the plot). The three gain-stage cells (sat OUT GAIN, EQ OUT GAIN, output OUT GAIN) are drawn **inverted** (lit block) so they read as master levels. (black on white / white on black); red accents are unchanged. The choice is stored with the project/preset (`@serialize`), not as an automatable parameter.
+- Hidden params (automatable, no on-screen widget): *Match Trim* (slider 24), *Link* (17, reserved) and all EQ sliders (29–58).
+- **Header (v0.3):** logo (palette), `SATCOMP 0.3`, full-width output meter; tab row: shape selector, `OVERSAMPLING [OFF|x2|x4]`, `EQ` page toggle, `DELTA | BYPASS`. The GR meter opens on its 3 dB range. Preset bar / save icon are deferred to the VST port.
+- **Comp viewport (v0.3):** drag the **dot** at the threshold knee (x and y both map to Thresh), drag the **square** at the right edge (y → Ratio; hard-knee formula, so with a wide knee the handle can sit slightly off the cursor). Double-click a handle = default. The label shows live `LVL` (detector level), `OUT` (static-curve output at that level) and `GR`.
 
 ## Parameter ↔ slider map
 
@@ -113,5 +120,32 @@ GR meter (right of the plot): shows max(L,R) GR, with peak-hold line (1 s hold, 
 | 12 | Speed | 25 | Sat Mix *(new)* |
 | 13 | Knee | 26 | Bypass *(new)* |
 | | | 27 | Sat Out *(new)* |
+| 28 | *(unused)* | 29–43 | EQ Pre (see EQ) |
+| | | 44–58 | EQ Post (see EQ) |
+| 59 | Lookahead | 60–62 | EQ Pre / Post / Module bypass |
 
-New sliders were appended (25–27) so existing sessions/automation keep their mapping. Old sessions should sound identical (Sat Mix 100 %, Bypass off, Sat Out 0 dB, Auto off); if REAPER restores missing sliders as 0, re-set Sat Mix to 100 % once.
+New sliders were appended (25–27, 29–58) so existing sessions/automation keep their mapping. Old sessions should sound identical (Sat Mix 100 %, Bypass off, Sat Out 0 dB, Auto off); if REAPER restores missing sliders as 0, re-set Sat Mix to 100 % once.
+
+---
+
+## EQ (v0.3)
+
+Two opt-in stages, each **3 bands + tilt + out gain**, edited on the EQ page (`EQ` button next to the OS buttons; the square inside the button is filled when either stage is active, outline when untouched).
+
+- **PRE-COMP** sits after Sat Out, right before the comp detector (so it shapes what the compressor sees *and* what it passes on; the DELTA monitor still shows only what the comp removed). A pre-*saturator* EQ is deliberately not built-in (use an external plug-in).
+- **POST-COMP** sits after Mix and before Out Gain, so IN>OUT / Gain Match include the EQ.
+- **Bypass squares (v0.3):** three indicators, each clickable: the square in the `EQ` button (whole module), and one on each PRE-COMP / POST-COMP tab. Filled = has gain active, outline = untouched, **outline with an X = bypassed** (sliders 62 / 60 / 61, saved + automatable). A bypassed section is faded out over 10 ms and then not processed at all; re-enabling restarts its filters from clean state. Pre/Post bypass and Module bypass combine (either bypasses).
+- A stage is **processed only when active**: any shelf/bell with gain ≠ 0, tilt ≠ 0, EQ out gain ≠ 0, or a band set to HPF/LPF. Otherwise it is skipped entirely (bit-exact null, zero CPU). The square on each PRE/POST tab uses the same rule. **Note (deviation from the spec'd rule):** switching a band to HPF/LPF counts as active even though it has no gain control, since it audibly filters.
+- Filters are RBJ biquads (min-phase, no PDC). Coefficients ramp linearly over one block, so dragging does not zipper; a filter that returns to neutral ramps to identity and is then retired.
+
+| Band | Types (icon order) | Default |
+|---|---|---|
+| 1 | HPF · low shelf · bell | low shelf 80 Hz |
+| 2 | HPF · LPF · bell | bell 200 Hz |
+| 3 | LPF · high shelf · bell | high shelf 6 kHz |
+
+Per band: **Type**, **Freq** 20–20k (log), **Gain** ±18 dB (dashes for HPF/LPF), **Q** 0.1–10 (default 0.5; HPF/LPF = resonance, 12 dB/oct; shelf/bell = RBJ `alpha = sin/(2Q)`). **Tilt** ±12 dB = high shelf +T/2 and low shelf −T/2 around **Pivot** (20–20k, default 600 Hz), both with Q 0.4 (wide, so it reads as a tilt): + = brighter. **Out Gain** ±12 dB per stage (smoothed, 20 ms).
+
+Slider map: Pre = 29 + (band·4 + {0 type, 1 freq, 2 gain, 3 Q}), 41 tilt, 42 pivot, 43 out gain; Post = the same +15 (44–58). **Type is stored relative to the band default (0 = default type)** so sliders that load as 0 in old projects are neutral; freq / Q / pivot that load as 0 are reset to defaults once on the first block.
+
+Viewport: red = spectrum of the signal entering the viewed stage (mono sum, 4096-pt Hann FFT ~30×/s, dB smoothing fast-up/slow-down, +4.5 dB/oct slope compensation, fixed −100…−5 dB window), white curve = summed response of the viewed stage (without out gain), white squares = band nodes (at gain for shelf/bell, on the 0 dB line for HPF/LPF), dotted vertical line = tilt pivot. Interaction: drag a node (x = freq, y = gain), wheel on a node = Q, drag the pivot line = pivot, **drag empty space horizontally = tilt** (right = brighter, left = raises the lows; Shift = fine), double-click a node / the pivot / empty space resets it. The spectrum is only captured while the EQ page is open.

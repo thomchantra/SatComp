@@ -25,7 +25,7 @@ slider13:6<0,24,0.1>-Knee
 slider14:0<0,100,1>-Knee Shape
 slider15:30<0,100,1>-Detector
 slider16:0<0,400,1>-Det HP
-slider17:100<0,100,1>-Link
+slider17:100<0,100,1>-Link (reserved, locked at 0)
 slider18:0<0,100,1>-FF/FB
 slider19:0<0,100,1>-GR Dist
 // ---- OUT ----
@@ -37,6 +37,44 @@ slider24:0<-24,24,0.01>-Match Trim
 slider25:100<0,100,1>-Sat Mix
 slider26:0<0,1,1{Off,On}>-Bypass
 slider27:0<-24,12,0.1>-Sat Out
+// ---- EQ (v0.3). Two stages: Pre = after Sat Out / before the comp detector, Post = after Mix / before Out Gain.
+// Edited from the EQ page, so all hidden. Band Type is stored relative to the band's default type (0 = default),
+// so sliders that load as 0 in an old project stay neutral. Slider 28 is intentionally unused (old removed slider).
+slider29:0<0,2,1>-Pre B1 Type
+slider30:80<20,20000,1>-Pre B1 Freq
+slider31:0<-18,18,0.1>-Pre B1 Gain
+slider32:0.5<0.1,10,0.01>-Pre B1 Q
+slider33:0<0,2,1>-Pre B2 Type
+slider34:200<20,20000,1>-Pre B2 Freq
+slider35:0<-18,18,0.1>-Pre B2 Gain
+slider36:0.5<0.1,10,0.01>-Pre B2 Q
+slider37:0<0,2,1>-Pre B3 Type
+slider38:6000<20,20000,1>-Pre B3 Freq
+slider39:0<-18,18,0.1>-Pre B3 Gain
+slider40:0.5<0.1,10,0.01>-Pre B3 Q
+slider41:0<-12,12,0.1>-Pre Tilt
+slider42:600<20,20000,1>-Pre Pivot
+slider43:0<-12,12,0.1>-Pre Out Gain
+slider44:0<0,2,1>-Post B1 Type
+slider45:80<20,20000,1>-Post B1 Freq
+slider46:0<-18,18,0.1>-Post B1 Gain
+slider47:0.5<0.1,10,0.01>-Post B1 Q
+slider48:0<0,2,1>-Post B2 Type
+slider49:200<20,20000,1>-Post B2 Freq
+slider50:0<-18,18,0.1>-Post B2 Gain
+slider51:0.5<0.1,10,0.01>-Post B2 Q
+slider52:0<0,2,1>-Post B3 Type
+slider53:6000<20,20000,1>-Post B3 Freq
+slider54:0<-18,18,0.1>-Post B3 Gain
+slider55:0.5<0.1,10,0.01>-Post B3 Q
+slider56:0<-12,12,0.1>-Post Tilt
+slider57:600<20,20000,1>-Post Pivot
+slider58:0<-12,12,0.1>-Post Out Gain
+// ---- v0.3 additions (appended): lookahead, EQ section bypasses (1 = bypassed; clicked via the squares on the EQ page)
+slider59:0<0,10,0.1>-Lookahead (ms)
+slider60:0<0,1,1{Off,On}>-EQ Pre Bypass
+slider61:0<0,1,1{Off,On}>-EQ Post Bypass
+slider62:0<0,1,1{Off,On}>-EQ Module Bypass
 
 @init
 ext_noinit = 1;
@@ -51,8 +89,30 @@ bdL = 5300; bdR = 5364;                                           // band-limite
 hpc = 5100; lpc = 5110; tnc = 5120; dhc = 5130;                   // biquad coeffs
 hpsL = 5200; hpsR = 5208; lpsL = 5216; lpsR = 5224;               // biquad states
 tnsL = 5232; tnsR = 5240; dhsL = 5248; dhsR = 5256;
-pmin = 6000; pmax = 6040; pdef = 6080; pmode = 6120; psnap = 6160; pstep = 6200;  // UI param table
+pmin = 6000; pmax = 6100; pdef = 6200; pmode = 6300; psnap = 6400; pstep = 6500;  // UI param table (indexed by slider number, up to 63)
+// EQ: 10 filters = 2 stages x (3 bands + 2 tilt shelves). cur/target/per-sample delta coefs (5 each), TDF2 states, active + running flags
+eqc = 8000; eqt = 8050; eqd = 8100; eqsL = 8150; eqsR = 8170; eqa = 8190; eqr = 8200;
+dsc = 8220; dsa = 8260;                    // UI-side coefs/flags of the viewed stage (5 filters)
+enx = 8300; eny = 8310; ekd = 8320;        // UI-side band node positions / kinds
+fring = 10000; fbuf = 20000; fwin = 30000; spk = 35000;   // spectrum: 8192 ring, 4096 complex fft buffer, 4096 window, 2049 smoothed dB bins
 memset(stAL, 0, 520); memset(dryL, 0, 256); memset(hpsL, 0, 64); memset(bdL, 0, 128);
+dwL = 40000; dwR = 44100; lkL = 48200; lkR = 52300;      // 4096-sample rings: dry delayed by (OS latency + lookahead); comp input for the lookahead delay
+memset(eqc, 0, 400); memset(fring, 0, 8192);
+memset(dwL, 0, 4096); memset(dwR, 0, 4096); memset(lkL, 0, 4096); memset(lkR, 0, 4096);
+i = 0; loop(4096, fwin[i] = 0.5 - 0.5*cos(2*$pi*i/4096); i += 1; );
+i = 0; loop(2049, spk[i] = -140; i += 1; );
+// colour schemes (docs/colorscheme.md): per palette 9 floats = BG rgb, UI rgb, ACCENT rgb. Black/White keep indices 0/1 = the old inv flag
+ptb = 9000;
+j = 0*9; ptb[j + 0] = 0.0000; ptb[j + 1] = 0.0000; ptb[j + 2] = 0.0000; ptb[j + 3] = 1.0000; ptb[j + 4] = 1.0000; ptb[j + 5] = 1.0000; ptb[j + 6] = 1.0000; ptb[j + 7] = 0.0000; ptb[j + 8] = 0.0000;   // Black
+j = 1*9; ptb[j + 0] = 1.0000; ptb[j + 1] = 1.0000; ptb[j + 2] = 1.0000; ptb[j + 3] = 0.0000; ptb[j + 4] = 0.0000; ptb[j + 5] = 0.0000; ptb[j + 6] = 1.0000; ptb[j + 7] = 0.0000; ptb[j + 8] = 0.0000;   // White
+j = 2*9; ptb[j + 0] = 0.0784; ptb[j + 1] = 0.2196; ptb[j + 2] = 0.1961; ptb[j + 3] = 0.6431; ptb[j + 4] = 1.0000; ptb[j + 5] = 0.9647; ptb[j + 6] = 0.0000; ptb[j + 7] = 1.0000; ptb[j + 8] = 0.8980;   // Teal
+j = 3*9; ptb[j + 0] = 0.3137; ptb[j + 1] = 0.3137; ptb[j + 2] = 0.3137; ptb[j + 3] = 1.0000; ptb[j + 4] = 1.0000; ptb[j + 5] = 1.0000; ptb[j + 6] = 1.0000; ptb[j + 7] = 0.4510; ptb[j + 8] = 0.0000;   // Cadmium
+j = 4*9; ptb[j + 0] = 0.0000; ptb[j + 1] = 0.1020; ptb[j + 2] = 0.5490; ptb[j + 3] = 1.0000; ptb[j + 4] = 1.0000; ptb[j + 5] = 1.0000; ptb[j + 6] = 0.1490; ptb[j + 7] = 0.3059; ptb[j + 8] = 1.0000;   // Ultramarine
+j = 5*9; ptb[j + 0] = 0.1686; ptb[j + 1] = 0.1961; ptb[j + 2] = 0.2353; ptb[j + 3] = 0.8157; ptb[j + 4] = 0.8588; ptb[j + 5] = 0.8941; ptb[j + 6] = 0.0000; ptb[j + 7] = 0.8000; ptb[j + 8] = 1.0000;   // Azure
+j = 6*9; ptb[j + 0] = 0.3098; ptb[j + 1] = 0.0000; ptb[j + 2] = 0.4314; ptb[j + 3] = 1.0000; ptb[j + 4] = 0.4196; ptb[j + 5] = 0.8471; ptb[j + 6] = 1.0000; ptb[j + 7] = 0.0000; ptb[j + 8] = 0.6824;   // Magenta
+j = 7*9; ptb[j + 0] = 0.0000; ptb[j + 1] = 0.0000; ptb[j + 2] = 0.0000; ptb[j + 3] = 1.0000; ptb[j + 4] = 0.9333; ptb[j + 5] = 0.0000; ptb[j + 6] = 1.0000; ptb[j + 7] = 0.9333; ptb[j + 8] = 0.0000;   // Sulfur
+j = 8*9; ptb[j + 0] = 0.0235; ptb[j + 1] = 0.2314; ptb[j + 2] = 0.0275; ptb[j + 3] = 0.7216; ptb[j + 4] = 0.9647; ptb[j + 5] = 0.5059; ptb[j + 6] = 0.5255; ptb[j + 7] = 0.9882; ptb[j + 8] = 0.1216;   // Uranium
+j = 9*9; ptb[j + 0] = 0.1412; ptb[j + 1] = 0.0039; ptb[j + 2] = 0.1961; ptb[j + 3] = 0.9255; ptb[j + 4] = 0.2471; ptb[j + 5] = 1.0000; ptb[j + 6] = 0.9647; ptb[j + 7] = 1.0000; ptb[j + 8] = 0.0000;   // Midnight
 
 // ============================================================ DSP helpers
 function th(x) local(e) (
@@ -109,6 +169,83 @@ function bq_hp(c, f, q) local(w, cs, al, a0) (
   w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); al = sin(w)/(2*q); a0 = 1 + al;
   c[0] = (1 + cs)*0.5/a0; c[1] = -(1 + cs)/a0; c[2] = c[0]; c[3] = -2*cs/a0; c[4] = (1 - al)/a0;
 );
+// RBJ peaking / low shelf / high shelf (gain in dB, q as alpha = sin(w)/(2q))
+function bq_pk(c, f, g, q) local(A, w, cs, al, a0) (
+  A = exp(g*0.05756463);
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); al = sin(w)/(2*q); a0 = 1 + al/A;
+  c[0] = (1 + al*A)/a0; c[1] = -2*cs/a0; c[2] = (1 - al*A)/a0; c[3] = -2*cs/a0; c[4] = (1 - al/A)/a0;
+);
+function bq_ls(c, f, g, q) local(A, w, cs, sa, a0) (
+  A = exp(g*0.05756463);
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); sa = 2*sqrt(A)*sin(w)/(2*q);
+  a0 = (A + 1) + (A - 1)*cs + sa;
+  c[0] = A*((A + 1) - (A - 1)*cs + sa)/a0;
+  c[1] = 2*A*((A - 1) - (A + 1)*cs)/a0;
+  c[2] = A*((A + 1) - (A - 1)*cs - sa)/a0;
+  c[3] = -2*((A - 1) + (A + 1)*cs)/a0;
+  c[4] = ((A + 1) + (A - 1)*cs - sa)/a0;
+);
+function bq_hs(c, f, g, q) local(A, w, cs, sa, a0) (
+  A = exp(g*0.05756463);
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); sa = 2*sqrt(A)*sin(w)/(2*q);
+  a0 = (A + 1) - (A - 1)*cs + sa;
+  c[0] = A*((A + 1) + (A - 1)*cs + sa)/a0;
+  c[1] = -2*A*((A - 1) + (A + 1)*cs)/a0;
+  c[2] = A*((A + 1) + (A - 1)*cs - sa)/a0;
+  c[3] = 2*((A - 1) - (A + 1)*cs)/a0;
+  c[4] = ((A + 1) - (A - 1)*cs - sa)/a0;
+);
+// filter kinds: 0 HPF, 1 LPF, 2 low shelf, 3 high shelf, 4 bell
+function eq_coef(c, kind, f, g, q) (
+  kind == 0 ? bq_hp(c, f, q) : kind == 1 ? bq_lp(c, f, q) : kind == 2 ? bq_ls(c, f, g, q) :
+  kind == 3 ? bq_hs(c, f, g, q) : bq_pk(c, f, g, q);
+);
+// ---- THREAD SAFETY: @gfx runs on its own thread and function params / local() vars are shared static storage, so any function
+// called from both the audio side and @gfx can read the other thread's arguments (that produced a +4000 dB EQ spike when a band's
+// freq was read as its gain). The UI therefore gets its own copies (u_*, gcomp_u, lutf_u); the audio side never calls UI functions.
+function u_bq_lp(c, f, q) local(w, cs, al, a0) (
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); al = sin(w)/(2*q); a0 = 1 + al;
+  c[0] = (1 - cs)*0.5/a0; c[1] = (1 - cs)/a0; c[2] = c[0]; c[3] = -2*cs/a0; c[4] = (1 - al)/a0;
+);
+function u_bq_hp(c, f, q) local(w, cs, al, a0) (
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); al = sin(w)/(2*q); a0 = 1 + al;
+  c[0] = (1 + cs)*0.5/a0; c[1] = -(1 + cs)/a0; c[2] = c[0]; c[3] = -2*cs/a0; c[4] = (1 - al)/a0;
+);
+function u_bq_pk(c, f, g, q) local(A, w, cs, al, a0) (
+  A = exp(g*0.05756463);
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); al = sin(w)/(2*q); a0 = 1 + al/A;
+  c[0] = (1 + al*A)/a0; c[1] = -2*cs/a0; c[2] = (1 - al*A)/a0; c[3] = -2*cs/a0; c[4] = (1 - al/A)/a0;
+);
+function u_bq_ls(c, f, g, q) local(A, w, cs, sa, a0) (
+  A = exp(g*0.05756463);
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); sa = 2*sqrt(A)*sin(w)/(2*q);
+  a0 = (A + 1) + (A - 1)*cs + sa;
+  c[0] = A*((A + 1) - (A - 1)*cs + sa)/a0;
+  c[1] = 2*A*((A - 1) - (A + 1)*cs)/a0;
+  c[2] = A*((A + 1) - (A - 1)*cs - sa)/a0;
+  c[3] = -2*((A - 1) + (A + 1)*cs)/a0;
+  c[4] = ((A + 1) + (A - 1)*cs - sa)/a0;
+);
+function u_bq_hs(c, f, g, q) local(A, w, cs, sa, a0) (
+  A = exp(g*0.05756463);
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); sa = 2*sqrt(A)*sin(w)/(2*q);
+  a0 = (A + 1) - (A - 1)*cs + sa;
+  c[0] = A*((A + 1) + (A - 1)*cs + sa)/a0;
+  c[1] = -2*A*((A - 1) + (A + 1)*cs)/a0;
+  c[2] = A*((A + 1) + (A - 1)*cs - sa)/a0;
+  c[3] = 2*((A - 1) - (A + 1)*cs)/a0;
+  c[4] = ((A + 1) - (A - 1)*cs - sa)/a0;
+);
+function u_eq_coef(c, kind, f, g, q) (
+  kind == 0 ? u_bq_hp(c, f, q) : kind == 1 ? u_bq_lp(c, f, q) : kind == 2 ? u_bq_ls(c, f, g, q) :
+  kind == 3 ? u_bq_hs(c, f, g, q) : u_bq_pk(c, f, g, q);
+);
+// magnitude (dB) of coefs c at a frequency given as cos/sin of w and 2w
+function bq_db(c, cw, sw, c2w, s2w) local(nr, ni, dr, di) (
+  nr = c[0] + c[1]*cw + c[2]*c2w; ni = c[1]*sw + c[2]*s2w;
+  dr = 1 + c[3]*cw + c[4]*c2w;    di = c[3]*sw + c[4]*s2w;
+  4.3429448*log((nr*nr + ni*ni + 0.000000000001)/(dr*dr + di*di + 0.000000000001));
+);
 
 // ---- halfband (N = 2K+1, Kaiser). Taps table tp[j] = h[2j+1], sum = 0.5.
 function i0(x) local(sm, t, k) (
@@ -163,8 +300,28 @@ function sh_proc(sA, sB, x) local(a0, a1, b0, b1, b2, b3, c0, c1) (
   );
 );
 
+// UI-thread copy of lutf (sat plot) so @gfx never shares its params/locals with the audio thread
+function lutf_u(x) local(p, i, f) (
+  per_on && abs(x) > 6 ? ( x -= 4*floor(x*0.25 + 0.5); );
+  p = (min(max(x, -7.999), 7.999) + 8)*256;
+  i = floor(p); f = p - i;
+  lut[i] + (lut[i+1] - lut[i])*f;
+);
+
 // ---- gain computer: returns GR in dB (>= 0). C1 knee, family morphs quad -> smoothstep -> smootherstep
 function gcomp(x) local(d, u, u2, u3, u4, G) (
+  d = x - thr;
+  knw > 0.001 ? (
+    d <= -knw*0.5 ? 0 : d >= knw*0.5 ? d*cslope : (
+      u = (d + knw*0.5)/knw; u2 = u*u; u3 = u2*u; u4 = u2*u2;
+      G = kc0*u2*0.5 + kc1*(u3 - u4*0.5) + kc2*(u4*u2 - 3*u4*u + 2.5*u4);
+      cslope*knw*G;
+    );
+  ) : ( d > 0 ? d*cslope : 0; );
+);
+
+// UI-thread copy of gcomp (comp viewport / handles)
+function gcomp_u(x) local(d, u, u2, u3, u4, G) (
   d = x - thr;
   knw > 0.001 ? (
     d <= -knw*0.5 ? 0 : d >= knw*0.5 ? d*cslope : (
@@ -194,7 +351,20 @@ function sget_c(n) (
   n==19 ? slider19 : n==20 ? slider20 : n==21 ? slider21 : n==22 ? slider22 : n==23 ? slider23 :
   n==24 ? slider24 : n==25 ? slider25 : n==26 ? slider26 : slider27;
 );
-function sget(n) ( n <= 9 ? sget_a(n) : n <= 18 ? sget_b(n) : sget_c(n); );
+function sget_d(n) (
+  n==29 ? slider29 : n==30 ? slider30 : n==31 ? slider31 : n==32 ? slider32 : n==33 ? slider33 :
+  n==34 ? slider34 : n==35 ? slider35 : n==36 ? slider36 : n==37 ? slider37 : slider38;
+);
+function sget_e(n) (
+  n==39 ? slider39 : n==40 ? slider40 : n==41 ? slider41 : n==42 ? slider42 : n==43 ? slider43 :
+  n==44 ? slider44 : n==45 ? slider45 : n==46 ? slider46 : n==47 ? slider47 : slider48;
+);
+function sget_f(n) (
+  n==49 ? slider49 : n==50 ? slider50 : n==51 ? slider51 : n==52 ? slider52 : n==53 ? slider53 :
+  n==54 ? slider54 : n==55 ? slider55 : n==56 ? slider56 : n==57 ? slider57 : slider58;
+);
+function sget_g(n) ( n==59 ? slider59 : n==60 ? slider60 : n==61 ? slider61 : slider62; );
+function sget(n) ( n <= 9 ? sget_a(n) : n <= 18 ? sget_b(n) : n <= 27 ? sget_c(n) : n <= 38 ? sget_d(n) : n <= 48 ? sget_e(n) : n <= 58 ? sget_f(n) : sget_g(n); );
 function sput_a(n, v) (
   n==1 ? (slider1=v) : n==2 ? (slider2=v) : n==3 ? (slider3=v) : n==4 ? (slider4=v) : n==5 ? (slider5=v) :
   n==6 ? (slider6=v) : n==7 ? (slider7=v) : n==8 ? (slider8=v) : (slider9=v);
@@ -208,7 +378,20 @@ function sput_c(n, v) (
   n==23 ? (slider23=v) : n==24 ? (slider24=v) : n==25 ? (slider25=v) : n==26 ? (slider26=v) :
   (slider27=v);
 );
-function sput(n, v) ( n <= 9 ? sput_a(n, v) : n <= 18 ? sput_b(n, v) : sput_c(n, v); );
+function sput_d(n, v) (
+  n==29 ? (slider29=v) : n==30 ? (slider30=v) : n==31 ? (slider31=v) : n==32 ? (slider32=v) : n==33 ? (slider33=v) :
+  n==34 ? (slider34=v) : n==35 ? (slider35=v) : n==36 ? (slider36=v) : n==37 ? (slider37=v) : (slider38=v);
+);
+function sput_e(n, v) (
+  n==39 ? (slider39=v) : n==40 ? (slider40=v) : n==41 ? (slider41=v) : n==42 ? (slider42=v) : n==43 ? (slider43=v) :
+  n==44 ? (slider44=v) : n==45 ? (slider45=v) : n==46 ? (slider46=v) : n==47 ? (slider47=v) : (slider48=v);
+);
+function sput_f(n, v) (
+  n==49 ? (slider49=v) : n==50 ? (slider50=v) : n==51 ? (slider51=v) : n==52 ? (slider52=v) : n==53 ? (slider53=v) :
+  n==54 ? (slider54=v) : n==55 ? (slider55=v) : n==56 ? (slider56=v) : n==57 ? (slider57=v) : (slider58=v);
+);
+function sput_g(n, v) ( n==59 ? (slider59=v) : n==60 ? (slider60=v) : n==61 ? (slider61=v) : (slider62=v); );
+function sput(n, v) ( n <= 9 ? sput_a(n, v) : n <= 18 ? sput_b(n, v) : n <= 27 ? sput_c(n, v) : n <= 38 ? sput_d(n, v) : n <= 48 ? sput_e(n, v) : n <= 58 ? sput_f(n, v) : sput_g(n, v); );
 function sset(n, v) (
   sput(n, v);
   sliderchange(2^(n-1));
@@ -216,6 +399,148 @@ function sset(n, v) (
   dirty = 1;
 );
 function end_touch(n) ( slider_automate(2^(n-1), 1); );
+
+// ============================================================ EQ (DSP side + shared band decoding)
+// bands: 0 = HPF / low shelf / bell (default low shelf 80 Hz), 1 = HPF / LPF / bell (default bell 200 Hz), 2 = LPF / high shelf / bell (default high shelf 6 kHz)
+function eq_dfreq(b) ( b == 0 ? 80 : b == 1 ? 200 : 6000; );
+function eq_def_idx(b) ( b == 1 ? 2 : 1; );                                  // default icon index of band b
+function eq_ui_idx(b, s) ( (floor(s + 0.5) + eq_def_idx(b)) % 3; );          // stored type -> icon index
+function eq_kind(b, u) (                                                     // icon index -> filter kind
+  b == 0 ? ( u == 0 ? 0 : u == 1 ? 2 : 4 ) :
+  b == 1 ? ( u == 0 ? 0 : u == 1 ? 1 : 4 ) :
+           ( u == 0 ? 1 : u == 1 ? 3 : 4 );
+);
+// decode band b of stage st into eb_k (kind) eb_f eb_g eb_q eb_on. eb_on: shelf/bell active only when gain != 0; HPF/LPF always active
+function eq_band(st, b) local(n) (
+  n = 29 + st*15 + b*4;
+  eb_k = eq_kind(b, eq_ui_idx(b, sget(n)));
+  eb_f = sget(n + 1); eb_f = min(max((eb_f < 19.5 ? eq_dfreq(b) : eb_f), 20), 20000);
+  eb_g = min(max(sget(n + 2), -18), 18);
+  eb_q = sget(n + 3); eb_q = eb_q < 0.05 ? 0.5 : min(max(eb_q, 0.1), 10);
+  eb_on = eb_k <= 1 || eb_g != 0;
+);
+function eq_tilt(st) (
+  et_t = min(max(sget(29 + st*15 + 12), -12), 12); et_p = sget(29 + st*15 + 13); et_p = et_p < 19.5 ? 600 : min(et_p, 20000);
+);
+
+// ---- audio-thread copies of the EQ decode (own params / locals / outputs, see THREAD SAFETY above). Read sliders 29..58 directly.
+function a_g_d(n) (
+  n==29 ? slider29 : n==30 ? slider30 : n==31 ? slider31 : n==32 ? slider32 : n==33 ? slider33 :
+  n==34 ? slider34 : n==35 ? slider35 : n==36 ? slider36 : n==37 ? slider37 : slider38;
+);
+function a_g_e(n) (
+  n==39 ? slider39 : n==40 ? slider40 : n==41 ? slider41 : n==42 ? slider42 : n==43 ? slider43 :
+  n==44 ? slider44 : n==45 ? slider45 : n==46 ? slider46 : n==47 ? slider47 : slider48;
+);
+function a_g_f(n) (
+  n==49 ? slider49 : n==50 ? slider50 : n==51 ? slider51 : n==52 ? slider52 : n==53 ? slider53 :
+  n==54 ? slider54 : n==55 ? slider55 : n==56 ? slider56 : n==57 ? slider57 : slider58;
+);
+function a_g(n) ( n <= 38 ? a_g_d(n) : n <= 48 ? a_g_e(n) : a_g_f(n); );
+function a_dfreq(b) ( b == 0 ? 80 : b == 1 ? 200 : 6000; );
+function a_def_idx(b) ( b == 1 ? 2 : 1; );
+function a_ui_idx(b, s) ( (floor(s + 0.5) + a_def_idx(b)) % 3; );
+function a_kind(b, u) (
+  b == 0 ? ( u == 0 ? 0 : u == 1 ? 2 : 4 ) :
+  b == 1 ? ( u == 0 ? 0 : u == 1 ? 1 : 4 ) :
+           ( u == 0 ? 1 : u == 1 ? 3 : 4 );
+);
+function a_band(st, b) local(n) (
+  n = 29 + st*15 + b*4;
+  ab_k = a_kind(b, a_ui_idx(b, a_g(n)));
+  ab_f = a_g(n + 1); ab_f = min(max((ab_f < 19.5 ? a_dfreq(b) : ab_f), 20), 20000);
+  ab_g = min(max(a_g(n + 2), -18), 18);
+  ab_q = a_g(n + 3); ab_q = ab_q < 0.05 ? 0.5 : min(max(ab_q, 0.1), 10);
+  ab_on = ab_k <= 1 || ab_g != 0;
+);
+function a_tilt(st) (
+  at_t = min(max(a_g(29 + st*15 + 12), -12), 12); at_p = a_g(29 + st*15 + 13); at_p = at_p < 19.5 ? 600 : min(at_p, 20000);
+);
+
+// write target coefs of filter f (neutral = identity when inactive); wake a sleeping filter from its target with clean state
+function eq_target(f, kind, fr, gn, q, on) local(t, c, i) (
+  t = eqt + f*5; c = eqc + f*5;
+  on ? eq_coef(t, kind, fr, gn, q) : ( t[0] = 1; t[1] = 0; t[2] = 0; t[3] = 0; t[4] = 0; );
+  on && !eqr[f] ? (
+    i = 0; loop(5, c[i] = t[i]; i += 1; );
+    eqsL[f*2] = 0; eqsL[f*2 + 1] = 0; eqsR[f*2] = 0; eqsR[f*2 + 1] = 0;
+    eqr[f] = 1;
+  );
+  eqa[f] = on;
+);
+function eq_setup(st) local(b, anyon, g2) (
+  b = 0; anyon = 0;
+  loop(3,
+    a_band(st, b);
+    eq_target(st*5 + b, ab_k, ab_f, ab_g, ab_q, ab_on);
+    anyon = anyon || ab_on;
+    b += 1;
+  );
+  a_tilt(st);
+  eq_target(st*5 + 3, 2, at_p, -at_t*0.5, 0.4, at_t != 0);    // tilt = low shelf -T/2 + high shelf +T/2 around the pivot (+ = brighter)
+  eq_target(st*5 + 4, 3, at_p,  at_t*0.5, 0.4, at_t != 0);
+  anyon = anyon || at_t != 0;
+  g2 = min(max(a_g(29 + st*15 + 14), -12), 12);
+  anyon = anyon || g2 != 0;
+  st == 0 ? ( eg0_t = exp(g2*0.11512925); eq_act0 = anyon; ) : ( eg1_t = exp(g2*0.11512925); eq_act1 = anyon; );
+);
+// sliders that load as 0 in old projects (freq / Q / pivot) are given their defaults once. UI THREAD ONLY (first @gfx frame);
+// the audio side already treats those zeros as defaults (a_band / a_tilt), so a never-opened UI stays correct
+function eq_fix() local(st, b, sb, n) (
+  st = 0;
+  loop(2,
+    sb = 29 + st*15; b = 0;
+    loop(3,
+      n = sb + b*4;
+      sget(n + 1) < 19.5 ? ( sput(n + 1, eq_dfreq(b)); sliderchange(2^n); );
+      sget(n + 3) < 0.05 ? ( sput(n + 3, 0.5); sliderchange(2^(n + 2)); );
+      b += 1;
+    );
+    sget(sb + 13) < 19.5 ? ( sput(sb + 13, 600); sliderchange(2^(sb + 12)); );
+    st += 1;
+  );
+);
+// per block: ramp deltas so a coefficient change glides over one block; retire filters that have settled back to identity
+function eq_prep() local(f, i, c, t, d, df, rn) (
+  f = 0; rn = 1/max(samplesblock, 1);
+  loop(10,
+    eqr[f] ? (
+      c = eqc + f*5; t = eqt + f*5; d = eqd + f*5; i = 0; df = 0;
+      loop(5, d[i] = (t[i] - c[i])*rn; df += abs(t[i] - c[i]); i += 1; );
+      !eqa[f] && df < 0.000000001 ? (
+        eqr[f] = 0; i = 0; loop(5, d[i] = 0; i += 1; );
+      );
+    );
+    f += 1;
+  );
+);
+// run the 5 filters of stage st over (eqxl, eqxr) in place
+function eq_stage(st) local(f, k, c, d) (
+  f = st*5; k = 0;
+  loop(5,
+    eqr[f] ? (
+      c = eqc + f*5; d = eqd + f*5;
+      c[0] += d[0]; c[1] += d[1]; c[2] += d[2]; c[3] += d[3]; c[4] += d[4];
+      eqxl = bq(eqsL + f*2, c, eqxl);
+      eqxr = bq(eqsR + f*2, c, eqxr);
+    );
+    f += 1;
+  );
+);
+
+// clamp + snap a value to its slider's range/step and write it if it changed
+function setv(n, v) (
+  pstep[n] > 0 ? ( v = floor(v/pstep[n] + 0.5)*pstep[n]; );
+  v = min(max(v, pmin[n]), pmax[n]);
+  v != sget(n) ? sset(n, v);
+);
+// double-click detector for non-cell widgets (shares the click memory used by begin_drag)
+function dbl(id) local(now, r) (
+  now = time_precise();
+  r = last_clk_n == id && now - last_clk_t < 0.35;
+  last_clk_n = r ? 0 : id; last_clk_t = now;
+  r;
+);
 
 function n2t(n, v) local(mn, mx2, md, t) (
   mn = pmin[n]; mx2 = pmax[n]; md = pmode[n];
@@ -239,8 +564,17 @@ function commit(n, t) local(v) (
 function hit(x, y, w, h) ( mx >= x && mx < x + w && my >= y && my < y + h );
 
 // ---- drawing primitives (logical -> device px)
-function setc(red) ( red ? gfx_set(1, 0, 0, 1) : inv ? gfx_set(0, 0, 0, 1) : gfx_set(1, 1, 1, 1); );
-function setbg() ( inv ? gfx_set(1, 1, 1, 1) : gfx_set(0, 0, 0, 1); );   // text colour on filled (lit) widgets = background colour
+// palette (UI thread only): pal = index into ptb; fg*/bk*/ac* = current UI / background / accent colour
+function pal_apply() local(o) (
+  pal = min(max(floor(pal + 0.5), 0), 9);
+  o = ptb + pal*9;
+  bkr = o[0]; bkg = o[1]; bkb = o[2]; fgr = o[3]; fgg = o[4]; fgb = o[5]; acr = o[6]; acg = o[7]; acb = o[8];
+);
+function setc(red) (   // dk = 1 normal, 0.5 = dimmed (modules dimmed while Bypass is on)
+  red ? gfx_set(bkr + (acr - bkr)*dk, bkg + (acg - bkg)*dk, bkb + (acb - bkb)*dk, 1) :
+        gfx_set(bkr + (fgr - bkr)*dk, bkg + (fgg - bkg)*dk, bkb + (fgb - bkb)*dk, 1);
+);
+function setbg() ( gfx_set(bkr, bkg, bkb, 1); );   // text colour on filled (lit) widgets = background colour
 function Rfill(x, y, w, h) local(x0, y0) (   // edges snapped to whole device px so borders stay uniform at fractional S
   x0 = floor(ox + x*S + 0.5); y0 = floor(oy + y*S + 0.5);
   gfx_rect(x0, y0, max(1, floor(ox + (x + w)*S + 0.5) - x0), max(1, floor(oy + (y + h)*S + 0.5) - y0));
@@ -250,6 +584,10 @@ function Rtext(x, y, str) ( gfx_x = ox + x*S; gfx_y = oy + y*S; gfx_drawstr(str)
 function Rtextc(x, y, w, str) local(tw, th2) (
   gfx_measurestr(str, tw, th2);
   gfx_x = ox + x*S + (w*S - tw)*0.5; gfx_y = oy + y*S; gfx_drawstr(str);
+);
+function Rtextr(x, y, w, str) local(tw, th2) (   // right-aligned inside [x, x+w]
+  gfx_measurestr(str, tw, th2);
+  gfx_x = ox + (x + w)*S - tw; gfx_y = oy + y*S; gfx_drawstr(str);
 );
 function Rline(x1, y1, x2, y2) local(k) (
   k = 0;
@@ -277,7 +615,22 @@ function pick_font() local(i, w1, w2, h1, ok) (
 );
 
 // ---- formatting
+function eq_fmt(n, v) local(o, k) (
+  o = n - 29; o = o - 15*floor(o/15);
+  o < 12 ? (
+    k = o - 4*floor(o/4);
+    k == 1 ? ( v >= 10000 ? sprintf(#vs, "%.0fkHz", v*0.001) : v >= 1000 ? sprintf(#vs, "%.1fkHz", v*0.001) : sprintf(#vs, "%.0fHz", v); ) :
+    k == 2 ? ( abs(v) < 0.05 ? strcpy(#vs, "0.0dB") : sprintf(#vs, "%+.1fdB", v); ) :
+    sprintf(#vs, "%.2f", v);
+  ) : o == 13 ? (
+    v >= 1000 ? sprintf(#vs, "%.1fkHz", v*0.001) : sprintf(#vs, "%.0fHz", v);
+  ) : (
+    abs(v) < 0.05 ? strcpy(#vs, "0.0dB") : sprintf(#vs, "%+.1fdB", v);
+  );
+);
 function fmt(n, v) (
+  n >= 29 && n <= 58 ? eq_fmt(n, v) :
+  n == 59 ? ( v < 0.05 ? strcpy(#vs, "OFF") : sprintf(#vs, "%.1fms", v) ) :
   n == 2 || n == 12 || n == 14 || n == 15 || n == 17 || n == 18 || n == 19 || n == 21 || n == 25 ? sprintf(#vs, "%.0f%%", v) :
   n == 3 ? sprintf(#vs, "%+.0f%%", v) :
   n == 4 || n == 16 ? ( v <= (n == 4 ? 20.5 : 15) ? strcpy(#vs, "OFF") : sprintf(#vs, "%.0fHz", v); ) :
@@ -287,7 +640,7 @@ function fmt(n, v) (
   n == 10 ? ( v < 1 ? sprintf(#vs, "%.2fms", v) : sprintf(#vs, "%.1fms", v); ) :
   n == 11 ? ( v >= 1990 ? strcpy(#vs, "AUTO") : v >= 1000 ? sprintf(#vs, "%.2fs", v*0.001) : sprintf(#vs, "%.0fms", v); ) :
   n == 13 || n == 20 ? sprintf(#vs, "%.1fdB", v) :
-  n == 22 ? sprintf(#vs, "%+.1fdB", v) : sprintf(#vs, "%.1f", v);
+  n == 22 || n == 27 ? sprintf(#vs, "%+.1fdB", v) : sprintf(#vs, "%.1f", v);
 );
 
 // ---- interaction
@@ -314,6 +667,37 @@ function cell(n, x, y, w, h, lbl) local(hv, t, v, isact) (
   gfx_setfont(1); Rtext(x + 3, y + 3, lbl);
   gfx_setfont(2); fmt(n, v); Rtextc(x, y + floor(h*0.4 + 1), w, #vs);
   Rfill(x + 2, y + h - 4, max(1, floor(t*(w - 4))), 2);
+);
+
+// inverted cell (lit block) for the gain-stage cells: sat module out gain, EQ out gain, output out gain
+function cell_o(n, x, y, w, h, lbl) local(hv, t, v, isact) (
+  hv = hit(x, y, w, h);
+  hv && press && !act ? begin_drag(n);
+  hv && wheel != 0 ? wheel_adj(n);
+  v = sget(n); t = n2t(n, v); isact = act == n;
+  setc(isact); Rfill(x, y, w, h);
+  setbg();
+  gfx_setfont(1); Rtext(x + 3, y + 3, lbl);
+  gfx_setfont(2); fmt(n, v); Rtextc(x, y + floor(h*0.4 + 1), w, #vs);
+  Rfill(x + 2, y + h - 4, max(1, floor(t*(w - 4))), 2);
+  setc(0);
+);
+// two stacked params in one cell (label left, value right), each half drags / wheels / double-clicks on its own
+function cell2(na, nb, x, y, w, h, la, lb) local(hh, ha, hb) (
+  hh = floor(h*0.5);
+  ha = hit(x, y, w, hh); hb = hit(x, y + hh, w, h - hh);
+  ha && press && !act ? begin_drag(na);
+  hb && press && !act ? begin_drag(nb);
+  ha && wheel != 0 ? wheel_adj(na);
+  hb && wheel != 0 ? wheel_adj(nb);
+  setc(act == na || act == nb); Rbox(x, y, w, h);
+  setc(0); Rfill(x, y + hh, w, 1);
+  gfx_setfont(1);
+  setc(act == na); fmt(na, sget(na)); Rtext(x + 3, y + 3, la); Rtextr(x, y + 3, w - 3, #vs);
+  Rfill(x + 2, y + hh - 3, max(1, floor(n2t(na, sget(na))*(w - 4))), 1);
+  setc(act == nb); fmt(nb, sget(nb)); Rtext(x + 3, y + hh + 3, lb); Rtextr(x, y + hh + 3, w - 3, #vs);
+  Rfill(x + 2, y + h - 4, max(1, floor(n2t(nb, sget(nb))*(w - 4))), 2);
+  setc(0);
 );
 
 function btn(x, y, w, h, str, lit) local(hv, clicked) (
@@ -362,32 +746,52 @@ function selector(n, x, y, w, h) local(hv, sel, r, aw, cy) (
   Rtextc(x + aw, y + 2, w - 2*aw, #nm);
 );
 
-// 3-way segmented button. n==23 (gain match): Auto/Match states are red; Match click always (re)starts measuring.
-function seg3(n, x, y, w, h, a, b, c) local(i, sx, sw, sel, hv) (
-  sel = floor(sget(n) + 0.5); sw = floor(w/3); i = 0;
-  loop(3,
-    sx = x + i*sw;
-    hv = hit(sx, y, sw, h);
-    hv && press && !act ? (
-      sset(n, i); end_touch(n);
-      n == 23 && i == 2 ? ( match_req = 1; );
-    );
-    i == sel ? (
-      setc(n == 23 && i > 0 && !(i == 2 && meas && (floor(time_precise()*4) & 1))); Rfill(sx, y, sw, h);
-      setbg();
-    ) : ( setc(0); Rbox(sx, y, sw, h); );
-    gfx_setfont(1);
-    i == 0 ? Rtextc(sx, y + 4, sw, a) : i == 1 ? Rtextc(sx, y + 4, sw, b) : Rtextc(sx, y + 4, sw, c);
-    i += 1;
+// filter glyphs, traced from svg/*.svg (18-unit wide polylines; note: the files hpf.svg / lpf.svg are named the other way round vs. their shapes).
+// kind: 0 HPF, 1 LPF, 2 low shelf, 3 high shelf, 4 bell. centred on (cx, cy), drawn in the current colour.
+function gseg(ax, ay, bx, by) ( Rline(gx0 + ax*gk, gy0 + ay*gk, gx0 + bx*gk, gy0 + by*gk); );
+function glyph(kind, cx, cy) (
+  gk = 0.75; gx0 = cx - 9*gk; gy0 = cy - 5.5*gk;
+  kind == 0 ? ( gseg(0.85, 8, 5.23, 1); gseg(5.23, 1, 18.85, 1); ) :
+  kind == 1 ? ( gseg(0, 1, 13.6, 1); gseg(13.6, 1, 18, 8); ) :
+  kind == 2 ? ( gseg(0, 1, 6.88, 1); gseg(6.88, 1, 11.5, 9); gseg(11.5, 9, 18, 9); ) :
+  kind == 3 ? ( gseg(0, 9, 6.5, 9); gseg(6.5, 9, 11.1, 1); gseg(11.1, 1, 18, 1); ) : (
+    gseg(0, 10.45, 5.69, 10.45); gseg(5.69, 10.45, 9.27, 2.45); gseg(9.27, 2.45, 12.84, 10.45); gseg(12.84, 10.45, 18, 10.45);
+  );
+);
+// header logo (svg/satcomp.svg, 21x21): left click = next colour scheme, right click = scheme dropdown
+function logo(x, y) local(hv, i, r) (
+  hv = hit(x, y, 21, 21);
+  hv && press && !act ? ( pal = (pal + 1) % 10; pal_apply(); press = 0; );
+  hv && rpress ? (
+    strcpy(#pm, "");
+    i = 0; loop(10, strcat(#pm, i == pal ? "!" : ""); strcat(#pm, i == 0 ? "Black" : i == 1 ? "White" : i == 2 ? "Teal" : i == 3 ? "Cadmium" : i == 4 ? "Ultramarine" : i == 5 ? "Azure" : i == 6 ? "Magenta" : i == 7 ? "Sulfur" : i == 8 ? "Uranium" : "Midnight"); i < 9 ? strcat(#pm, "|"); i += 1; );
+    gfx_x = ox + x*S; gfx_y = oy + (y + 22)*S;
+    r = gfx_showmenu(#pm);
+    r > 0 ? ( pal = r - 1; pal_apply(); );
+    last_down = 0;
   );
   setc(0);
+  Rbox(x + 6, y + 6, 9, 9);
+  Rline(x + 12.5, y + 0.5, x + 20.5, y + 0.5); Rline(x + 20.5, y + 0.5, x + 20.5, y + 7.5);
+  Rline(x + 8.5, y + 20.5, x + 0.5, y + 20.5); Rline(x + 0.5, y + 20.5, x + 0.5, y + 13.5);
+  Rline(x + 6.5, y + 14.5, x + 0.5, y + 20.5); Rline(x + 14.5, y + 6.5, x + 20.5, y + 0.5);
+);
+// module-active square: filled = active, outline = untouched. lit: drawn on a lit (inverted) background
+function sqind(x, y, s, on, lit, byp) (   // byp: section bypassed -> outlined square with an X
+  lit ? setbg() : setc(0);
+  byp ? ( Rbox(x, y, s, s); Rline(x, y, x + s - 1, y + s - 1); Rline(x + s - 1, y, x, y + s - 1); ) :
+  on ? Rfill(x, y, s, s) : Rbox(x, y, s, s);
+  setc(0);
+);
+function sq_tog(n, x, y, s) (   // click on the indicator toggles bypass slider n (consumes the press so the button underneath ignores it)
+  hit(x - 3, y - 3, s + 6, s + 6) && press && !act ? ( sset(n, sget(n) > 0.5 ? 0 : 1); end_touch(n); press = 0; );
 );
 
 // IN>OUT readout with a centre-tap bar: grows right = output louder than input, left = quieter (+-12 dB full scale)
 function diff_box(x, y, w, h) local(cx, bw, d) (
   setc(0); Rbox(x, y, w, h);
   gfx_setfont(1); Rtext(x + 3, y + 3, "IN>OUT");
-  gfx_setfont(2); sprintf(#vs, "%+.1fdB", diff_disp); Rtextc(x, y + floor(h*0.4 + 1), w, #vs);
+  gfx_setfont(2); sprintf(#vs, "%+.1fdB", rd_diff); Rtextc(x, y + floor(h*0.4 + 1), w, #vs);
   cx = x + floor(w*0.5);
   d = min(max(diff_disp, -12), 12)/12; bw = floor(abs(d)*(w*0.5 - 3));
   d >= 0 ? Rfill(cx, y + h - 4, bw, 2) : Rfill(cx - bw, y + h - 4, bw, 2);
@@ -461,7 +865,7 @@ function draw_plot(x, y, w, h) local(i, n, vx, vy, px, py, lx, ly, pk, hv, tb, t
   n = 64; i = 0;
   loop(n + 1,
     vx = -1 + 2*i/n;
-    vy = sat_on ? lutf(vx*pre + bias) : vx;
+    vy = sat_on ? lutf_u(vx*pre + bias) : vx;
     vy = min(max(vy, -1), 1);
     px = x + (vx + 1)*0.5*(w - 1); py = y + (1 - (vy + 1)*0.5)*(h - 1);
     setc(sat_on && pk > 0.002 && abs(vx) <= pk);
@@ -470,9 +874,9 @@ function draw_plot(x, y, w, h) local(i, n, vx, vy, px, py, lx, ly, pk, hv, tb, t
   );
   sat_on && pk > 0.002 ? (
     setc(1);
-    vy = min(max(lutf(pk*pre + bias), -1), 1);
+    vy = min(max(lutf_u(pk*pre + bias), -1), 1);
     Rfill(x + (pk + 1)*0.5*(w - 1) - 1, y + (1 - (vy + 1)*0.5)*(h - 1) - 1, 3, 3);
-    vy = min(max(lutf(-pk*pre + bias), -1), 1);
+    vy = min(max(lutf_u(-pk*pre + bias), -1), 1);
     Rfill(x + (1 - pk)*0.5*(w - 1) - 1, y + (1 - (vy + 1)*0.5)*(h - 1) - 1, 3, 3);
     setc(0);
   );
@@ -483,16 +887,37 @@ function draw_plot(x, y, w, h) local(i, n, vx, vy, px, py, lx, ly, pk, hv, tb, t
   act == 27 ? ( i = 0; loop(floor(w/3), Rfill(x + i*3, ty, 1, 1); i += 1; ); );
   setc(0);
   gfx_setfont(1);
-  sprintf(#vs, "OUT %+.1fdB", tot); Rtext(x + 10, y + 3, #vs);
+  sprintf(#vs, "OUT %+.1fdB", tot); Rtext(x + 3, y + 3, #vs);                  // flush with the left edge
   sat_meas ? (
     setc(floor(time_precise()*4) & 1); sprintf(#vs, "MEAS %.1fs", sat_mt);
-  ) : sprintf(#vs, "SAT %+.1fdB", sat_db);
-  Rtextc(x + w - 84, y + h - 14, 82, #vs);
+  ) : sprintf(#vs, "SAT %+.1fdB", rd_sat);
+  Rtextr(x, y + h - 14, w - 3, #vs);                                           // flush with the right edge
   setc(0);
 );
 
 // comp transfer plot. live: red fill under the curve up to the current detector level, dot on the curve at that level.
-function draw_ccurve(x, y, w, h) local(i, n, xin, yout, px, py, lx, ly, tx, lvl) (
+function draw_ccurve(x, y, w, h) local(i, n, xin, yout, px, py, lx, ly, tx, lvl, hxt, hyt, hxr, hyr, yo, hv, ghr) (
+  // handles: dot at the threshold knee (drag x/y -> Thresh), square at the 0 dB-in output (drag y -> Ratio). double-click = default
+  hv = hit(x, y, w, h);
+  act == 120 && down ? (
+    xin = -48 + (mx - x)/(w - 1)*48; yo = -48 + (1 - (my - y)/(h - 1))*48;
+    setv(8, (xin + yo)*0.5);
+  );
+  act == 121 && down ? (
+    yo = -48 + (1 - (my - y)/(h - 1))*48; yo = min(max(yo, slider8), 0);
+    slider8 < -0.3 ? setv(9, -slider8/max(yo - slider8, 0.05));
+  );
+  hxt = x + (slider8 + 48)/48*(w - 1); hyt = y + (1 - (slider8 + 48)/48)*(h - 1);
+  hxr = x + w - 5; hyr = y + (1 - (-gcomp_u(0) + 48)/48)*(h - 1);
+  hv && press && !act ? (
+    abs(mx - hxr) <= 6 && abs(my - hyr) <= 6 ? (
+      dbl(121) ? ( sset(9, pdef[9]); end_touch(9); ) : ( act = 121; vt1 = 9; vt2 = 0; );
+      press = 0;
+    ) : abs(mx - hxt) <= 6 && abs(my - hyt) <= 6 ? (
+      dbl(120) ? ( sset(8, pdef[8]); end_touch(8); ) : ( act = 120; vt1 = 8; vt2 = 0; );
+      press = 0;
+    );
+  );
   setc(0); Rbox(x, y, w, h);
   lvl = min(max(8.6858896*log(max(vz_lv, 0.000001)), -48), 0);
   setc(1);
@@ -500,7 +925,7 @@ function draw_ccurve(x, y, w, h) local(i, n, xin, yout, px, py, lx, ly, tx, lvl)
   loop(w - 2,
     xin = -48 + 48*i/(w - 3);
     xin <= lvl ? (
-      py = y + (1 - (xin - gcomp(xin) + 48)/48)*(h - 1);
+      py = y + (1 - (xin - gcomp_u(xin) + 48)/48)*(h - 1);
       Rfill(x + 1 + i, py, 1, y + h - 1 - py);
     );
     i += 1;
@@ -510,18 +935,222 @@ function draw_ccurve(x, y, w, h) local(i, n, xin, yout, px, py, lx, ly, tx, lvl)
   n = 96; i = 0;
   loop(n + 1,
     xin = -48 + 48*i/n;
-    yout = xin - gcomp(xin);
+    yout = xin - gcomp_u(xin);
     px = x + (i/n)*(w - 1); py = y + (1 - (yout + 48)/48)*(h - 1);
     i > 0 ? Rline(lx, ly, px, py);
     lx = px; ly = py; i += 1;
   );
   lvl > -47.9 ? (
-    px = x + (lvl + 48)/48*(w - 1); py = y + (1 - (lvl - gcomp(lvl) + 48)/48)*(h - 1);
+    px = x + (lvl + 48)/48*(w - 1); py = y + (1 - (lvl - gcomp_u(lvl) + 48)/48)*(h - 1);
     Rfill(px - 1, py - 1, 3, 3);
   );
   tx = x + (thr + 48)/48*(w - 1);
   Rfill(tx, y + h - 4, 1, 3);
-  gfx_setfont(1); Rtext(x + 3, y + 2, "COMPRESSOR");
+  // handles
+  setc(act == 120); gfx_circle(ox + hxt*S, oy + hyt*S, 3.5*S, 1, 1);
+  setc(act == 121); Rfill(hxr - 3, hyr - 3, 7, 7);
+  setc(0);
+  // live metrics: detector level, comp output at that level, instantaneous gain reduction (threshold / ratio are on the handles + cells)
+  gfx_setfont(1);
+  rd_tick ? ( rd_lvl = lvl; rd_ghr = lvl > -47.9 ? gcomp_u(lvl) : 0; );
+  rd_lvl > -47.9 ? (
+    sprintf(#vs, "LVL %+05.1f  OUT %+05.1f  GR %04.1fdB", rd_lvl, rd_lvl - rd_ghr, rd_ghr);
+  ) : strcpy(#vs, "LVL -----  OUT -----  GR 00.0dB");
+  Rtext(x + 3, y + 2, #vs);
+);
+
+// ============================================================ EQ page UI
+// viewport geometry (set by draw_eq each frame): ex0/epw = inner x / width, ey0/eph = inner y / plot height. 20 Hz..20 kHz log, +-18 dB
+function eq_fx(f) ( ex0 + log(max(f, 20)/20)*0.14476483*(epw - 1); );
+function eq_xf(px) ( 20*exp((px - ex0)/(epw - 1)*6.9077553); );
+function eq_gy(g) ( ey0 + (eph - 2)*0.5*(1 - g/18); );
+function eq_yg(py) ( (1 - (py - ey0)/((eph - 2)*0.5))*18; );
+
+// UI-side copy of the viewed stage: display coefs (dsc) + active flags (dsa) for the 3 bands + 2 tilt shelves, node positions
+function eq_disp_prep(st) local(b) (
+  b = 0;
+  loop(3,
+    eq_band(st, b);
+    u_eq_coef(dsc + b*5, eb_k, eb_f, eb_g, eb_q);
+    dsa[b] = eb_on;
+    enx[b] = eq_fx(eb_f); eny[b] = eb_k <= 1 ? eq_gy(0) : eq_gy(eb_g); ekd[b] = eb_k;
+    b += 1;
+  );
+  eq_tilt(st);
+  u_eq_coef(dsc + 15, 2, et_p, -et_t*0.5, 0.4);
+  u_eq_coef(dsc + 20, 3, et_p, et_t*0.5, 0.4);
+  dsa[3] = et_t != 0; dsa[4] = et_t != 0;
+);
+function eq_curve_db(f) local(w, cw, sw, c2w, s2w, d, k) (
+  w = 2*$pi*min(f, srate*0.49)/srate; cw = cos(w); sw = sin(w); c2w = cos(2*w); s2w = sin(2*w);
+  d = 0; k = 0;
+  loop(5, dsa[k] ? ( d += bq_db(dsc + k*5, cw, sw, c2w, s2w); ); k += 1; );
+  d;
+);
+
+// spectrum of the tapped signal (mono sum at the viewed stage's input): 4096-pt Hann FFT ~30x/s, smoothed in dB (fast up, slow down)
+function spec_update() local(i, k, ix, re, im, db, nv, now3) (
+  now3 = time_precise();
+  now3 - spec_t >= 0.03 ? (
+    spec_t = now3;
+    ix = fw - 4096; i = 0;
+    loop(4096, fbuf[i*2] = fring[(ix + i + 8192) & 8191]*fwin[i]; fbuf[i*2 + 1] = 0; i += 1; );
+    fft(fbuf, 4096); fft_permute(fbuf, 4096);
+    k = 0;
+    loop(2049,
+      re = fbuf[k*2]; im = fbuf[k*2 + 1];
+      db = 8.6858896*log(sqrt(re*re + im*im)*0.0009765625 + 0.0000001);    // |X|*4/N -> amplitude
+      spk[k] += (db - spk[k])*(db > spk[k] ? 0.6 : 0.12);
+      k += 1;
+    );
+  );
+);
+// red filled spectrum, log-frequency columns, +4.5 dB/oct slope compensation, -100..-5 dB window. (x, y, w, h) = plot box
+function draw_spec(x, y, w, h) local(i, n, flo, fhi, bl, bh, k, kk, v, fr, bw2, hh, cnt) (
+  n = w - 2; bw2 = srate/4096;
+  setc(1);
+  i = 0;
+  loop(n,
+    flo = 20*exp(i/n*6.9077553); fhi = 20*exp((i + 1)/n*6.9077553);
+    bl = min(flo/bw2, 2046); bh = min(fhi/bw2, 2047);
+    bh - bl < 1 ? (
+      k = floor(bl); fr = bl - k;
+      v = spk[k] + (spk[k + 1] - spk[k])*fr;
+    ) : (
+      v = -140; k = floor(bl); kk = floor(bh); cnt = 0;
+      while (k <= kk && cnt < 512) ( v = max(v, spk[k]); k += 1; cnt += 1; );
+    );
+    v += 6.4921*log(sqrt(flo*fhi)/1000);
+    hh = floor(min(max((v + 100)/95, 0), 1)*(h - 2));   // window -100 .. -5 dB (after slope compensation)
+    hh > 0 ? Rfill(x + 1 + i, y + h - 1 - hh, 1, hh);
+    i += 1;
+  );
+  setc(0);
+);
+
+// one band's type strip (3 filter glyphs) over its Q cell. n = the band's Type slider, Q = n+3
+function typeq(n, b, x, y, w, h) local(sel, i, sx, sw, hq, nq, t, hv) (
+  nq = n + 3; sw = floor(w/3);
+  sel = eq_ui_idx(b, sget(n));
+  i = 0;
+  loop(3,
+    sx = x + i*sw;
+    hv = hit(sx, y, sw, 17);
+    hv && press && !act ? ( sset(n, (i - eq_def_idx(b) + 3) % 3); end_touch(n); press = 0; );
+    i == sel ? ( setc(0); Rfill(sx, y, sw, 17); setbg(); ) : setc(0);
+    glyph(eq_kind(b, i), sx + sw*0.5, y + 8.5);
+    i += 1;
+  );
+  setc(act == nq); Rbox(x, y, w, h);
+  setc(0); Rfill(x, y + 17, w, 1);
+  hq = hit(x, y + 18, w, h - 18);
+  hq && press && !act ? begin_drag(nq);
+  hq && wheel != 0 ? wheel_adj(nq);
+  t = n2t(nq, sget(nq));
+  setc(act == nq);
+  gfx_setfont(1); Rtext(x + 3, y + 21, "Q");
+  gfx_setfont(2); fmt(nq, sget(nq)); Rtextc(x + 8, y + 19, w - 8, #vs);
+  Rfill(x + 2, y + h - 4, max(1, floor(t*(w - 4))), 2);
+  setc(0);
+);
+
+// EQ viewport: spectrum + summed response curve + band nodes + pivot line, with PRE-COMP / POST-COMP stage tabs underneath.
+// drag a node: x = freq, y = gain (HPF/LPF: x only); wheel on a node = Q; drag the dotted pivot line = pivot;
+// drag empty space horizontally = tilt (right = brighter, left = raises the lows); double-click resets the thing under the cursor
+function draw_eq(x, y, w, h) local(i, b, best, bd, d2, n, d, px, py, lx, ly, pvx, sw, hv, tn, sb) (
+  ex0 = x + 1; epw = w - 2; ey0 = y + 1; eph = h - 14;
+  eq_vis_t = time_precise(); eq_vs = eqv;          // tells the audio thread to feed the spectrum ring from this stage
+  spec_update();
+  sb = 29 + eqv*15; tn = sb + 12;
+  hv = hit(x, y, w, eph);
+  eq_disp_prep(eqv);
+  // ---- interaction
+  best = -1; bd = 80; b = 0;
+  loop(3,
+    d2 = (mx - enx[b])*(mx - enx[b]) + (my - eny[b])*(my - eny[b]);
+    d2 < bd ? ( bd = d2; best = b; );
+    b += 1;
+  );
+  pvx = eq_fx(et_p);
+  hv && wheel != 0 && best >= 0 ? wheel_adj(sb + best*4 + 3);
+  hv && press && !act ? (
+    best >= 0 ? (
+      n = sb + best*4;
+      dbl(130 + best) ? (
+        sset(n + 1, pdef[n + 1]); sset(n + 2, 0); end_touch(n + 1); end_touch(n + 2);
+      ) : (
+        act = 101 + best; vt1 = n + 1; vt2 = ekd[best] > 1 ? n + 2 : 0;
+        gdx = enx[best] - mx; gdy = eny[best] - my;
+      );
+    ) : abs(mx - pvx) <= 3 ? (
+      dbl(140) ? ( sset(sb + 13, pdef[sb + 13]); end_touch(sb + 13); ) : ( act = 110; vt1 = sb + 13; vt2 = 0; gdx = pvx - mx; );
+    ) : (
+      dbl(141) ? ( sset(tn, 0); end_touch(tn); ) : ( act = 111; vt1 = tn; vt2 = 0; tacc = sget(tn); tlast = mx; );
+    );
+    press = 0;
+  );
+  act >= 101 && act <= 103 && down ? (
+    b = act - 101; n = sb + b*4;
+    setv(n + 1, eq_xf(mx + gdx));
+    ekd[b] > 1 ? setv(n + 2, eq_yg(my + gdy));
+  );
+  act == 110 && down ? setv(sb + 13, eq_xf(mx + gdx));
+  act == 111 && down ? (
+    tacc += (mx - tlast)*(24/epw)*(shift ? 0.15 : 1); tlast = mx;
+    tacc = min(max(tacc, -12), 12);
+    setv(tn, tacc);
+  );
+  eq_disp_prep(eqv);                               // pick up what the drag just wrote
+  pvx = eq_fx(et_p);
+  // ---- drawing
+  setc(0); Rbox(x, y, w, h);
+  draw_spec(x, y, w, eph);
+  setc(0);
+  Rfill(x + 1, floor(eq_gy(0)), w - 2, 1);        // 0 dB line
+  i = 0; loop(floor((eph - 2)/3), Rfill(pvx, ey0 + i*3, 1, act == 110 ? 3 : 2); i += 1; );   // pivot line
+  n = floor(epw/2); i = 0;
+  loop(n + 1,
+    px = ex0 + i*(epw - 1)/n;
+    d = eq_curve_db(eq_xf(px));
+    py = eq_gy(min(max(d, -18), 18));
+    i > 0 ? Rline(lx, ly, px, py);
+    lx = px; ly = py; i += 1;
+  );
+  b = 0;
+  loop(3,
+    setbg(); Rfill(enx[b] - 4, eny[b] - 4, 9, 9);  // ring in the background colour so the node reads on the red fill
+    setc(0); Rfill(enx[b] - 3, eny[b] - 3, 7, 7);
+    act == 101 + b ? ( setc(1); Rfill(enx[b] - 1, eny[b] - 1, 3, 3); );
+    b += 1;
+  );
+  setc(0); gfx_setfont(1);
+  abs(et_t) < 0.05 ? strcpy(#vs, "TILT 0.0dB") : sprintf(#vs, "TILT %+.1fdB", et_t);
+  Rtext(x + 3, y + 2, #vs);
+  // ---- stage tabs. square = stage active (filled) / untouched (outline)
+  sw = floor(w/2);
+  sq_tog(60, x + 24, y + eph + 3, 8); sq_tog(61, x + sw + 20, y + eph + 3, 8);
+  btn(x, y + eph, sw, 14, "PRE-COMP", eqv == 0) ? ( eqv = 0; );
+  btn(x + sw, y + eph, w - sw, 14, "POST-COMP", eqv == 1) ? ( eqv = 1; );
+  sqind(x + 24, y + eph + 3, 8, eq_act0, eqv == 0, slider60 > 0.5);
+  sqind(x + sw + 20, y + eph + 3, 8, eq_act1, eqv == 1, slider61 > 0.5);
+);
+function draw_eq_cells() local(b, n, sb, x) (
+  sb = 29 + eqv*15; b = 0;
+  loop(3,
+    n = sb + b*4; x = 152 + b*68;
+    typeq(n, b, x, 196, 62, 38);
+    cell(n + 1, x, 240, 62, 38, "FREQ");
+    eq_band(eqv, b);
+    eb_k <= 1 ? (                                  // HPF / LPF have no gain
+      setc(0); Rbox(x, 284, 62, 38);
+      gfx_setfont(1); Rtext(x + 3, 287, "GAIN");
+      gfx_setfont(2); Rtextc(x, 300, 62, "---");
+    ) : cell(n + 2, x, 284, 62, 38, "GAIN");
+    b += 1;
+  );
+  cell(sb + 13, 356, 196, 62, 38, "PIVOT");
+  cell(sb + 12, 356, 240, 62, 38, "TILT");
+  cell_o(sb + 14, 356, 284, 62, 38, "OUT GAIN");
 );
 
 // build halfband taps once
@@ -539,8 +1168,15 @@ pre = 1; bias = 0; mix = 1; mk = 1; og_t = 1;
 smix = 1; byp = 0; byp_s = 0; bg = bg_t = 1; pms = 0.000000001; fms = 0.000000001;
 delta_on = 0; d_s = 0;
 sg = sg_t = 1; sms = 0.000000001; sat_db = 0; sat_meas = 0; sat_req = 0; sat_macc = 0; sat_mt = 0; diff_disp = 0;
-inv = 0;   // UI palette: 0 = white on black, 1 = black on white
+pal = 0; pal_apply();   // UI colour scheme index (0 Black, 1 White, 2.. see colorscheme table)
 opkL = opkR = 0; clip_f = 0; vz_blk = vz_lv = sat_blk = sat_vz = 0;
+// EQ state
+eg0 = eg1 = eg0_t = eg1_t = 1; eq_act0 = eq_act1 = 0; eq_run0 = eq_run1 = 0; eq_fixed = 0;
+eq_vis_t = -100; eq_vs = 0; eq_tap_on = 0; fw = 0; spec_t = 0; eqv = 0; eq_page = 0;
+eqxl = eqxr = 0; vt1 = vt2 = 0;
+la_s = 0; dwp = 0; lkw = 0; dk = 1;
+rd_last = 0; rd_tick = 0; rd_gr = rd_pk = rd_rms = rd_diff = rd_lk = rd_mt = rd_sat = rd_ghr = 0; rd_bg = 1; rd_lvl = -100;
+eq_en0 = eq_en1 = eq_pen0 = eq_pen1 = eq_bs0 = eq_bs1 = 1;   // EQ section enables (target / previous / smoothed)
 
 @slider
 dirty = 1;
@@ -565,7 +1201,8 @@ dirty || srate != sr_prev ? (
   os = floor(slider7 + 0.5);
   os != last_os ? ( last_os = os; memset(stAL, 0, 520); memset(resL, 0, 128); );
   lat = os == 0 ? 0 : os == 1 ? 24 : 28;
-  pdc_delay = lat; pdc_bot_ch = 0; pdc_top_ch = 2;
+  la_s = min(floor(slider59*0.001*srate + 0.5), 1900);      // lookahead in samples, reported as extra latency (PDC)
+  pdc_delay = lat + la_s; pdc_bot_ch = 0; pdc_top_ch = 2;
   dcR = 1 - 2*$pi*5/srate;
 
   // ---- COMP
@@ -587,12 +1224,12 @@ dirty || srate != sr_prev ? (
   avg_c = 1 - exp(-1/(srate*0.25));
   det_m = slider15*0.01;
   use_dhp = slider16 > 15; use_dhp ? bq_hp(dhc, slider16, 0.70710678);
-  link = slider17*0.01; link_full = slider17 >= 99.9;
+  link = 0; link_full = 0;                                 // stereo link retired: locked fully independent (slider 17 reserved)
   fb = slider18*0.01;
   gdist = slider19*0.01;
   mk = exp(slider20*0.11512925);
   mix = slider21*0.01;
-  gmode = floor(slider23 + 0.5);
+  gmode = slider23 >= 1.5 ? 2 : 0;                        // Auto retired (old projects with Auto load as Manual); Match only
   gmode == 2 && prev_gmode != 2 ? ( meas = 1; macc = 0; mt = 0; );
   gmode != 2 ? ( meas = 0; );
   prev_gmode = gmode;
@@ -603,7 +1240,23 @@ dirty || srate != sr_prev ? (
   byp_c = 1 - exp(-1/(srate*0.01));
   bg_c = 1 - exp(-1/(srate*0.2));
   fms_c = 1 - exp(-1/(srate*0.3));
+
+  // ---- EQ
+  eq_setup(0); eq_setup(1);
+  eq_en0 = slider60 < 0.5 && slider62 < 0.5; eq_en1 = slider61 < 0.5 && slider62 < 0.5;
+  // re-enabling a section restarts its filters from clean state (they are not run while bypassed)
+  eq_en0 && !eq_pen0 ? ( memset(eqsL, 0, 10); memset(eqsR, 0, 10); eg0 = eg0_t; );
+  eq_en1 && !eq_pen1 ? ( memset(eqsL + 10, 0, 10); memset(eqsR + 10, 0, 10); eg1 = eg1_t; );
+  eq_pen0 = eq_en0; eq_pen1 = eq_en1;
 );
+abs(eq_bs0 - eq_en0) < 0.00001 ? ( eq_bs0 = eq_en0; );
+abs(eq_bs1 - eq_en1) < 0.00001 ? ( eq_bs1 = eq_en1; );
+eq_prep();
+abs(eg0 - eg0_t) < 0.0000001 ? ( eg0 = eg0_t; );
+abs(eg1 - eg1_t) < 0.0000001 ? ( eg1 = eg1_t; );
+eq_run0 = eqr[0] || eqr[1] || eqr[2] || eqr[3] || eqr[4] || eg0 != 1 || eg0_t != 1;
+eq_run1 = eqr[5] || eqr[6] || eqr[7] || eqr[8] || eqr[9] || eg1 != 1 || eg1_t != 1;
+eq_tap_on = time_precise() - eq_vis_t < 0.3;
 
 // =========================================================== gain diff / auto / match
 gate_open = ims > 0.000001;
@@ -647,6 +1300,9 @@ wp = (wp + 1) & 63;
 dryL[wp] = inL; dryR[wp] = inR;
 rd = (wp - lat + 64) & 63;
 dlL = dryL[rd]; dlR = dryR[rd];
+// dry delayed by the full reported latency (OS + lookahead): the Mix / Bypass dry leg. (dlL above is OS-latency only, used inside the sat stage)
+dwp = (dwp + 1) & 4095; dwL[dwp] = inL; dwR[dwp] = inR;
+dtL = dwL[(dwp - lat - la_s + 4096) & 4095]; dtR = dwR[(dwp - lat - la_s + 4096) & 4095];
 
 // ------------------------------------------------------------ SAT
 sat_on ? (
@@ -677,6 +1333,19 @@ sat_on ? (
 sms += ((cL*cL + cR*cR)*0.5 + 0.000000000000000000000000000001 - sms)*rmsg_c;     // sat module loudness, before SAT OUT
 sg += (sg_t - sg)*og_c;
 cL *= sg; cR *= sg;
+
+// ------------------------------------------------------------ EQ PRE (post-sat, before the comp detector; skipped entirely while neutral)
+eq_tap_on && eq_vs == 0 ? ( fring[fw & 8191] = (cL + cR)*0.5; fw += 1; );
+eq_bs0 += (eq_en0 - eq_bs0)*byp_c;
+eq_run0 && eq_bs0 > 0 ? (
+  eqxl = cL; eqxr = cR; eq_stage(0);
+  eg0 += (eg0_t - eg0)*og_c;
+  eq_bs0 >= 1 ? ( cL = eqxl*eg0; cR = eqxr*eg0; ) : ( cL += (eqxl*eg0 - cL)*eq_bs0; cR += (eqxr*eg0 - cR)*eq_bs0; );
+);
+
+// ------------------------------------------------------------ LOOKAHEAD: the detector sees cL now, the gain is applied to the signal la_s samples later
+lkw = (lkw + 1) & 4095; lkL[lkw] = cL; lkR[lkw] = cR;
+la_s > 0 ? ( cdL = lkL[(lkw - la_s + 4096) & 4095]; cdR = lkR[(lkw - la_s + 4096) & 4095]; ) : ( cdL = cL; cdR = cR; );
 
 // ------------------------------------------------------------ COMP
 xdL = cL + fb*(prevL - cL);
@@ -714,8 +1383,8 @@ auto_rel ? (
   gR = grfR + wgt*(grsR - grfR);
 ) : ( gL = grfL; gR = grfR; );
 
-yL = cL*exp(-gL*0.11512925);
-yR = cR*exp(-gR*0.11512925);
+yL = cdL*exp(-gL*0.11512925);
+yR = cdR*exp(-gR*0.11512925);
 gdist > 0 ? (
   ddL = gdist*min(gL*0.0833333, 1);
   ddR = gdist*min(gR*0.0833333, 1);
@@ -726,8 +1395,16 @@ prevL = yL; prevR = yR;                  // feedback tap: pre-makeup, previous s
 
 // ------------------------------------------------------------ OUT
 wL = yL*mk; wR = yR*mk;
-oL = dlL + (wL - dlL)*mix;
-oR = dlR + (wR - dlR)*mix;
+oL = dtL + (wL - dtL)*mix;
+oR = dtR + (wR - dtR)*mix;
+// EQ POST (after Mix, before Out Gain, so IN>OUT / Match include it)
+eq_tap_on && eq_vs == 1 ? ( fring[fw & 8191] = (oL + oR)*0.5; fw += 1; );
+eq_bs1 += (eq_en1 - eq_bs1)*byp_c;
+eq_run1 && eq_bs1 > 0 ? (
+  eqxl = oL; eqxr = oR; eq_stage(1);
+  eg1 += (eg1_t - eg1)*og_c;
+  eq_bs1 >= 1 ? ( oL = eqxl*eg1; oR = eqxr*eg1; ) : ( oL += (eqxl*eg1 - oL)*eq_bs1; oR += (eqxr*eg1 - oR)*eq_bs1; );
+);
 oms += ((oL*oL + oR*oR)*0.5 + 0.000000000000000000000000000001 - oms)*rmsg_c;     // measured before out gain
 og += (og_t - og)*og_c;
 pL = oL*og; pR = oR*og;
@@ -736,13 +1413,13 @@ pms += ((pL*pL + pR*pR)*0.5 + 0.000000000000000000000000000001 - pms)*rmsg_c;   
 byp_s += ((byp ? 1 : 0) - byp_s)*byp_c;
 gate_open ? ( bg_t = min(max(sqrt(pms/ims), 0.0631), 15.85); );
 bg += (bg_t - bg)*bg_c;
-spl0 = pL + (dlL*bg - pL)*byp_s;
-spl1 = pR + (dlR*bg - pR)*byp_s;
+spl0 = pL + (dtL*bg - pL)*byp_s;
+spl1 = pR + (dtR*bg - pR)*byp_s;
 // delta monitor: replaces the output with what the compressor removes (comp input - comp output, pre-makeup). UI-only toggle, not saved.
 d_s += ((delta_on ? 1 : 0) - d_s)*byp_c;
 d_s > 0.0001 ? (
-  spl0 += ((cL - yL) - spl0)*d_s;
-  spl1 += ((cR - yR) - spl1)*d_s;
+  spl0 += ((cdL - yL) - spl0)*d_s;
+  spl1 += ((cdR - yR) - spl1)*d_s;
 );
 // output metering taps (consumed by @gfx)
 opkL = max(opkL, abs(spl0)); opkR = max(opkR, abs(spl1));
@@ -751,13 +1428,14 @@ fms += ((spl0*spl0 + spl1*spl1)*0.5 + 0.000000000000000000000000000001 - fms)*fm
 gr_blk = max(gr_blk, max(gL, gR));
 
 @serialize
-file_var(0, inv);   // UI palette persists with the project / preset
+file_var(0, pal);   // colour scheme persists with the project / preset (old files stored 0/1 = Black/White: same indices)
 
 @gfx 1120 672
 // ================================================================== UI
 // Logical canvas 560 x 336, drawn at scale S (0.25 steps) and centred. The layout always keeps this aspect:
 // a resized window just letterboxes (JSFX has no API to constrain the host window itself).
-gfx_clear = inv ? 16777215 : 0;   // background
+pal_apply();
+gfx_clear = floor(bkr*255 + 0.5) + floor(bkg*255 + 0.5)*256 + floor(bkb*255 + 0.5)*65536;   // background
 
 // ---------- one-time setup
 ui_init == 0 ? (
@@ -787,8 +1465,29 @@ ui_init == 0 ? (
   setp(1, 0, 13, 0, 0, 0, 1);
   setp(7, 0, 2, 0, 0, 0, 1);
   setp(23, 0, 2, 0, 0, 0, 1);
+  setp(59, 0, 10, 0, 0, 0, 0.1);
+  setp(60, 0, 1, 0, 0, 0, 1); setp(61, 0, 1, 0, 0, 0, 1); setp(62, 0, 1, 0, 0, 0, 1);
+  // EQ sliders 29..58: per stage 3 x (type, freq, gain, Q), tilt, pivot, out gain
+  ist = 0;
+  loop(2,
+    ib = 0;
+    loop(3,
+      inn = 29 + ist*15 + ib*4;
+      setp(inn, 0, 2, 0, 0, 0, 1);
+      setp(inn + 1, 20, 20000, eq_dfreq(ib), 1, 0, 1);
+      setp(inn + 2, -18, 18, 0, 0, 0, 0.1);
+      setp(inn + 3, 0.1, 10, 0.5, 1, 0, 0.01);
+      ib += 1;
+    );
+    inn = 29 + ist*15;
+    setp(inn + 12, -12, 12, 0, 0, 0, 0.1);
+    setp(inn + 13, 20, 20000, 600, 1, 0, 1);
+    setp(inn + 14, -12, 12, 0, 0, 0, 0.1);
+    ist += 1;
+  );
   strcpy(#menu, "Tube|Soft|Rational|Atan|Hard|Tri Fold|Sine Fold|Crossover|Cheby|Wrap|Rectify|Bitcrush|Asym Fold|Diode");
-  gr_disp = 0; gr_hold = 0; gr_hold_t = 0; gr_ri = 3; font_s = 0; act = 0;
+  eq_fix();
+  gr_disp = 0; gr_hold = 0; gr_hold_t = 0; gr_ri = 0; font_s = 0; act = 0;   // GR meter opens at the 3 dB range
   ovl = ovr = hlL = hlR = hlL_t = hlR_t = opk_max = 0; clip_lat = 0;
 );
 
@@ -800,15 +1499,25 @@ font_s != S ? ( font_s = S; pick_font(); );
 mx = (mouse_x - ox)/S; my = (mouse_y - oy)/S;
 down = mouse_cap & 1; press = down && !last_down; shift = mouse_cap & 8;
 last_down = down;
+rdown = mouse_cap & 2; rpress = rdown && !last_rdown; last_rdown = rdown;
 wheel = mouse_wheel; mouse_wheel = 0;
+// numeric readouts refresh ~8x/s (still precise, just readable): snapshot taken here, drawn from rd_*
+rd_now = time_precise(); rd_tick = rd_now - rd_last >= 0.12; rd_tick ? ( rd_last = rd_now; );
+rd_tick ? ( rd_gr = gr_disp; rd_pk = opk_max; rd_rms = fms; rd_diff = diff_disp; rd_bg = bg; rd_lk = slider24; rd_mt = mt; rd_sat = sat_db; );
 
-// drag update (single active widget)
-act ? (
+// drag update (single active widget). act 1..99 = slider number (vertical drag); act >= 100 = viewport drags handled by their widget
+// (101-103 EQ node, 110 pivot, 111 tilt, 120 comp threshold, 121 comp ratio); vt1/vt2 = sliders to release on mouse-up
+act && act < 100 ? (
   down ? (
     t_new = min(max(act_t + (last_my - my)*(shift ? 0.0008 : 0.006), 0), 1);
     act_t = t_new;
     commit(act, t_new);
   ) : ( end_touch(act); act = 0; );
+);
+act >= 100 && !down ? (
+  vt1 > 0 ? end_touch(vt1);
+  vt2 > 0 ? end_touch(vt2);
+  act = 0;
 );
 last_my = my;
 
@@ -816,61 +1525,84 @@ last_my = my;
 // rows: header y8 | tabs y34 h16 | viz y56 h128 | cells y196 / y240 / y284
 
 // ---------- header
+logo(10, 5);                                   // click = cycle colour scheme (preset bar is deferred to the VST port)
 setc(0);
-gfx_setfont(3); Rtext(10, 7, "SATCOMP");
-gfx_setfont(1); Rtext(92, 14, "v0.2");
-btn(122, 9, 40, 14, inv ? "DARK" : "LIGHT", 0) ? ( inv = !inv; );
-setc(0);
-out_meter(430, 8, 64, 16);
-btn(500, 8, 50, 16, "BYPASS", slider26 > 0.5) ? ( sset(26, slider26 > 0.5 ? 0 : 1); end_touch(26); );
+gfx_setfont(3); Rtext(38, 7, "SATCOMP 0.3");
+out_meter(430, 8, 120, 16);
 
-// ---------- tab row
+// ---------- tab row (sat + comp/eq controls dim to 50 % while Bypass is on)
+dk = slider26 > 0.5 ? 0.5 : 1;
 selector(1, 10, 34, 130, 16);
-seg3(7, 152, 34, 266, 16, "OS OFF", "OS x2", "OS x4");
-seg3(23, 430, 34, 120, 16, "MAN", "AUTO", "MATCH");
+setc(0); Rbox(152, 34, 96, 16); gfx_setfont(1); Rtextc(152, 38, 96, "OVERSAMPLING");
+os_i = floor(slider7 + 0.5); i = 0;
+loop(3,
+  btn(248 + i*34, 34, 34, 16, i == 0 ? "OFF" : i == 1 ? "x2" : "x4", os_i == i) ? ( sset(7, i); end_touch(7); );
+  i += 1;
+);
+sq_tog(62, 366, 38, 8);
+btn(356, 34, 62, 16, "EQ", eq_page) ? ( eq_page = !eq_page; );
+sqind(366, 38, 8, eq_act0 || eq_act1, eq_page, slider62 > 0.5);
+dk = 1;
+btn(430, 34, 60, 16, "DELTA", delta_on*2) ? ( delta_on = !delta_on; );
+btn(490, 34, 60, 16, "BYPASS", slider26 > 0.5) ? ( sset(26, slider26 > 0.5 ? 0 : 1); end_touch(26); );
 
 // ---------- viz row
+dk = slider26 > 0.5 ? 0.5 : 1;
 draw_plot(10, 56, 130, 128);
-draw_ccurve(152, 56, 266, 128);
+dk = slider26 > 0.5 || (eq_page && slider62 > 0.5) ? 0.5 : 1;   // EQ module bypassed: whole page dims
+eq_page ? draw_eq(152, 56, 266, 128) : draw_ccurve(152, 56, 266, 128);
+dk = 1;
 draw_meter(430, 56, 28, 266);
+dk = slider26 > 0.5 ? 0.5 : 1;
 
 // ---------- SAT cells
 cell(2, 10, 196, 62, 38, "DRIVE");
 cell(3, 78, 196, 62, 38, "BIAS");
-cell(4, 10, 240, 62, 38, "HP");
-cell(5, 78, 240, 62, 38, "LP");
-cell(6, 10, 284, 62, 38, "TONE");
-cell(25, 78, 284, 62, 38, "SAT MIX");
+cell2(4, 5, 10, 240, 62, 38, "HP", "LP");
+cell(6, 78, 240, 62, 38, "TONE");
+cell(25, 10, 284, 62, 38, "SAT MIX");
+cell_o(27, 78, 284, 62, 38, "OUT GAIN");          // sat module out gain (also draggable on the plot); inverted = a gain stage
 
-// ---------- COMP cells
-cell(8, 152, 196, 62, 38, "THRESH");
-cell(9, 220, 196, 62, 38, "RATIO");
-cell(10, 288, 196, 62, 38, "ATTACK");
-cell(11, 356, 196, 62, 38, "RELEASE");
-cell(13, 152, 240, 62, 38, "KNEE");
-cell(14, 220, 240, 62, 38, "K.SHAPE");
-cell(15, 288, 240, 62, 38, "PEAK>RMS");
-cell(16, 356, 240, 62, 38, "LOW CUT");
-cell(17, 152, 284, 62, 38, "LINK");
-cell(12, 220, 284, 62, 38, "SPEED");
-cell(18, 288, 284, 62, 38, "FF>FB");
-cell(19, 356, 284, 62, 38, "GR DIST");
+// ---------- COMP cells (or the EQ page's cells). 152,284 = lookahead (replaces the retired stereo link)
+eq_page ? (
+  dk = slider26 > 0.5 || slider62 > 0.5 || (eqv == 0 ? slider60 : slider61) > 0.5 ? 0.5 : 1;   // viewed stage (or module) bypassed: dim its 4x3 grid
+  draw_eq_cells();
+) : (
+  cell(8, 152, 196, 62, 38, "THRESH");
+  cell(9, 220, 196, 62, 38, "RATIO");
+  cell(10, 288, 196, 62, 38, "ATTACK");
+  cell(11, 356, 196, 62, 38, "RELEASE");
+  cell(13, 152, 240, 62, 38, "KNEE");
+  cell(14, 220, 240, 62, 38, "K.SHAPE");
+  cell(15, 288, 240, 62, 38, "PEAK>RMS");
+  cell(16, 356, 240, 62, 38, "LOW CUT");
+  cell(59, 152, 284, 62, 38, "L.AHEAD");
+  cell(12, 220, 284, 62, 38, "SPEED");
+  cell(18, 288, 284, 62, 38, "FF>FB");
+  cell(19, 356, 284, 62, 38, "GR DIST");
+);
 
-// ---------- OUT column: info area, IN>OUT, then gain cells
+// ---------- OUT column: info area, IN>OUT, then gain cells (out gain bottommost)
+dk = 1;
 gfx_setfont(1); setc(0);
-sprintf(#s1, "GR %.1f", gr_disp); Rtext(464, 58, #s1);
-gmode == 1 ? sprintf(#s1, "TRIM %+.1fdB", atrim) : gmode == 2 ? (
-  meas ? sprintf(#s1, "MEAS %.1f/3.0s", mt) : sprintf(#s1, "LOCK %+.1fdB", slider24);
-) : sprintf(#s1, "TRIM ---");
-Rtext(464, 70, #s1);
-opk_max > 0.00001 ? sprintf(#s1, "PK %+.1fdB", 8.6858896*log(opk_max)) : strcpy(#s1, "PK ---");
-setc(opk_max > 0.9999); Rtext(464, 88, #s1); setc(0);
-fms > 0.000000001 ? sprintf(#s1, "RMS %+.1fdB", 4.3429448*log(fms)) : strcpy(#s1, "RMS ---");
-Rtext(464, 100, #s1);
-slider26 > 0.5 ? ( sprintf(#s1, "BYP %+.1fdB", 8.6858896*log(bg)); Rtext(464, 112, #s1); );
+// label left, value right-aligned to the column edge
+Rtext(464, 58, "GR"); sprintf(#s1, "%04.1f", rd_gr); Rtextr(464, 58, 86, #s1);
+gmode == 2 ? (
+  meas ? ( Rtext(464, 70, "MEAS"); sprintf(#s1, "%.1f/3.0s", rd_mt); ) : ( Rtext(464, 70, "LOCK"); sprintf(#s1, "%+05.1fdB", rd_lk); );
+) : ( Rtext(464, 70, "TRIM"); strcpy(#s1, "-----dB"); );
+Rtextr(464, 70, 86, #s1);
+rd_pk > 0.00001 ? sprintf(#s1, "%+05.1fdB", 8.6858896*log(rd_pk)) : strcpy(#s1, "-----dB");
+setc(rd_pk > 0.9999); Rtext(464, 88, "PK"); Rtextr(464, 88, 86, #s1); setc(0);
+rd_rms > 0.000000001 ? sprintf(#s1, "%+05.1fdB", 4.3429448*log(rd_rms)) : strcpy(#s1, "-----dB");
+Rtext(464, 100, "RMS"); Rtextr(464, 100, 86, #s1);
+slider26 > 0.5 ? ( Rtext(464, 112, "BYP"); sprintf(#s1, "%+05.1fdB", 8.6858896*log(rd_bg)); Rtextr(464, 112, 86, #s1); );
 
-btn(464, 128, 86, 14, "DELTA", delta_on*2) ? ( delta_on = !delta_on; );
+// GAIN MATCH: off -> click measures 3 s then locks a trim (red); click while measuring cancels; click while locked turns it off
+gm_lit = gmode == 2 ? ( meas && (floor(time_precise()*4) & 1) ? 1 : 2 ) : 0;
+btn(464, 128, 86, 14, "GAIN MATCH", gm_lit) ? (
+  gmode == 2 ? ( sset(23, 0); end_touch(23); ) : ( sset(23, 2); end_touch(23); match_req = 1; );
+);
 diff_box(464, 146, 86, 38);
 cell(20, 464, 196, 86, 38, "MAKEUP");
-cell(22, 464, 240, 86, 38, "OUT GAIN");
-cell(21, 464, 284, 86, 38, "MIX");
+cell(21, 464, 240, 86, 38, "MIX");
+cell_o(22, 464, 284, 86, 38, "OUT GAIN");
