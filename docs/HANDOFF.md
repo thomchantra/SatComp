@@ -1,3 +1,5 @@
+> **Start with `docs/FOUNDATION.md`** (workflow JSFX -> Rust, consolidated gotchas, commands). This file keeps the JSFX-era decisions and history.
+
 # SatComp — handoff notes (for the next session / agent)
 
 State at end of the v0.2 session. Read this first, then `docs/PARAMETERS.md` (what every control does, with AUDIT flags) and `docs/TEST_CHECKLIST.md`.
