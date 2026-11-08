@@ -8,7 +8,7 @@ out_pin:left output
 out_pin:right output
 
 // ---- SAT ----
-slider1:0<0,8,1{Tube,Soft,Rational,Atan,Hard,Tri Fold,Sine Fold,Crossover,Cheby}>-Shape
+slider1:0<0,13,1{Tube,Soft,Rational,Atan,Hard,Tri Fold,Sine Fold,Crossover,Cheby,Wrap,Rectify,Bitcrush,Asym Fold,Diode}>-Shape
 slider2:25<0,100,0.1>-Drive
 slider3:0<-100,100,0.1>-Bias
 slider4:20<20,2000,1>-Sat HP
@@ -34,6 +34,9 @@ slider21:100<0,100,1>-Mix
 slider22:0<-24,12,0.1>-Out Gain
 slider23:0<0,2,1{Manual,Auto,Match}>-GainMatch
 slider24:0<-24,24,0.01>-Match Trim
+slider25:100<0,100,1>-Sat Mix
+slider26:0<0,1,1{Off,On}>-Bypass
+slider27:0<-24,12,0.1>-Sat Out
 
 @init
 ext_noinit = 1;
@@ -44,11 +47,12 @@ lut = 0;                       // 4097 pts, shaper over +-8
 tpA = 4100;  tpB = 4130;       // halfband odd-tap tables (K=24 / K=8)
 stAL = 4200; stAR = stAL+128; stBL = stAR+128; stBR = stBL+128;   // halfband stage state
 dryL = 4800; dryR = 4864; resL = 4928; resR = 4992;               // 64-sample delay rings
+bdL = 5300; bdR = 5364;                                           // band-limited sat input, delayed (sat mix dry leg)
 hpc = 5100; lpc = 5110; tnc = 5120; dhc = 5130;                   // biquad coeffs
 hpsL = 5200; hpsR = 5208; lpsL = 5216; lpsR = 5224;               // biquad states
 tnsL = 5232; tnsR = 5240; dhsL = 5248; dhsR = 5256;
 pmin = 6000; pmax = 6040; pdef = 6080; pmode = 6120; psnap = 6160; pstep = 6200;  // UI param table
-memset(stAL, 0, 520); memset(dryL, 0, 256); memset(hpsL, 0, 64);
+memset(stAL, 0, 520); memset(dryL, 0, 256); memset(hpsL, 0, 64); memset(bdL, 0, 128);
 
 // ============================================================ DSP helpers
 function th(x) local(e) (
@@ -69,6 +73,11 @@ function shp(sel, x) local(y, ax, t) (
   sel == 6 ? ( y = sin(1.5707963*x)*0.63661977; );                  // Sine Fold
   sel == 7 ? ( y = x - 0.12*th(x/0.15); );                          // Crossover / dead zone
   sel == 8 ? ( t = th(x); y = 1.6*t + 0.6*t*t + 0.2*(4*t*t*t - 3*t); );  // Cheby T1 + T2 + T3
+  sel == 9 ? ( y = x - 2*floor((x + 1)*0.5); );                     // Wrap: modulo wraparound into [-1,1), hard discontinuities
+  sel == 10 ? ( y = 0.25*th(x) + 0.75*th(abs(x)); );                // Rectify: positive half unchanged, negative half flipped at 1/2 gain (even harmonics, DC blocked after)
+  sel == 11 ? ( y = min(max(floor(x*8 + 0.5)*0.125, -1), 1); );     // Bitcrush: 8 steps per unit (~4 bit), clipped at +-1
+  sel == 12 ? ( y = (sin(1.5707963*(x + 0.35)) - 0.52249856)*0.63661977/0.85264016; );  // Asym Fold: sine fold with offset, unity slope + zero at origin
+  sel == 13 ? ( y = x >= 0 ? 1 - exp(-x) : -0.6*(1 - exp(x/0.6)); ); // Diode: exponential knee, +1 / -0.6 asymmetric
   y;
 );
 
@@ -77,7 +86,9 @@ function build_lut(sel) local(i) (
   loop(4097, lut[i] = shp(sel, i/256 - 8); i += 1; );
 );
 
+// periodic shapers (folds, wrap, asym fold; period divides 4) are reduced into range instead of clamped, so they keep folding at any drive
 function lutf(x) local(p, i, f) (
+  per_on && abs(x) > 6 ? ( x -= 4*floor(x*0.25 + 0.5); );
   p = (min(max(x, -7.999), 7.999) + 8)*256;
   i = floor(p); f = p - i;
   lut[i] + (lut[i+1] - lut[i])*f;
@@ -170,21 +181,34 @@ function setp(n, mn, mx2, df, md, sn, st) (
   pmin[n] = mn; pmax[n] = mx2; pdef[n] = df; pmode[n] = md; psnap[n] = sn; pstep[n] = st;
 );
 
-function sget(n) (
+// slider access split in short ternary chains (one 26-deep chain left sliders 25/26 unwritable)
+function sget_a(n) (
   n==1 ? slider1 : n==2 ? slider2 : n==3 ? slider3 : n==4 ? slider4 : n==5 ? slider5 : n==6 ? slider6 :
-  n==7 ? slider7 : n==8 ? slider8 : n==9 ? slider9 : n==10 ? slider10 : n==11 ? slider11 : n==12 ? slider12 :
-  n==13 ? slider13 : n==14 ? slider14 : n==15 ? slider15 : n==16 ? slider16 : n==17 ? slider17 :
-  n==18 ? slider18 : n==19 ? slider19 : n==20 ? slider20 : n==21 ? slider21 : n==22 ? slider22 :
-  n==23 ? slider23 : slider24;
+  n==7 ? slider7 : n==8 ? slider8 : slider9;
 );
-function sput(n, v) (
+function sget_b(n) (
+  n==10 ? slider10 : n==11 ? slider11 : n==12 ? slider12 : n==13 ? slider13 : n==14 ? slider14 :
+  n==15 ? slider15 : n==16 ? slider16 : n==17 ? slider17 : slider18;
+);
+function sget_c(n) (
+  n==19 ? slider19 : n==20 ? slider20 : n==21 ? slider21 : n==22 ? slider22 : n==23 ? slider23 :
+  n==24 ? slider24 : n==25 ? slider25 : n==26 ? slider26 : slider27;
+);
+function sget(n) ( n <= 9 ? sget_a(n) : n <= 18 ? sget_b(n) : sget_c(n); );
+function sput_a(n, v) (
   n==1 ? (slider1=v) : n==2 ? (slider2=v) : n==3 ? (slider3=v) : n==4 ? (slider4=v) : n==5 ? (slider5=v) :
-  n==6 ? (slider6=v) : n==7 ? (slider7=v) : n==8 ? (slider8=v) : n==9 ? (slider9=v) : n==10 ? (slider10=v) :
-  n==11 ? (slider11=v) : n==12 ? (slider12=v) : n==13 ? (slider13=v) : n==14 ? (slider14=v) :
-  n==15 ? (slider15=v) : n==16 ? (slider16=v) : n==17 ? (slider17=v) : n==18 ? (slider18=v) :
-  n==19 ? (slider19=v) : n==20 ? (slider20=v) : n==21 ? (slider21=v) : n==22 ? (slider22=v) :
-  n==23 ? (slider23=v) : (slider24=v);
+  n==6 ? (slider6=v) : n==7 ? (slider7=v) : n==8 ? (slider8=v) : (slider9=v);
 );
+function sput_b(n, v) (
+  n==10 ? (slider10=v) : n==11 ? (slider11=v) : n==12 ? (slider12=v) : n==13 ? (slider13=v) :
+  n==14 ? (slider14=v) : n==15 ? (slider15=v) : n==16 ? (slider16=v) : n==17 ? (slider17=v) : (slider18=v);
+);
+function sput_c(n, v) (
+  n==19 ? (slider19=v) : n==20 ? (slider20=v) : n==21 ? (slider21=v) : n==22 ? (slider22=v) :
+  n==23 ? (slider23=v) : n==24 ? (slider24=v) : n==25 ? (slider25=v) : n==26 ? (slider26=v) :
+  (slider27=v);
+);
+function sput(n, v) ( n <= 9 ? sput_a(n, v) : n <= 18 ? sput_b(n, v) : sput_c(n, v); );
 function sset(n, v) (
   sput(n, v);
   sliderchange(2^(n-1));
@@ -215,8 +239,12 @@ function commit(n, t) local(v) (
 function hit(x, y, w, h) ( mx >= x && mx < x + w && my >= y && my < y + h );
 
 // ---- drawing primitives (logical -> device px)
-function setc(red) ( red ? gfx_set(1, 0, 0, 1) : gfx_set(1, 1, 1, 1); );
-function Rfill(x, y, w, h) ( gfx_rect(ox + x*S, oy + y*S, w*S, h*S); );
+function setc(red) ( red ? gfx_set(1, 0, 0, 1) : inv ? gfx_set(0, 0, 0, 1) : gfx_set(1, 1, 1, 1); );
+function setbg() ( inv ? gfx_set(1, 1, 1, 1) : gfx_set(0, 0, 0, 1); );   // text colour on filled (lit) widgets = background colour
+function Rfill(x, y, w, h) local(x0, y0) (   // edges snapped to whole device px so borders stay uniform at fractional S
+  x0 = floor(ox + x*S + 0.5); y0 = floor(oy + y*S + 0.5);
+  gfx_rect(x0, y0, max(1, floor(ox + (x + w)*S + 0.5) - x0), max(1, floor(oy + (y + h)*S + 0.5) - y0));
+);
 function Rbox(x, y, w, h) ( Rfill(x, y, w, 1); Rfill(x, y + h - 1, w, 1); Rfill(x, y, 1, h); Rfill(x + w - 1, y, 1, h); );
 function Rtext(x, y, str) ( gfx_x = ox + x*S; gfx_y = oy + y*S; gfx_drawstr(str); );
 function Rtextc(x, y, w, str) local(tw, th2) (
@@ -225,7 +253,7 @@ function Rtextc(x, y, w, str) local(tw, th2) (
 );
 function Rline(x1, y1, x2, y2) local(k) (
   k = 0;
-  loop(S, gfx_line(ox + x1*S + k, oy + y1*S, ox + x2*S + k, oy + y2*S, 0);
+  loop(max(1, floor(S + 0.5)), gfx_line(ox + x1*S + k, oy + y1*S, ox + x2*S + k, oy + y2*S, 0);
           gfx_line(ox + x1*S, oy + y1*S + k, ox + x2*S, oy + y2*S + k, 0); k += 1; );
 );
 
@@ -238,19 +266,19 @@ function pick_font() local(i, w1, w2, h1, ok) (
   i = 0; ok = 0;
   while (i < 4 && !ok) (
     font_try(i);
-    gfx_setfont(2, #fname, 10*S);
+    gfx_setfont(2, #fname, floor(14*S + 0.5));
     gfx_measurestr("iiiiiiii", w1, h1); gfx_measurestr("WWWWWWWW", w2, h1);
     w1 == w2 ? ( ok = 1; ) : ( i += 1; );
   );
   i >= 4 ? font_try(3);
-  gfx_setfont(1, #fname, 8*S);
-  gfx_setfont(2, #fname, 10*S);
-  gfx_setfont(3, #fname, 14*S);
+  gfx_setfont(1, #fname, max(6, floor(12*S + 0.5)));
+  gfx_setfont(2, #fname, max(6, floor(14*S + 0.5)));
+  gfx_setfont(3, #fname, max(8, floor(18*S + 0.5)));
 );
 
 // ---- formatting
 function fmt(n, v) (
-  n == 2 || n == 12 || n == 14 || n == 15 || n == 17 || n == 18 || n == 19 || n == 21 ? sprintf(#vs, "%.0f%%", v) :
+  n == 2 || n == 12 || n == 14 || n == 15 || n == 17 || n == 18 || n == 19 || n == 21 || n == 25 ? sprintf(#vs, "%.0f%%", v) :
   n == 3 ? sprintf(#vs, "%+.0f%%", v) :
   n == 4 || n == 16 ? ( v <= (n == 4 ? 20.5 : 15) ? strcpy(#vs, "OFF") : sprintf(#vs, "%.0fHz", v); ) :
   n == 5 || n == 6 ? ( v >= 19900 ? strcpy(#vs, "OFF") : sprintf(#vs, "%.1fk", v*0.001); ) :
@@ -284,34 +312,54 @@ function cell(n, x, y, w, h, lbl) local(hv, t, v, isact) (
   v = sget(n); t = n2t(n, v); isact = act == n;
   setc(isact); Rbox(x, y, w, h);
   gfx_setfont(1); Rtext(x + 3, y + 3, lbl);
-  gfx_setfont(2); fmt(n, v); Rtextc(x, y + 13, w, #vs);
+  gfx_setfont(2); fmt(n, v); Rtextc(x, y + floor(h*0.4 + 1), w, #vs);
   Rfill(x + 2, y + h - 4, max(1, floor(t*(w - 4))), 2);
 );
 
-function tag(x, y, w, h, str, lit) (
-  lit ? ( setc(1); Rfill(x, y, w, h); gfx_set(0, 0, 0, 1); ) : ( setc(0); Rbox(x, y, w, h); );
-  gfx_setfont(1); Rtextc(x, y + 2, w, str);
+function btn(x, y, w, h, str, lit) local(hv, clicked) (
+  hv = hit(x, y, w, h);
+  clicked = hv && press && !act;
+  lit ? ( setc(lit > 1); Rfill(x, y, w, h); setbg(); ) : ( setc(0); Rbox(x, y, w, h); );   // lit 1 = white, 2 = red
+  gfx_setfont(1); Rtextc(x, y + floor((h - 8)*0.5), w, str);
   setc(0);
+  clicked;
 );
 
-function selector(n, x, y, w, h, lbl) local(hv, sel, r) (
+function Rtri(x1, y1, x2, y2, x3, y3) (
+  gfx_triangle(ox + x1*S, oy + y1*S, ox + x2*S, oy + y2*S, ox + x3*S, oy + y3*S);
+);
+
+function shape_name(sel) (
+  sel == 0 ? strcpy(#nm, "TUBE") : sel == 1 ? strcpy(#nm, "SOFT") : sel == 2 ? strcpy(#nm, "RATIONAL") :
+  sel == 3 ? strcpy(#nm, "ATAN") : sel == 4 ? strcpy(#nm, "HARD") : sel == 5 ? strcpy(#nm, "TRI FOLD") :
+  sel == 6 ? strcpy(#nm, "SINE FOLD") : sel == 7 ? strcpy(#nm, "CROSSOVER") : sel == 8 ? strcpy(#nm, "CHEBY") :
+  sel == 9 ? strcpy(#nm, "WRAP") : sel == 10 ? strcpy(#nm, "RECTIFY") : sel == 11 ? strcpy(#nm, "BITCRUSH") :
+  sel == 12 ? strcpy(#nm, "ASYM FOLD") : strcpy(#nm, "DIODE");
+);
+
+// shape selector: [<] NAME [>]. arrows step (wrapping), click the name for the dropdown, wheel steps (clamped)
+function selector(n, x, y, w, h) local(hv, sel, r, aw, cy) (
+  aw = 16; cy = y + h*0.5;
   hv = hit(x, y, w, h);
   sel = floor(sget(n) + 0.5);
-  hv && wheel != 0 ? ( sset(n, min(max(sel + (wheel > 0 ? -1 : 1), 0), 8)); end_touch(n); );
+  hv && wheel != 0 ? ( sset(n, min(max(sel + (wheel > 0 ? -1 : 1), 0), 13)); end_touch(n); );
   hv && press && !act ? (
-    gfx_x = ox + x*S; gfx_y = oy + (y + h)*S;
-    r = gfx_showmenu(#menu);
-    r > 0 ? ( sset(n, r - 1); end_touch(n); );
-    last_down = 0; press = 0;
+    mx < x + aw ? ( sset(n, sel <= 0 ? 13 : sel - 1); end_touch(n); ) :
+    mx >= x + w - aw ? ( sset(n, sel >= 13 ? 0 : sel + 1); end_touch(n); ) : (
+      gfx_x = ox + x*S; gfx_y = oy + (y + h)*S;
+      r = gfx_showmenu(#menu);
+      r > 0 ? ( sset(n, r - 1); end_touch(n); );
+      last_down = 0;
+    );
+    press = 0;
   );
+  sel = floor(sget(n) + 0.5);
   setc(0); Rbox(x, y, w, h);
-  gfx_setfont(1); Rtext(x + 3, y + 3, lbl);
-  gfx_setfont(2);
-  sel == 0 ? Rtextc(x + 30, y + 1, w - 30, "TUBE") : sel == 1 ? Rtextc(x + 30, y + 1, w - 30, "SOFT") :
-  sel == 2 ? Rtextc(x + 30, y + 1, w - 30, "RATIONAL") : sel == 3 ? Rtextc(x + 30, y + 1, w - 30, "ATAN") :
-  sel == 4 ? Rtextc(x + 30, y + 1, w - 30, "HARD") : sel == 5 ? Rtextc(x + 30, y + 1, w - 30, "TRI FOLD") :
-  sel == 6 ? Rtextc(x + 30, y + 1, w - 30, "SINE FOLD") : sel == 7 ? Rtextc(x + 30, y + 1, w - 30, "CROSSOVER") :
-  Rtextc(x + 30, y + 1, w - 30, "CHEBY");
+  Rfill(x + aw, y, 1, h); Rfill(x + w - aw - 1, y, 1, h);
+  Rtri(x + aw*0.5 + 2, cy - 3, x + aw*0.5 + 2, cy + 3, x + aw*0.5 - 2, cy);
+  Rtri(x + w - aw*0.5 - 2, cy - 3, x + w - aw*0.5 - 2, cy + 3, x + w - aw*0.5 + 2, cy);
+  gfx_setfont(2); shape_name(sel);
+  Rtextc(x + aw, y + 2, w - 2*aw, #nm);
 );
 
 // 3-way segmented button. n==23 (gain match): Auto/Match states are red; Match click always (re)starts measuring.
@@ -326,7 +374,7 @@ function seg3(n, x, y, w, h, a, b, c) local(i, sx, sw, sel, hv) (
     );
     i == sel ? (
       setc(n == 23 && i > 0 && !(i == 2 && meas && (floor(time_precise()*4) & 1))); Rfill(sx, y, sw, h);
-      gfx_set(0, 0, 0, 1);
+      setbg();
     ) : ( setc(0); Rbox(sx, y, sw, h); );
     gfx_setfont(1);
     i == 0 ? Rtextc(sx, y + 4, sw, a) : i == 1 ? Rtextc(sx, y + 4, sw, b) : Rtextc(sx, y + 4, sw, c);
@@ -335,49 +383,129 @@ function seg3(n, x, y, w, h, a, b, c) local(i, sx, sw, sel, hv) (
   setc(0);
 );
 
-function diff_box(x, y, w, h) (
+// IN>OUT readout with a centre-tap bar: grows right = output louder than input, left = quieter (+-12 dB full scale)
+function diff_box(x, y, w, h) local(cx, bw, d) (
   setc(0); Rbox(x, y, w, h);
   gfx_setfont(1); Rtext(x + 3, y + 3, "IN>OUT");
-  gfx_setfont(2); sprintf(#vs, "%+.1fdB", diff_db); Rtextc(x, y + 13, w, #vs);
+  gfx_setfont(2); sprintf(#vs, "%+.1fdB", diff_disp); Rtextc(x, y + floor(h*0.4 + 1), w, #vs);
+  cx = x + floor(w*0.5);
+  d = min(max(diff_disp, -12), 12)/12; bw = floor(abs(d)*(w*0.5 - 3));
+  d >= 0 ? Rfill(cx, y + h - 4, bw, 2) : Rfill(cx - bw, y + h - 4, bw, 2);
+  Rfill(cx, y + h - 6, 1, 5);
 );
 
-function draw_meter(x, y, w, h) local(g, hp, i, ty) (
+function rng_val(i) ( i <= 0 ? 3 : i == 1 ? 6 : i == 2 ? 12 : 18; );
+
+// GR meter: range 3/6/12/18 dB, click cycles, auto-widens when GR exceeds the range (never auto-narrows)
+function draw_meter(x, y, w, h) local(g, hp, j, cnt, stp, v, ty, rg, mj, major) (
   g = gr_pk; gr_pk = 0;
   gr_disp = max(g, gr_disp*0.9);
   now2 = time_precise();
   g >= gr_hold ? ( gr_hold = g; gr_hold_t = now2; ) : ( now2 - gr_hold_t > 1 ? gr_hold = max(gr_hold - 0.4, 0); );
+  hit(x, y, w, h) && press && !act ? ( gr_ri = gr_ri >= 3 ? 0 : gr_ri + 1; press = 0; );
+  while (gr_ri < 3 && gr_disp > rng_val(gr_ri)) ( gr_ri += 1; );
+  rg = rng_val(gr_ri);
   setc(0); Rbox(x, y, w, h);
-  setc(1); Rfill(x + 1, y + 1, w - 2, floor((h - 2)*min(gr_disp/24, 1)));
+  setc(1); Rfill(x + 1, y + 1, w - 2, floor((h - 2)*min(gr_disp/rg, 1)));
   setc(0);
-  hp = y + 1 + floor((h - 3)*min(gr_hold/24, 1));
+  hp = y + 1 + floor((h - 3)*min(gr_hold/rg, 1));
   Rfill(x + 1, hp, w - 2, 1);
   gfx_setfont(1);
-  i = 1;
-  loop(3,
-    ty = y + 1 + (h - 2)*(i*6/24);
-    Rfill(x + w - 4, ty, 3, 1);
-    sprintf(#vs, "%d", i*6); Rtext(x + 2, ty - 4, #vs);
-    i += 1;
+  mj = rg == 3 ? 1 : rg == 6 ? 2 : rg == 12 ? 3 : 6;      // labelled step (dB)
+  stp = rg <= 6 ? 0.5 : 1;                                 // tick step (dB)
+  cnt = rg/stp; j = 1;
+  loop(cnt,
+    v = j*stp;
+    ty = y + 1 + (h - 2)*(v/rg);
+    major = v == floor(v) && (floor(v) % mj) == 0;
+    major ? (
+      Rfill(x + w - 5, ty, 4, 1);
+      sprintf(#vs, "%d", v); Rtext(x + 2, min(ty - 4, y + h - 11), #vs);   // last label sits above the bottom edge
+    ) : Rfill(x + w - 3, ty, 2, 1);
+    j += 1;
   );
-  sprintf(#vs, "GR %.1f", gr_disp); Rtext(x, y + h + 3, #vs);
 );
 
-function draw_plot(x, y, w, h) local(i, n, vx, vy, px, py, lx, ly) (
-  setc(0); Rbox(x, y, w, h);
-  i = 0; loop(floor(w/2), Rfill(x + i*2, y + floor(h/2), 1, 1); Rfill(x + floor(w/2), y + i*2, 1, 1); i += 1; );
+// header output meter: L/R peak bars (-48..0 dB, white) with peak-hold ticks, red rect at the right end when the output clipped.
+// click resets clip + held peak.
+function lvf(v) ( min(max((8.6858896*log(max(v, 0.0000001)) + 48)/48, 0), 1); );
+function out_meter(x, y, w, h) local(pa, pb, bw, bh, rw) (
+  rw = 8; bw = w - rw - 2; bh = floor((h - 3)*0.5);
+  now2 = time_precise();
+  pa = opkL; opkL = 0; pb = opkR; opkR = 0;
+  clip_f ? ( clip_lat = 1; clip_f = 0; );   // latched until clicked
+  hit(x, y, w, h) && press && !act ? ( opk_max = 0; clip_lat = 0; hlL = hlR = 0; press = 0; );
+  ovl = max(pa, ovl*0.85); ovr = max(pb, ovr*0.85);
+  pa >= hlL ? ( hlL = pa; hlL_t = now2; ) : ( now2 - hlL_t > 1 ? hlL *= 0.9; );
+  pb >= hlR ? ( hlR = pb; hlR_t = now2; ) : ( now2 - hlR_t > 1 ? hlR *= 0.9; );
+  opk_max = max(opk_max, max(pa, pb));
+  setc(0); Rbox(x, y, bw, h);
+  Rfill(x + 1, y + 1, floor((bw - 2)*lvf(ovl)), bh);
+  Rfill(x + 1, y + 2 + bh, floor((bw - 2)*lvf(ovr)), bh);
+  hlL > 0.0001 ? Rfill(x + 1 + floor((bw - 3)*lvf(hlL)), y + 1, 1, bh);
+  hlR > 0.0001 ? Rfill(x + 1 + floor((bw - 3)*lvf(hlR)), y + 2 + bh, 1, bh);
+  clip_lat ? ( setc(1); Rfill(x + bw + 2, y, rw, h); ) : ( setc(0); Rbox(x + bw + 2, y, rw, h); );
+  setc(0);
+);
+
+// sat transfer plot. live: the part of the curve the signal currently reaches (peak, ~150 ms decay) is drawn red, with a dot at each end.
+function draw_plot(x, y, w, h) local(i, n, vx, vy, px, py, lx, ly, pk, hv, tb, tot, ty) (
+  // interaction: drag/wheel/double-click = SAT OUT; click the bottom-right readout = measure + match sat loudness (3 s)
+  hv = hit(x, y, w, h); tb = hit(x + w - 84, y + h - 14, 82, 12);
+  hv && press && !act ? ( tb ? ( sat_req = 1; press = 0; ) : begin_drag(27); );
+  hv && wheel != 0 ? wheel_adj(27);
+  setc(act == 27); Rbox(x, y, w, h);
+  i = 0; loop(floor(w/2), Rfill(x + i*2, y + floor(h/2), 1, 1); i += 1; );
+  i = 0; loop(floor(h/2), Rfill(x + floor(w/2), y + i*2, 1, 1); i += 1; );
+  pk = min(sat_vz, 1);
   n = 64; i = 0;
   loop(n + 1,
     vx = -1 + 2*i/n;
     vy = sat_on ? lutf(vx*pre + bias) : vx;
     vy = min(max(vy, -1), 1);
     px = x + (vx + 1)*0.5*(w - 1); py = y + (1 - (vy + 1)*0.5)*(h - 1);
+    setc(sat_on && pk > 0.002 && abs(vx) <= pk);
     i > 0 ? Rline(lx, ly, px, py);
     lx = px; ly = py; i += 1;
   );
+  sat_on && pk > 0.002 ? (
+    setc(1);
+    vy = min(max(lutf(pk*pre + bias), -1), 1);
+    Rfill(x + (pk + 1)*0.5*(w - 1) - 1, y + (1 - (vy + 1)*0.5)*(h - 1) - 1, 3, 3);
+    vy = min(max(lutf(-pk*pre + bias), -1), 1);
+    Rfill(x + (1 - pk)*0.5*(w - 1) - 1, y + (1 - (vy + 1)*0.5)*(h - 1) - 1, 3, 3);
+    setc(0);
+  );
+  // SAT OUT: level marker on the left edge (-24..+12 dB), full dotted line while dragging, readouts in the corners
+  tot = slider27;
+  ty = y + (1 - (min(max(tot, -24), 12) + 24)/36)*(h - 3);
+  setc(act == 27); Rfill(x + 1, ty, 7, 2);
+  act == 27 ? ( i = 0; loop(floor(w/3), Rfill(x + i*3, ty, 1, 1); i += 1; ); );
+  setc(0);
+  gfx_setfont(1);
+  sprintf(#vs, "OUT %+.1fdB", tot); Rtext(x + 10, y + 3, #vs);
+  sat_meas ? (
+    setc(floor(time_precise()*4) & 1); sprintf(#vs, "MEAS %.1fs", sat_mt);
+  ) : sprintf(#vs, "SAT %+.1fdB", sat_db);
+  Rtextc(x + w - 84, y + h - 14, 82, #vs);
+  setc(0);
 );
 
-function draw_ccurve(x, y, w, h) local(i, n, xin, yout, px, py, lx, ly, tx) (
+// comp transfer plot. live: red fill under the curve up to the current detector level, dot on the curve at that level.
+function draw_ccurve(x, y, w, h) local(i, n, xin, yout, px, py, lx, ly, tx, lvl) (
   setc(0); Rbox(x, y, w, h);
+  lvl = min(max(8.6858896*log(max(vz_lv, 0.000001)), -48), 0);
+  setc(1);
+  i = 0;
+  loop(w - 2,
+    xin = -48 + 48*i/(w - 3);
+    xin <= lvl ? (
+      py = y + (1 - (xin - gcomp(xin) + 48)/48)*(h - 1);
+      Rfill(x + 1 + i, py, 1, y + h - 1 - py);
+    );
+    i += 1;
+  );
+  setc(0);
   i = 0; loop(floor(w/3), Rfill(x + i*3 + 1, y + h - 1 - floor((i*3)*(h - 1)/(w - 1)), 1, 1); i += 1; );   // 1:1 reference
   n = 96; i = 0;
   loop(n + 1,
@@ -387,9 +515,13 @@ function draw_ccurve(x, y, w, h) local(i, n, xin, yout, px, py, lx, ly, tx) (
     i > 0 ? Rline(lx, ly, px, py);
     lx = px; ly = py; i += 1;
   );
+  lvl > -47.9 ? (
+    px = x + (lvl + 48)/48*(w - 1); py = y + (1 - (lvl - gcomp(lvl) + 48)/48)*(h - 1);
+    Rfill(px - 1, py - 1, 3, 3);
+  );
   tx = x + (thr + 48)/48*(w - 1);
   Rfill(tx, y + h - 4, 1, 3);
-  gfx_setfont(1); Rtext(x + 3, y + 2, "TRANSFER dB");
+  gfx_setfont(1); Rtext(x + 3, y + 2, "COMPRESSOR");
 );
 
 // build halfband taps once
@@ -397,13 +529,18 @@ mk_taps(tpA, 24, 8);
 mk_taps(tpB, 8, 6);
 
 // ---- state defaults
-last_shape = -1; last_os = -1; dirty = 1; sr_prev = 0; wp = 0;
+last_shape = -1; per_on = 0; last_os = -1; dirty = 1; sr_prev = 0; wp = 0;
 ims = oms = 0.000000001; og = 1; atrim = 0; meas = 0; match_req = 0; prev_gmode = 0;
 prevL = prevR = 0; grfL = grfR = grsL = grsR = 0; rmL = rmR = 0;
 pk_env = 0; ms_env = 0; gavg = 0; dcxL = dcyL = dcxR = dcyR = 0;
 gr_blk = 0; gr_pk = 0; diff_db = 0; gate_open = 0; macc = 0; mt = 0;
 lat = 0; os = 0; sat_on = 0; thr = -18; knw = 6; cslope = 0.75; kc0 = 1; kc1 = 0; kc2 = 0;
 pre = 1; bias = 0; mix = 1; mk = 1; og_t = 1;
+smix = 1; byp = 0; byp_s = 0; bg = bg_t = 1; pms = 0.000000001; fms = 0.000000001;
+delta_on = 0; d_s = 0;
+sg = sg_t = 1; sms = 0.000000001; sat_db = 0; sat_meas = 0; sat_req = 0; sat_macc = 0; sat_mt = 0; diff_disp = 0;
+inv = 0;   // UI palette: 0 = white on black, 1 = black on white
+opkL = opkR = 0; clip_f = 0; vz_blk = vz_lv = sat_blk = sat_vz = 0;
 
 @slider
 dirty = 1;
@@ -415,7 +552,10 @@ dirty || srate != sr_prev ? (
   dirty = 0; sr_prev = srate;
 
   // ---- SAT
-  slider1 != last_shape ? ( last_shape = slider1; build_lut(floor(slider1 + 0.5)); );
+  slider1 != last_shape ? (
+    last_shape = slider1; build_lut(floor(slider1 + 0.5));
+    sel_i = floor(slider1 + 0.5); per_on = sel_i == 5 || sel_i == 6 || sel_i == 9 || sel_i == 12;
+  );
   pre = exp(slider2*0.01*36*0.11512925);
   bias = slider3*0.01;
   sat_on = slider2 > 0 || slider3 != 0;
@@ -458,11 +598,30 @@ dirty || srate != sr_prev ? (
   prev_gmode = gmode;
   rmsg_c = 1 - exp(-1/(srate*0.5));
   og_c = 1 - exp(-1/(srate*0.02));
+  smix = slider25*0.01;
+  byp = slider26 >= 0.5;
+  byp_c = 1 - exp(-1/(srate*0.01));
+  bg_c = 1 - exp(-1/(srate*0.2));
+  fms_c = 1 - exp(-1/(srate*0.3));
 );
 
 // =========================================================== gain diff / auto / match
 gate_open = ims > 0.000001;
-gate_open ? ( diff_db = 4.3429448*log(max(oms, 0.000000000001)/max(ims, 0.000000000001)); );
+gate_open ? (
+  diff_db = 4.3429448*log(max(oms, 0.000000000001)/max(ims, 0.000000000001));         // pre Out Gain: drives Auto/Match
+  diff_disp = 4.3429448*log(max(pms, 0.000000000001)/max(ims, 0.000000000001));       // post Out Gain + trim: IN>OUT display
+  sat_db = 4.3429448*log(max(sms, 0.000000000001)/max(ims, 0.000000000001));          // sat module loudness change, before SAT OUT
+);
+// sat level-match: click starts a 3 s measurement of the sat module's loudness change (like Match), then writes Sat Out. click again = cancel.
+sat_req ? ( sat_meas = !sat_meas; sat_macc = 0; sat_mt = 0; sat_req = 0; );
+sat_meas && gate_open ? (
+  sat_macc += sat_db*(samplesblock/srate); sat_mt += samplesblock/srate;
+  sat_mt >= 3 ? (
+    slider27 = floor(min(max(-sat_macc/sat_mt, -24), 12)*10 + 0.5)*0.1; sliderchange(2^26);
+    sat_meas = 0;
+  );
+);
+sg_t = exp(slider27*0.11512925);
 gmode == 1 && gate_open ? (
   atrim += (min(max(-diff_db, -12), 12) - atrim)*(1 - exp(-samplesblock/(srate*1.5)));
 );
@@ -475,6 +634,10 @@ meas && gate_open ? (
 );
 og_t = exp((slider22 + (gmode == 1 ? atrim : gmode == 2 ? slider24 : 0))*0.11512925);
 gr_pk = max(gr_pk, gr_blk); gr_blk = 0;
+// viz taps: peak with ~150 ms decay (comp detector level, sat input level)
+vz_d = exp(-samplesblock/(srate*0.15));
+vz_lv = max(vz_blk, vz_lv*vz_d); vz_blk = 0;
+sat_vz = max(sat_blk, sat_vz*vz_d); sat_blk = 0;
 
 @sample
 inL = spl0; inR = spl1;
@@ -491,17 +654,29 @@ sat_on ? (
   use_hp ? ( bpL = bq(hpsL, hpc, bpL); bpR = bq(hpsR, hpc, bpR); );
   use_lp ? ( bpL = bq(lpsL, lpc, bpL); bpR = bq(lpsR, lpc, bpR); );
   resL[wp] = inL - bpL; resR[wp] = inR - bpR;
+  bdL[wp] = bpL; bdR[wp] = bpR;
+  sat_blk = max(sat_blk, max(abs(bpL), abs(bpR)));
   shL = sh_proc(stAL, stBL, bpL*pre + bias);
   shR = sh_proc(stAR, stBR, bpR*pre + bias);
   // DC blocker after shaper (always on in this path)
   yL = shL - dcxL + dcR*dcyL + 0.000000000000000000000000000001; dcxL = shL; dcyL = yL;
   yR = shR - dcxR + dcR*dcyR + 0.000000000000000000000000000001; dcxR = shR; dcyR = yR;
   use_tone ? ( yL = bq(tnsL, tnc, yL); yR = bq(tnsR, tnc, yR); );
-  cL = resL[rd] + yL; cR = resR[rd] + yR;
+  // sat mix: parallel blend of the (latency-aligned) clean band against the shaped signal, before the comp
+  smix < 0.999 ? (
+    yL = bdL[rd] + (yL - bdL[rd])*smix;
+    yR = bdR[rd] + (yR - bdR[rd])*smix;
+  );
+  cL =resL[rd] + yL; cR = resR[rd] + yR;
 ) : (
   resL[wp] = 0; resR[wp] = 0;
   cL = dlL; cR = dlR;
 );
+
+// SAT OUT: master level of the sat module (applies to blended sat output, also with sat bypassed) = comp input level
+sms += ((cL*cL + cR*cR)*0.5 + 0.000000000000000000000000000001 - sms)*rmsg_c;     // sat module loudness, before SAT OUT
+sg += (sg_t - sg)*og_c;
+cL *= sg; cR *= sg;
 
 // ------------------------------------------------------------ COMP
 xdL = cL + fb*(prevL - cL);
@@ -515,6 +690,7 @@ det_m > 0 ? (
   lvR = aR + det_m*(1.41421356*sqrt(rmR) - aR);
 ) : ( lvL = aL; lvR = aR; );
 lmx = max(lvL, lvR);
+vz_blk = max(vz_blk, lmx);
 lvL += link*(lmx - lvL); lvR += link*(lmx - lvR);
 
 tgL = gcomp(8.6858896*log(max(lvL, 0.000001)));
@@ -554,12 +730,34 @@ oL = dlL + (wL - dlL)*mix;
 oR = dlR + (wR - dlR)*mix;
 oms += ((oL*oL + oR*oR)*0.5 + 0.000000000000000000000000000001 - oms)*rmsg_c;     // measured before out gain
 og += (og_t - og)*og_c;
-spl0 = oL*og; spl1 = oR*og;
+pL = oL*og; pR = oR*og;
+pms += ((pL*pL + pR*pR)*0.5 + 0.000000000000000000000000000001 - pms)*rmsg_c;     // processed loudness (post out gain)
+// equal-loudness bypass: dry (latency-aligned) scaled to the processed loudness; gain holds while input is silent
+byp_s += ((byp ? 1 : 0) - byp_s)*byp_c;
+gate_open ? ( bg_t = min(max(sqrt(pms/ims), 0.0631), 15.85); );
+bg += (bg_t - bg)*bg_c;
+spl0 = pL + (dlL*bg - pL)*byp_s;
+spl1 = pR + (dlR*bg - pR)*byp_s;
+// delta monitor: replaces the output with what the compressor removes (comp input - comp output, pre-makeup). UI-only toggle, not saved.
+d_s += ((delta_on ? 1 : 0) - d_s)*byp_c;
+d_s > 0.0001 ? (
+  spl0 += ((cL - yL) - spl0)*d_s;
+  spl1 += ((cR - yR) - spl1)*d_s;
+);
+// output metering taps (consumed by @gfx)
+opkL = max(opkL, abs(spl0)); opkR = max(opkR, abs(spl1));
+abs(spl0) > 0.9999 || abs(spl1) > 0.9999 ? ( clip_f = 1; );
+fms += ((spl0*spl0 + spl1*spl1)*0.5 + 0.000000000000000000000000000001 - fms)*fms_c;
 gr_blk = max(gr_blk, max(gL, gR));
 
-@gfx 1120 480
+@serialize
+file_var(0, inv);   // UI palette persists with the project / preset
+
+@gfx 1120 672
 // ================================================================== UI
-gfx_clear = 0;
+// Logical canvas 560 x 336, drawn at scale S (0.25 steps) and centred. The layout always keeps this aspect:
+// a resized window just letterboxes (JSFX has no API to constrain the host window itself).
+gfx_clear = inv ? 16777215 : 0;   // background
 
 // ---------- one-time setup
 ui_init == 0 ? (
@@ -584,16 +782,19 @@ ui_init == 0 ? (
   setp(20, 0, 24, 0, 0, 0, 0.1);
   setp(21, 0, 100, 100, 0, 0, 1);
   setp(22, -24, 12, 0, 0, 0, 0.1);
-  setp(1, 0, 8, 0, 0, 0, 1);
+  setp(25, 0, 100, 100, 0, 0, 1);
+  setp(27, -24, 12, 0, 0, 0, 0.1);
+  setp(1, 0, 13, 0, 0, 0, 1);
   setp(7, 0, 2, 0, 0, 0, 1);
   setp(23, 0, 2, 0, 0, 0, 1);
-  strcpy(#menu, "Tube|Soft|Rational|Atan|Hard|Tri Fold|Sine Fold|Crossover|Cheby");
-  gr_disp = 0; gr_hold = 0; gr_hold_t = 0; font_s = 0; act = 0;
+  strcpy(#menu, "Tube|Soft|Rational|Atan|Hard|Tri Fold|Sine Fold|Crossover|Cheby|Wrap|Rectify|Bitcrush|Asym Fold|Diode");
+  gr_disp = 0; gr_hold = 0; gr_hold_t = 0; gr_ri = 3; font_s = 0; act = 0;
+  ovl = ovr = hlL = hlR = hlL_t = hlR_t = opk_max = 0; clip_lat = 0;
 );
 
 // ---------- frame setup
-S = max(1, floor(min(gfx_w/560, gfx_h/240)));
-ox = floor((gfx_w - 560*S)/2); oy = floor((gfx_h - 240*S)/2);
+S = max(0.5, floor(min(gfx_w/560, gfx_h/336)*4)/4);   // 0.25 steps
+ox = floor((gfx_w - 560*S)/2); oy = floor((gfx_h - 336*S)/2);
 font_s != S ? ( font_s = S; pick_font(); );
 
 mx = (mouse_x - ox)/S; my = (mouse_y - oy)/S;
@@ -611,52 +812,65 @@ act ? (
 );
 last_my = my;
 
+// ---------- grid: margin 10 | SAT x10 w130 | COMP x152 w266 | OUT x430 w120 ; cell 62x38, gap 6
+// rows: header y8 | tabs y34 h16 | viz y56 h128 | cells y196 / y240 / y284
+
 // ---------- header
 setc(0);
-gfx_setfont(3); Rtext(6, 2, "SATCOMP");
-gfx_setfont(1); Rtext(80, 6, "UPLINK TELEMETRY");
-tag(470, 3, 40, 12, "SIG", gate_open);
-tag(514, 3, 40, 12, "LOCK", gr_disp > 0.3);
-setc(0); Rfill(6, 18, 548, 1);
+gfx_setfont(3); Rtext(10, 7, "SATCOMP");
+gfx_setfont(1); Rtext(92, 14, "v0.2");
+btn(122, 9, 40, 14, inv ? "DARK" : "LIGHT", 0) ? ( inv = !inv; );
+setc(0);
+out_meter(430, 8, 64, 16);
+btn(500, 8, 50, 16, "BYPASS", slider26 > 0.5) ? ( sset(26, slider26 > 0.5 ? 0 : 1); end_touch(26); );
 
+// ---------- tab row
+selector(1, 10, 34, 130, 16);
+seg3(7, 152, 34, 266, 16, "OS OFF", "OS x2", "OS x4");
+seg3(23, 430, 34, 120, 16, "MAN", "AUTO", "MATCH");
+
+// ---------- viz row
+draw_plot(10, 56, 130, 128);
+draw_ccurve(152, 56, 266, 128);
+draw_meter(430, 56, 28, 266);
+
+// ---------- SAT cells
+cell(2, 10, 196, 62, 38, "DRIVE");
+cell(3, 78, 196, 62, 38, "BIAS");
+cell(4, 10, 240, 62, 38, "HP");
+cell(5, 78, 240, 62, 38, "LP");
+cell(6, 10, 284, 62, 38, "TONE");
+cell(25, 78, 284, 62, 38, "SAT MIX");
+
+// ---------- COMP cells
+cell(8, 152, 196, 62, 38, "THRESH");
+cell(9, 220, 196, 62, 38, "RATIO");
+cell(10, 288, 196, 62, 38, "ATTACK");
+cell(11, 356, 196, 62, 38, "RELEASE");
+cell(13, 152, 240, 62, 38, "KNEE");
+cell(14, 220, 240, 62, 38, "K.SHAPE");
+cell(15, 288, 240, 62, 38, "PEAK>RMS");
+cell(16, 356, 240, 62, 38, "LOW CUT");
+cell(17, 152, 284, 62, 38, "LINK");
+cell(12, 220, 284, 62, 38, "SPEED");
+cell(18, 288, 284, 62, 38, "FF>FB");
+cell(19, 356, 284, 62, 38, "GR DIST");
+
+// ---------- OUT column: info area, IN>OUT, then gain cells
 gfx_setfont(1); setc(0);
-Rtext(6, 22, "SAT"); Rtext(196, 22, "COMP"); Rtext(398, 22, "OUT");
-
-// ---------- SAT column
-selector(1, 6, 34, 184, 14, "SHAPE");
-draw_plot(6, 52, 100, 100);
-cell(2, 110, 52, 38, 30, "DRIVE");
-cell(3, 152, 52, 38, 30, "BIAS");
-cell(4, 110, 86, 38, 30, "HP");
-cell(5, 152, 86, 38, 30, "LP");
-cell(6, 110, 120, 80, 30, "TONE");
-seg3(7, 6, 156, 184, 16, "OS OFF", "OS x2", "OS x4");
-
-// ---------- COMP column
-cell(8, 196, 34, 46, 30, "THRESH");
-cell(9, 246, 34, 46, 30, "RATIO");
-cell(10, 296, 34, 46, 30, "ATTACK");
-cell(11, 346, 34, 46, 30, "RELEASE");
-cell(13, 196, 68, 46, 30, "KNEE");
-cell(14, 246, 68, 46, 30, "K.SHAPE");
-cell(15, 296, 68, 46, 30, "DETECT");
-cell(16, 346, 68, 46, 30, "DET HP");
-cell(17, 196, 102, 46, 30, "LINK");
-cell(12, 246, 102, 46, 30, "SPEED");
-cell(18, 296, 102, 46, 30, "FF>FB");
-cell(19, 346, 102, 46, 30, "GR DIST");
-draw_ccurve(196, 138, 196, 96);
-
-// ---------- OUT column
-draw_meter(398, 34, 22, 116);
-cell(20, 424, 34, 62, 30, "MAKEUP");
-cell(21, 490, 34, 64, 30, "MIX");
-cell(22, 424, 68, 62, 30, "OUT GAIN");
-diff_box(490, 68, 64, 30);
-seg3(23, 424, 102, 130, 16, "MAN", "AUTO", "MATCH");
-gfx_setfont(1); setc(0);
-gmode == 1 ? sprintf(#s1, "TRIM %+.1f dB", atrim) : gmode == 2 ? (
-  meas ? sprintf(#s1, "MEASURING %.1f/3.0s", mt) : sprintf(#s1, "LOCKED %+.1f dB", slider24);
+sprintf(#s1, "GR %.1f", gr_disp); Rtext(464, 58, #s1);
+gmode == 1 ? sprintf(#s1, "TRIM %+.1fdB", atrim) : gmode == 2 ? (
+  meas ? sprintf(#s1, "MEAS %.1f/3.0s", mt) : sprintf(#s1, "LOCK %+.1fdB", slider24);
 ) : sprintf(#s1, "TRIM ---");
-Rtext(424, 122, #s1);
+Rtext(464, 70, #s1);
+opk_max > 0.00001 ? sprintf(#s1, "PK %+.1fdB", 8.6858896*log(opk_max)) : strcpy(#s1, "PK ---");
+setc(opk_max > 0.9999); Rtext(464, 88, #s1); setc(0);
+fms > 0.000000001 ? sprintf(#s1, "RMS %+.1fdB", 4.3429448*log(fms)) : strcpy(#s1, "RMS ---");
+Rtext(464, 100, #s1);
+slider26 > 0.5 ? ( sprintf(#s1, "BYP %+.1fdB", 8.6858896*log(bg)); Rtext(464, 112, #s1); );
 
+btn(464, 128, 86, 14, "DELTA", delta_on*2) ? ( delta_on = !delta_on; );
+diff_box(464, 146, 86, 38);
+cell(20, 464, 196, 86, 38, "MAKEUP");
+cell(22, 464, 240, 86, 38, "OUT GAIN");
+cell(21, 464, 284, 86, 38, "MIX");
