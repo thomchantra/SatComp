@@ -10,6 +10,10 @@ pub const H: f32 = 336.0;
 /// Fraction of the font size to lift text by; tune against a JSFX screenshot.
 pub const TEXT_LIFT_EM: f32 = 0.28;
 
+/// The JSFX font sizes (12/14/18 px) render about 14% smaller in REAPER than the same em size in egui
+/// (measured from side-by-side screenshots), so scale to match and keep the labels inside their cells.
+pub const FONT_SCALE: f32 = 0.86;
+
 /// Colour schemes (BG rgb, UI rgb, ACCENT rgb), from docs/colorscheme.md. Index 0/1 = Black/White.
 pub const PALETTES: [(&str, [f32; 9]); 10] = [
     ("Black", [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0]),
@@ -113,8 +117,8 @@ impl<'a> Canvas<'a> {
             1 => 12.0,
             2 => 14.0,
             _ => 18.0,
-        } * self.s;
-        FontId::new(sz.max(6.0), fira())
+        } * self.s * FONT_SCALE;
+        FontId::new(sz.max(5.0), fira())
     }
 
     pub fn set_font(&mut self, f: u8) {

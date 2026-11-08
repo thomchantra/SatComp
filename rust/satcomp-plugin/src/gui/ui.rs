@@ -27,7 +27,11 @@ pub struct Meta {
 enum MenuKind {
     Shape,
     Palette,
+    Size,
 }
+
+/// Window scale steps (percent of the 560x336 base size).
+const SIZES: [f32; 6] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5];
 
 struct Menu {
     kind: MenuKind,
@@ -112,6 +116,10 @@ pub struct State {
     // sat plot
     lut: ShaperLut,
     dk: f32,
+    // window resize grip
+    resizing: bool,
+    resize_off: (f32, f32),
+    pub ptr_pt: (f32, f32),
 }
 
 impl State {
@@ -250,6 +258,9 @@ impl State {
             fwin,
             lut: ShaperLut::new(0),
             dk: 1.0,
+            resizing: false,
+            resize_off: (0.0, 0.0),
+            ptr_pt: (0.0, 0.0),
         }
     }
 }
@@ -1351,6 +1362,53 @@ impl<'a> Gui<'a> {
         self.cell_o(sb + 14, 356.0, 284.0, 62.0, 38.0, "OUT GAIN");
     }
 
+    // ------------------------------------------------------------------ window size
+    fn cur_scale(&self) -> f32 {
+        self.env.params.editor_state.size().0 as f32 / 560.0
+    }
+
+    /// Ask the host to resize the editor to `scale` x the 560x336 base size (aspect locked).
+    fn request_scale(&mut self, scale: f32) {
+        let sc = scale.clamp(SIZES[0], SIZES[SIZES.len() - 1]);
+        if (sc - self.cur_scale()).abs() > 0.001 {
+            self.env.params.editor_state.set_requested_size(((560.0 * sc).round() as u32, (336.0 * sc).round() as u32));
+        }
+    }
+
+    /// Bottom-right grip: drag = aspect-locked resize in 25% steps, right-click = size menu.
+    fn resize_grip(&mut self) {
+        let (gx, gy, gw, gh) = (544.0, 320.0, 16.0, 16.0);
+        let hv = self.hit(gx, gy, gw, gh);
+        if hv && self.press && self.act == 0 {
+            self.resizing = true;
+            let s = self.cv.s;
+            self.resize_off = (560.0 * s - self.ptr_pt.0, 336.0 * s - self.ptr_pt.1);
+            self.press = false;
+        }
+        if hv && self.rpress {
+            let items = SIZES.iter().map(|v| format!("{:.0}%", v * 100.0)).collect();
+            let cur = SIZES.iter().position(|v| (v - self.cur_scale()).abs() < 0.13).unwrap_or(0);
+            self.open_menu(MenuKind::Size, gx - 40.0, gy - 90.0, items, cur);
+        }
+        if self.resizing {
+            if self.down {
+                let s = self.cv.s;
+                let w = (self.ptr_pt.0 + self.resize_off.0) / s;
+                let h = (self.ptr_pt.1 + self.resize_off.1) / s;
+                let k = ((w / 560.0).min(h / 336.0) * self.cur_scale() * 4.0).round() / 4.0;
+                self.request_scale(k);
+            } else {
+                self.resizing = false;
+            }
+        }
+        self.set_dk(1.0);
+        self.setc(self.resizing);
+        for o in [4.0, 8.0, 12.0] {
+            self.cv.line(559.0, 335.0 - o, 559.0 - o, 335.0);
+        }
+        self.setc(false);
+    }
+
     // ------------------------------------------------------------------ popup menu (replaces gfx_showmenu)
     fn menu_frame(&mut self) {
         let Some(m) = self.menu.as_ref() else { return };
@@ -1382,13 +1440,16 @@ impl<'a> Gui<'a> {
             let kind = match m.kind {
                 MenuKind::Shape => 0,
                 MenuKind::Palette => 1,
+                MenuKind::Size => 2,
             };
             self.menu = None;
             if let Some(i) = chosen {
                 if kind == 0 {
                     self.click_set(1, i as f32);
-                } else {
+                } else if kind == 1 {
                     self.set_pal(i);
+                } else {
+                    self.request_scale(SIZES[i.min(SIZES.len() - 1)]);
                 }
             }
             self.press = false;
@@ -1622,6 +1683,7 @@ impl<'a> Gui<'a> {
         self.cell(21, 464.0, 240.0, 86.0, 38.0, "MIX");
         self.cell_o(22, 464.0, 284.0, 86.0, 38.0, "OUT GAIN");
 
+        self.resize_grip();
         self.menu_draw();
     }
 }

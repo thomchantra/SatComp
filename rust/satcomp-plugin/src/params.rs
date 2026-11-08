@@ -202,7 +202,7 @@ pub struct SatCompParams {
 impl Default for SatCompParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(560, 336),
+            editor_state: EguiState::from_size(700, 420),
             palette: Arc::new(AtomicI32::new(0)),
             match_trim: Arc::new(AtomicF32::new(0.0)),
             shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 13 }),

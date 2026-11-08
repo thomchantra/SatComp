@@ -11,7 +11,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["vst3"] }
 satcomp-dsp = { path = "../satcomp-dsp" }
-nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_egui = { path = "../vendor/nih_plug_egui" }
 
 [features]
 # `cargo run -p satcomp --features standalone --bin satcomp-standalone` opens the editor in a plain window (dev aid)

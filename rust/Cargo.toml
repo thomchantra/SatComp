@@ -1,5 +1,6 @@
 [workspace]
 members = ["satcomp-dsp", "satcomp-plugin", "xtask"]
+exclude = ["vendor"]
 resolver = "2"
 
 [profile.release]

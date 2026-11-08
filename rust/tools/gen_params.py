@@ -67,7 +67,7 @@ for n, fl, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{fl}"]\n    pub {fl}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
 o.append("}\n")
 o.append("impl Default for SatCompParams {\n    fn default() -> Self {\n        Self {")
-o.append("            editor_state: EguiState::from_size(560, 336),")
+o.append("            editor_state: EguiState::from_size(700, 420),")
 o.append("            palette: Arc::new(AtomicI32::new(0)),")
 o.append("            match_trim: Arc::new(AtomicF32::new(0.0)),")
 for n, fl, name, k, mn, mx, df, st, u in P:
