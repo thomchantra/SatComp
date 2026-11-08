@@ -37,6 +37,7 @@ slider24:0<-24,24,0.01>-Match Trim
 
 @init
 ext_noinit = 1;
+gfx_ext_retina = 1;   // crisp on HiDPI: gfx_w, mouse and drawing all in device px; UI scale S derives from gfx_w
 
 // ============================================================ memory map
 lut = 0;                       // 4097 pts, shaper over +-8
@@ -556,7 +557,7 @@ og += (og_t - og)*og_c;
 spl0 = oL*og; spl1 = oR*og;
 gr_blk = max(gr_blk, max(gL, gR));
 
-@gfx 560 240
+@gfx 1120 480
 // ================================================================== UI
 gfx_clear = 0;
 
