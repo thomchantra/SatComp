@@ -1,0 +1,100 @@
+//! Parameter set, mirroring the JSFX sliders (see docs/PARAMETERS.md). Slider numbers in comments.
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct EqBandParams {
+    /// Stored type, relative to the band's default (0 = default). 0..2. (sliders 29, 33, 37, ...)
+    pub ty: f64,
+    pub freq: f64,
+    pub gain: f64,
+    pub q: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct EqStageParams {
+    pub bands: [EqBandParams; 3],
+    pub tilt: f64,
+    pub pivot: f64,
+    pub out_gain: f64,
+}
+
+impl Default for EqStageParams {
+    fn default() -> Self {
+        let b = |f| EqBandParams { ty: 0.0, freq: f, gain: 0.0, q: 0.5 };
+        Self { bands: [b(80.0), b(200.0), b(6000.0)], tilt: 0.0, pivot: 600.0, out_gain: 0.0 }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Params {
+    // SAT
+    pub shape: i32,       // 1   0..13
+    pub drive: f64,       // 2   0..100 %
+    pub bias: f64,        // 3   -100..100 %
+    pub sat_hp: f64,      // 4   20..2000 Hz (<=20.5 = off)
+    pub sat_lp: f64,      // 5   1000..20000 Hz (>=19900 = off)
+    pub tone: f64,        // 6   1000..20000 Hz (>=19900 = off)
+    pub os: i32,          // 7   0 off, 1 x2, 2 x4
+    // COMP
+    pub thresh: f64,      // 8   dB
+    pub ratio: f64,       // 9   1..20 (>=19.9 = INF)
+    pub attack: f64,      // 10  ms
+    pub release: f64,     // 11  ms (>=1990 = AUTO)
+    pub speed: f64,       // 12  0..100 %
+    pub knee: f64,        // 13  dB
+    pub knee_shape: f64,  // 14  0..100 %
+    pub detector: f64,    // 15  0..100 % (peak > rms)
+    pub det_hp: f64,      // 16  0..400 Hz (<=15 = off)
+    pub ff_fb: f64,       // 18  0..100 %
+    pub gr_dist: f64,     // 19  0..100 %
+    // OUT
+    pub makeup: f64,      // 20  dB
+    pub mix: f64,         // 21  0..100 %
+    pub out_gain: f64,    // 22  dB
+    pub gain_match: bool, // 23  (Auto retired: Manual / Match)
+    pub sat_mix: f64,     // 25  0..100 %
+    pub bypass: bool,     // 26
+    pub sat_out: f64,     // 27  dB
+    // EQ stages (29..58)
+    pub eq: [EqStageParams; 2],
+    pub lookahead_ms: f64,      // 59
+    pub eq_pre_bypass: bool,    // 60
+    pub eq_post_bypass: bool,   // 61
+    pub eq_module_bypass: bool, // 62
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self {
+            shape: 0,
+            drive: 25.0,
+            bias: 0.0,
+            sat_hp: 20.0,
+            sat_lp: 20000.0,
+            tone: 20000.0,
+            os: 0,
+            thresh: -18.0,
+            ratio: 4.0,
+            attack: 10.0,
+            release: 150.0,
+            speed: 50.0,
+            knee: 6.0,
+            knee_shape: 0.0,
+            detector: 30.0,
+            det_hp: 0.0,
+            ff_fb: 0.0,
+            gr_dist: 0.0,
+            makeup: 0.0,
+            mix: 100.0,
+            out_gain: 0.0,
+            gain_match: false,
+            sat_mix: 100.0,
+            bypass: false,
+            sat_out: 0.0,
+            eq: [EqStageParams::default(); 2],
+            lookahead_ms: 0.0,
+            eq_pre_bypass: false,
+            eq_post_bypass: false,
+            eq_module_bypass: false,
+        }
+    }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "satcomp"
+version = "0.0.1"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["vst3"] }
+satcomp-dsp = { path = "../satcomp-dsp" }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+
+[features]
+# `cargo run -p satcomp --features standalone --bin satcomp-standalone` opens the editor in a plain window (dev aid)
+standalone = ["nih_plug/standalone"]
+
+[[bin]]
+name = "satcomp-standalone"
+path = "src/standalone.rs"
+required-features = ["standalone"]
