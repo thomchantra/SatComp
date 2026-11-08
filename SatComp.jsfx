@@ -1,0 +1,661 @@
+desc:SatComp
+tags:distortion compressor saturation dynamics
+options:no_meter
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+// ---- SAT ----
+slider1:0<0,8,1{Tube,Soft,Rational,Atan,Hard,Tri Fold,Sine Fold,Crossover,Cheby}>-Shape
+slider2:25<0,100,0.1>-Drive
+slider3:0<-100,100,0.1>-Bias
+slider4:20<20,2000,1>-Sat HP
+slider5:20000<1000,20000,1>-Sat LP
+slider6:20000<1000,20000,1>-Tone
+slider7:0<0,2,1{Off,x2,x4}>-OS
+// ---- COMP ----
+slider8:-18<-40,0,0.1>-Thresh
+slider9:4<1,20,0.1>-Ratio
+slider10:10<0.05,100,0.01>-Attack
+slider11:150<5,2000,1>-Release
+slider12:50<0,100,1>-Speed
+slider13:6<0,24,0.1>-Knee
+slider14:0<0,100,1>-Knee Shape
+slider15:30<0,100,1>-Detector
+slider16:0<0,400,1>-Det HP
+slider17:100<0,100,1>-Link
+slider18:0<0,100,1>-FF/FB
+slider19:0<0,100,1>-GR Dist
+// ---- OUT ----
+slider20:0<0,24,0.1>-Makeup
+slider21:100<0,100,1>-Mix
+slider22:0<-24,12,0.1>-Out Gain
+slider23:0<0,2,1{Manual,Auto,Match}>-GainMatch
+slider24:0<-24,24,0.01>-Match Trim
+
+@init
+ext_noinit = 1;
+
+// ============================================================ memory map
+lut = 0;                       // 4097 pts, shaper over +-8
+tpA = 4100;  tpB = 4130;       // halfband odd-tap tables (K=24 / K=8)
+stAL = 4200; stAR = stAL+128; stBL = stAR+128; stBR = stBL+128;   // halfband stage state
+dryL = 4800; dryR = 4864; resL = 4928; resR = 4992;               // 64-sample delay rings
+hpc = 5100; lpc = 5110; tnc = 5120; dhc = 5130;                   // biquad coeffs
+hpsL = 5200; hpsR = 5208; lpsL = 5216; lpsR = 5224;               // biquad states
+tnsL = 5232; tnsR = 5240; dhsL = 5248; dhsR = 5256;
+pmin = 6000; pmax = 6040; pdef = 6080; pmode = 6120; psnap = 6160; pstep = 6200;  // UI param table
+memset(stAL, 0, 520); memset(dryL, 0, 256); memset(hpsL, 0, 64);
+
+// ============================================================ DSP helpers
+function th(x) local(e) (
+  x = min(max(x, -20), 20);
+  e = exp(2*x);
+  (e - 1)/(e + 1);
+);
+
+// All shapers: odd/even as named, unity small-signal slope (Crossover: unity large-signal slope)
+function shp(sel, x) local(y, ax, t) (
+  y = 0;
+  sel == 0 ? ( y = x >= 0 ? th(x) : th(0.6*x)/0.6; );              // Tube: asymmetric knees
+  sel == 1 ? ( y = th(x); );                                        // Soft
+  sel == 2 ? ( y = x/(1 + 1.5*abs(x)); );                           // Rational (Gruhn form, k=1.5, slope-normalised)
+  sel == 3 ? ( y = 0.63661977*atan(1.5707963*x); );                 // Atan
+  sel == 4 ? ( ax = abs(x); y = ax <= 0.9 ? x : sign(x)*(0.9 + 0.1*th((ax - 0.9)*10)); );  // Hard, rounded
+  sel == 5 ? ( y = 0.63661977*asin(sin(1.5707963*x)); );            // Tri Fold
+  sel == 6 ? ( y = sin(1.5707963*x)*0.63661977; );                  // Sine Fold
+  sel == 7 ? ( y = x - 0.12*th(x/0.15); );                          // Crossover / dead zone
+  sel == 8 ? ( t = th(x); y = 1.6*t + 0.6*t*t + 0.2*(4*t*t*t - 3*t); );  // Cheby T1 + T2 + T3
+  y;
+);
+
+function build_lut(sel) local(i) (
+  i = 0;
+  loop(4097, lut[i] = shp(sel, i/256 - 8); i += 1; );
+);
+
+function lutf(x) local(p, i, f) (
+  p = (min(max(x, -7.999), 7.999) + 8)*256;
+  i = floor(p); f = p - i;
+  lut[i] + (lut[i+1] - lut[i])*f;
+);
+
+// ---- biquads (TDF2). state s[0..1], coeffs c[0..4] = b0 b1 b2 a1 a2
+function bq(s, c, x) local(y) (
+  y = c[0]*x + s[0] + 1e-30;
+  s[0] = c[1]*x - c[3]*y + s[1];
+  s[1] = c[2]*x - c[4]*y;
+  y;
+);
+function bq_lp(c, f, q) local(w, cs, al, a0) (
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); al = sin(w)/(2*q); a0 = 1 + al;
+  c[0] = (1 - cs)*0.5/a0; c[1] = (1 - cs)/a0; c[2] = c[0]; c[3] = -2*cs/a0; c[4] = (1 - al)/a0;
+);
+function bq_hp(c, f, q) local(w, cs, al, a0) (
+  w = 2*$pi*min(f, srate*0.45)/srate; cs = cos(w); al = sin(w)/(2*q); a0 = 1 + al;
+  c[0] = (1 + cs)*0.5/a0; c[1] = -(1 + cs)/a0; c[2] = c[0]; c[3] = -2*cs/a0; c[4] = (1 - al)/a0;
+);
+
+// ---- halfband (N = 2K+1, Kaiser). Taps table tp[j] = h[2j+1], sum = 0.5.
+function i0(x) local(sm, t, k) (
+  sm = 1; t = 1; k = 1;
+  loop(30, t *= (x*0.5/k)*(x*0.5/k); sm += t; k += 1; );
+  sm;
+);
+function mk_taps(tp, K, beta) local(j, m, r, w, h, sm) (
+  sm = 0; j = 0;
+  loop(K,
+    m = 2*j + 1 - K; r = m/K;
+    w = i0(beta*sqrt(1 - r*r))/i0(beta);
+    h = sin($pi*m*0.5)/($pi*m*0.5)*0.5*w;
+    tp[j] = h; sm += h; j += 1;
+  );
+  j = 0; loop(K, tp[j] *= 0.5/sm; j += 1; );
+);
+// state block s: s[0]=up pos, s[1]=down pos, up ring at s+2, down ring at s+40
+// up: one input -> hy0 (even output), hy1 (odd output)
+function hb_up(s, tp, K, um, x) local(p, j, acc) (
+  p = s[0];
+  s[2 + p] = x;
+  hy0 = s[2 + ((p - K*0.5 + um + 1) & um)];
+  acc = 0; j = 0;
+  loop(K, acc += tp[j]*s[2 + ((p - j + um + 1) & um)]; j += 1; );
+  hy1 = 2*acc;
+  s[0] = (p + 1) & um;
+);
+// down: pair (a=even, b=odd) -> one output
+function hb_down(s, tp, K, dm, a, b) local(q, acc, j) (
+  q = s[1];
+  s[40 + q] = a;
+  acc = 0.5*s[40 + ((q - K + dm + 1) & dm)];
+  j = 0;
+  loop(K, acc += tp[j]*s[40 + ((q - 2*j - 1 + dm + 1) & dm)]; j += 1; );
+  q = (q + 1) & dm; s[40 + q] = b; s[1] = (q + 1) & dm;
+  acc;
+);
+
+// shaper with optional 2x/4x oversampling around it (os: 0 off, 1 x2, 2 x4)
+function sh_proc(sA, sB, x) local(a0, a1, b0, b1, b2, b3, c0, c1) (
+  os == 0 ? lutf(x) : os == 1 ? (
+    hb_up(sA, tpA, 24, 31, x); a0 = hy0; a1 = hy1;
+    hb_down(sA, tpA, 24, 63, lutf(a0), lutf(a1));
+  ) : (
+    hb_up(sA, tpA, 24, 31, x); a0 = hy0; a1 = hy1;
+    hb_up(sB, tpB, 8, 7, a0); b0 = hy0; b1 = hy1;
+    hb_up(sB, tpB, 8, 7, a1); b2 = hy0; b3 = hy1;
+    c0 = hb_down(sB, tpB, 8, 15, lutf(b0), lutf(b1));
+    c1 = hb_down(sB, tpB, 8, 15, lutf(b2), lutf(b3));
+    hb_down(sA, tpA, 24, 63, c0, c1);
+  );
+);
+
+// ---- gain computer: returns GR in dB (>= 0). C1 knee, family morphs quad -> smoothstep -> smootherstep
+function gcomp(x) local(d, u, u2, u3, u4, G) (
+  d = x - thr;
+  knw > 0.001 ? (
+    d <= -knw*0.5 ? 0 : d >= knw*0.5 ? d*cslope : (
+      u = (d + knw*0.5)/knw; u2 = u*u; u3 = u2*u; u4 = u2*u2;
+      G = kc0*u2*0.5 + kc1*(u3 - u4*0.5) + kc2*(u4*u2 - 3*u4*u + 2.5*u4);
+      cslope*knw*G;
+    );
+  ) : ( d > 0 ? d*cslope : 0; );
+);
+
+// ============================================================ UI widget kit (used by @gfx)
+// ---- parameter table
+function setp(n, mn, mx2, df, md, sn, st) (
+  pmin[n] = mn; pmax[n] = mx2; pdef[n] = df; pmode[n] = md; psnap[n] = sn; pstep[n] = st;
+);
+
+function sget(n) (
+  n==1 ? slider1 : n==2 ? slider2 : n==3 ? slider3 : n==4 ? slider4 : n==5 ? slider5 : n==6 ? slider6 :
+  n==7 ? slider7 : n==8 ? slider8 : n==9 ? slider9 : n==10 ? slider10 : n==11 ? slider11 : n==12 ? slider12 :
+  n==13 ? slider13 : n==14 ? slider14 : n==15 ? slider15 : n==16 ? slider16 : n==17 ? slider17 :
+  n==18 ? slider18 : n==19 ? slider19 : n==20 ? slider20 : n==21 ? slider21 : n==22 ? slider22 :
+  n==23 ? slider23 : slider24;
+);
+function sput(n, v) (
+  n==1 ? (slider1=v) : n==2 ? (slider2=v) : n==3 ? (slider3=v) : n==4 ? (slider4=v) : n==5 ? (slider5=v) :
+  n==6 ? (slider6=v) : n==7 ? (slider7=v) : n==8 ? (slider8=v) : n==9 ? (slider9=v) : n==10 ? (slider10=v) :
+  n==11 ? (slider11=v) : n==12 ? (slider12=v) : n==13 ? (slider13=v) : n==14 ? (slider14=v) :
+  n==15 ? (slider15=v) : n==16 ? (slider16=v) : n==17 ? (slider17=v) : n==18 ? (slider18=v) :
+  n==19 ? (slider19=v) : n==20 ? (slider20=v) : n==21 ? (slider21=v) : n==22 ? (slider22=v) :
+  n==23 ? (slider23=v) : (slider24=v);
+);
+function sset(n, v) (
+  sput(n, v);
+  sliderchange(2^(n-1));
+  slider_automate(2^(n-1));
+  dirty = 1;
+);
+function end_touch(n) ( slider_automate(2^(n-1), 1); );
+
+function n2t(n, v) local(mn, mx2, md, t) (
+  mn = pmin[n]; mx2 = pmax[n]; md = pmode[n];
+  t = md == 1 ? log(max(v, mn)/mn)/log(mx2/mn) :
+      md == 2 ? sqrt(max(v - mn, 0)/(mx2 - mn)) : (v - mn)/(mx2 - mn);
+  min(max(t, 0), 1);
+);
+function t2n(n, t) local(mn, mx2, md, v, sn, st) (
+  mn = pmin[n]; mx2 = pmax[n]; md = pmode[n]; sn = psnap[n]; st = pstep[n];
+  (sn & 1) && t < 0.03 ? ( t = 0; );
+  (sn & 2) && t > 0.97 ? ( t = 1; );
+  v = md == 1 ? mn*exp(t*log(mx2/mn)) : md == 2 ? mn + (mx2 - mn)*t*t : mn + (mx2 - mn)*t;
+  st > 0 ? ( v = floor(v/st + 0.5)*st; );
+  min(max(v, mn), mx2);
+);
+function commit(n, t) local(v) (
+  v = t2n(n, t);
+  v != sget(n) ? sset(n, v);
+);
+
+function hit(x, y, w, h) ( mx >= x && mx < x + w && my >= y && my < y + h );
+
+// ---- drawing primitives (logical -> device px)
+function setc(red) ( red ? gfx_set(1, 0, 0, 1) : gfx_set(1, 1, 1, 1); );
+function Rfill(x, y, w, h) ( gfx_rect(ox + x*S, oy + y*S, w*S, h*S); );
+function Rbox(x, y, w, h) ( Rfill(x, y, w, 1); Rfill(x, y + h - 1, w, 1); Rfill(x, y, 1, h); Rfill(x + w - 1, y, 1, h); );
+function Rtext(x, y, str) ( gfx_x = ox + x*S; gfx_y = oy + y*S; gfx_drawstr(str); );
+function Rtextc(x, y, w, str) local(tw, th2) (
+  gfx_measurestr(str, tw, th2);
+  gfx_x = ox + x*S + (w*S - tw)*0.5; gfx_y = oy + y*S; gfx_drawstr(str);
+);
+function Rline(x1, y1, x2, y2) local(k) (
+  k = 0;
+  loop(S, gfx_line(ox + x1*S + k, oy + y1*S, ox + x2*S + k, oy + y2*S, 0);
+          gfx_line(ox + x1*S, oy + y1*S + k, ox + x2*S, oy + y2*S + k, 0); k += 1; );
+);
+
+// ---- font: Fira Code, falls back to a monospace if the face is missing (detected by equal glyph widths)
+function font_try(i) (
+  i == 0 ? strcpy(#fname, "Fira Code") : i == 1 ? strcpy(#fname, "Menlo") :
+  i == 2 ? strcpy(#fname, "Consolas") : strcpy(#fname, "Courier New");
+);
+function pick_font() local(i, w1, w2, h1, ok) (
+  i = 0; ok = 0;
+  while (i < 4 && !ok) (
+    font_try(i);
+    gfx_setfont(2, #fname, 10*S);
+    gfx_measurestr("iiiiiiii", w1, h1); gfx_measurestr("WWWWWWWW", w2, h1);
+    w1 == w2 ? ( ok = 1; ) : ( i += 1; );
+  );
+  i >= 4 ? font_try(3);
+  gfx_setfont(1, #fname, 8*S);
+  gfx_setfont(2, #fname, 10*S);
+  gfx_setfont(3, #fname, 14*S);
+);
+
+// ---- formatting
+function fmt(n, v) (
+  n == 2 || n == 12 || n == 14 || n == 15 || n == 17 || n == 18 || n == 19 || n == 21 ? sprintf(#vs, "%.0f%%", v) :
+  n == 3 ? sprintf(#vs, "%+.0f%%", v) :
+  n == 4 || n == 16 ? ( v <= (n == 4 ? 20.5 : 15) ? strcpy(#vs, "OFF") : sprintf(#vs, "%.0fHz", v); ) :
+  n == 5 || n == 6 ? ( v >= 19900 ? strcpy(#vs, "OFF") : sprintf(#vs, "%.1fk", v*0.001); ) :
+  n == 8 ? sprintf(#vs, "%.1fdB", v) :
+  n == 9 ? ( v >= 19.9 ? strcpy(#vs, "INF") : sprintf(#vs, "%.1f:1", v); ) :
+  n == 10 ? ( v < 1 ? sprintf(#vs, "%.2fms", v) : sprintf(#vs, "%.1fms", v); ) :
+  n == 11 ? ( v >= 1990 ? strcpy(#vs, "AUTO") : v >= 1000 ? sprintf(#vs, "%.2fs", v*0.001) : sprintf(#vs, "%.0fms", v); ) :
+  n == 13 || n == 20 ? sprintf(#vs, "%.1fdB", v) :
+  n == 22 ? sprintf(#vs, "%+.1fdB", v) : sprintf(#vs, "%.1f", v);
+);
+
+// ---- interaction
+function begin_drag(n) local(now) (
+  now = time_precise();
+  last_clk_n == n && now - last_clk_t < 0.35 ? (
+    sset(n, pdef[n]); end_touch(n); act = 0; last_clk_n = 0;
+  ) : (
+    act = n; act_t = n2t(n, sget(n)); last_my = my; last_clk_n = n; last_clk_t = now;
+  );
+);
+function wheel_adj(n) local(t) (
+  t = n2t(n, sget(n)) + (wheel > 0 ? 1 : -1)*(shift ? 0.005 : 0.03);
+  commit(n, min(max(t, 0), 1)); end_touch(n);
+);
+
+// ---- widgets
+function cell(n, x, y, w, h, lbl) local(hv, t, v, isact) (
+  hv = hit(x, y, w, h);
+  hv && press && !act ? begin_drag(n);
+  hv && wheel != 0 ? wheel_adj(n);
+  v = sget(n); t = n2t(n, v); isact = act == n;
+  setc(isact); Rbox(x, y, w, h);
+  gfx_setfont(1); Rtext(x + 3, y + 3, lbl);
+  gfx_setfont(2); fmt(n, v); Rtextc(x, y + 13, w, #vs);
+  Rfill(x + 2, y + h - 4, max(1, floor(t*(w - 4))), 2);
+);
+
+function tag(x, y, w, h, str, lit) (
+  lit ? ( setc(1); Rfill(x, y, w, h); gfx_set(0, 0, 0, 1); ) : ( setc(0); Rbox(x, y, w, h); );
+  gfx_setfont(1); Rtextc(x, y + 2, w, str);
+  setc(0);
+);
+
+function selector(n, x, y, w, h, lbl) local(hv, sel, r) (
+  hv = hit(x, y, w, h);
+  sel = floor(sget(n) + 0.5);
+  hv && wheel != 0 ? ( sset(n, min(max(sel + (wheel > 0 ? -1 : 1), 0), 8)); end_touch(n); );
+  hv && press && !act ? (
+    gfx_x = ox + x*S; gfx_y = oy + (y + h)*S;
+    r = gfx_showmenu(#menu);
+    r > 0 ? ( sset(n, r - 1); end_touch(n); );
+    last_down = 0; press = 0;
+  );
+  setc(0); Rbox(x, y, w, h);
+  gfx_setfont(1); Rtext(x + 3, y + 3, lbl);
+  gfx_setfont(2);
+  sel == 0 ? Rtextc(x + 30, y + 1, w - 30, "TUBE") : sel == 1 ? Rtextc(x + 30, y + 1, w - 30, "SOFT") :
+  sel == 2 ? Rtextc(x + 30, y + 1, w - 30, "RATIONAL") : sel == 3 ? Rtextc(x + 30, y + 1, w - 30, "ATAN") :
+  sel == 4 ? Rtextc(x + 30, y + 1, w - 30, "HARD") : sel == 5 ? Rtextc(x + 30, y + 1, w - 30, "TRI FOLD") :
+  sel == 6 ? Rtextc(x + 30, y + 1, w - 30, "SINE FOLD") : sel == 7 ? Rtextc(x + 30, y + 1, w - 30, "CROSSOVER") :
+  Rtextc(x + 30, y + 1, w - 30, "CHEBY");
+);
+
+// 3-way segmented button. n==23 (gain match): Auto/Match states are red; Match click always (re)starts measuring.
+function seg3(n, x, y, w, h, a, b, c) local(i, sx, sw, sel, hv) (
+  sel = floor(sget(n) + 0.5); sw = floor(w/3); i = 0;
+  loop(3,
+    sx = x + i*sw;
+    hv = hit(sx, y, sw, h);
+    hv && press && !act ? (
+      sset(n, i); end_touch(n);
+      n == 23 && i == 2 ? ( match_req = 1; );
+    );
+    i == sel ? (
+      setc(n == 23 && i > 0 && !(i == 2 && meas && (floor(time_precise()*4) & 1))); Rfill(sx, y, sw, h);
+      gfx_set(0, 0, 0, 1);
+    ) : ( setc(0); Rbox(sx, y, sw, h); );
+    gfx_setfont(1);
+    i == 0 ? Rtextc(sx, y + 4, sw, a) : i == 1 ? Rtextc(sx, y + 4, sw, b) : Rtextc(sx, y + 4, sw, c);
+    i += 1;
+  );
+  setc(0);
+);
+
+function diff_box(x, y, w, h) (
+  setc(0); Rbox(x, y, w, h);
+  gfx_setfont(1); Rtext(x + 3, y + 3, "IN>OUT");
+  gfx_setfont(2); sprintf(#vs, "%+.1fdB", diff_db); Rtextc(x, y + 13, w, #vs);
+);
+
+function draw_meter(x, y, w, h) local(g, hp, i, ty) (
+  g = gr_pk; gr_pk = 0;
+  gr_disp = max(g, gr_disp*0.9);
+  now2 = time_precise();
+  g >= gr_hold ? ( gr_hold = g; gr_hold_t = now2; ) : ( now2 - gr_hold_t > 1 ? gr_hold = max(gr_hold - 0.4, 0); );
+  setc(0); Rbox(x, y, w, h);
+  setc(1); Rfill(x + 1, y + 1, w - 2, floor((h - 2)*min(gr_disp/24, 1)));
+  setc(0);
+  hp = y + 1 + floor((h - 3)*min(gr_hold/24, 1));
+  Rfill(x + 1, hp, w - 2, 1);
+  gfx_setfont(1);
+  i = 1;
+  loop(3,
+    ty = y + 1 + (h - 2)*(i*6/24);
+    Rfill(x + w - 4, ty, 3, 1);
+    sprintf(#vs, "%d", i*6); Rtext(x + 2, ty - 4, #vs);
+    i += 1;
+  );
+  sprintf(#vs, "GR %.1f", gr_disp); Rtext(x, y + h + 3, #vs);
+);
+
+function draw_plot(x, y, w, h) local(i, n, vx, vy, px, py, lx, ly) (
+  setc(0); Rbox(x, y, w, h);
+  i = 0; loop(floor(w/2), Rfill(x + i*2, y + floor(h/2), 1, 1); Rfill(x + floor(w/2), y + i*2, 1, 1); i += 1; );
+  n = 64; i = 0;
+  loop(n + 1,
+    vx = -1 + 2*i/n;
+    vy = sat_on ? lutf(vx*pre + bias) : vx;
+    vy = min(max(vy, -1), 1);
+    px = x + (vx + 1)*0.5*(w - 1); py = y + (1 - (vy + 1)*0.5)*(h - 1);
+    i > 0 ? Rline(lx, ly, px, py);
+    lx = px; ly = py; i += 1;
+  );
+);
+
+function draw_ccurve(x, y, w, h) local(i, n, xin, yout, px, py, lx, ly, tx) (
+  setc(0); Rbox(x, y, w, h);
+  i = 0; loop(floor(w/3), Rfill(x + i*3 + 1, y + h - 1 - floor((i*3)*(h - 1)/(w - 1)), 1, 1); i += 1; );   // 1:1 reference
+  n = 96; i = 0;
+  loop(n + 1,
+    xin = -48 + 48*i/n;
+    yout = xin - gcomp(xin);
+    px = x + (i/n)*(w - 1); py = y + (1 - (yout + 48)/48)*(h - 1);
+    i > 0 ? Rline(lx, ly, px, py);
+    lx = px; ly = py; i += 1;
+  );
+  tx = x + (thr + 48)/48*(w - 1);
+  Rfill(tx, y + h - 4, 1, 3);
+  gfx_setfont(1); Rtext(x + 3, y + 2, "TRANSFER dB");
+);
+
+// build halfband taps once
+mk_taps(tpA, 24, 8);
+mk_taps(tpB, 8, 6);
+
+// ---- state defaults
+last_shape = -1; last_os = -1; dirty = 1; sr_prev = 0; wp = 0;
+ims = oms = 1e-9; og = 1; atrim = 0; meas = 0; match_req = 0; prev_gmode = 0;
+prevL = prevR = 0; grfL = grfR = grsL = grsR = 0; rmL = rmR = 0;
+pk_env = 0; ms_env = 0; gavg = 0; dcxL = dcyL = dcxR = dcyR = 0;
+gr_blk = 0; gr_pk = 0; diff_db = 0; gate_open = 0; macc = 0; mt = 0;
+lat = 0; os = 0; sat_on = 0; thr = -18; knw = 6; cslope = 0.75; kc0 = 1; kc1 = 0; kc2 = 0;
+pre = 1; bias = 0; mix = 1; mk = 1; og_t = 1;
+
+@slider
+dirty = 1;
+
+@block
+// =========================================================== derived params
+match_req ? ( meas = 1; macc = 0; mt = 0; match_req = 0; );
+dirty || srate != sr_prev ? (
+  dirty = 0; sr_prev = srate;
+
+  // ---- SAT
+  slider1 != last_shape ? ( last_shape = slider1; build_lut(floor(slider1 + 0.5)); );
+  pre = exp(slider2*0.01*36*0.11512925);
+  bias = slider3*0.01;
+  sat_on = slider2 > 0 || slider3 != 0;
+  use_hp = slider4 > 20.5;  use_hp ? bq_hp(hpc, slider4, 0.70710678);
+  use_lp = slider5 < 19900; use_lp ? bq_lp(lpc, slider5, 0.70710678);
+  use_tone = slider6 < 19900; use_tone ? bq_lp(tnc, slider6, 0.70710678);
+  os = floor(slider7 + 0.5);
+  os != last_os ? ( last_os = os; memset(stAL, 0, 520); memset(resL, 0, 128); );
+  lat = os == 0 ? 0 : os == 1 ? 24 : 28;
+  pdc_delay = lat; pdc_bot_ch = 0; pdc_top_ch = 2;
+  dcR = 1 - 2*$pi*5/srate;
+
+  // ---- COMP
+  thr = slider8;
+  invR = slider9 >= 19.9 ? 0 : 1/slider9;
+  cslope = 1 - invR;
+  knw = slider13;
+  sh2 = slider14*0.02;
+  sh2 <= 1 ? ( kc0 = 1 - sh2; kc1 = sh2; kc2 = 0; ) : ( kc0 = 0; kc1 = 2 - sh2; kc2 = sh2 - 1; );
+  spd = pow(4, (slider12 - 50)/50);                       // 0.25x .. 4x, low = fast
+  a_att = 1 - exp(-1/(srate*max(slider10*0.001*spd, 1e-5)));
+  auto_rel = slider11 >= 1990;
+  a_rel = 1 - exp(-1/(srate*max(slider11*0.001*spd, 1e-5)));
+  a_relF = auto_rel ? 1 - exp(-1/(srate*0.04*spd)) : a_rel;
+  a_relS = 1 - exp(-1/(srate*0.6*spd));
+  rms_c = 1 - exp(-1/(srate*0.01));
+  pk_d = exp(-1/(srate*0.05));
+  ms_c = 1 - exp(-1/(srate*0.3));
+  avg_c = 1 - exp(-1/(srate*0.25));
+  det_m = slider15*0.01;
+  use_dhp = slider16 > 15; use_dhp ? bq_hp(dhc, slider16, 0.70710678);
+  link = slider17*0.01; link_full = slider17 >= 99.9;
+  fb = slider18*0.01;
+  gdist = slider19*0.01;
+  mk = exp(slider20*0.11512925);
+  mix = slider21*0.01;
+  gmode = floor(slider23 + 0.5);
+  gmode == 2 && prev_gmode != 2 ? ( meas = 1; macc = 0; mt = 0; );
+  gmode != 2 ? ( meas = 0; );
+  prev_gmode = gmode;
+  rmsg_c = 1 - exp(-1/(srate*0.5));
+  og_c = 1 - exp(-1/(srate*0.02));
+);
+
+// =========================================================== gain diff / auto / match
+gate_open = ims > 1e-6;
+gate_open ? ( diff_db = 4.3429448*log(max(oms, 1e-12)/max(ims, 1e-12)); );
+gmode == 1 && gate_open ? (
+  atrim += (min(max(-diff_db, -12), 12) - atrim)*(1 - exp(-samplesblock/(srate*1.5)));
+);
+meas && gate_open ? (
+  macc += diff_db*(samplesblock/srate); mt += samplesblock/srate;
+  mt >= 3 ? (
+    slider24 = min(max(-macc/mt, -12), 12); sliderchange(2^23);
+    meas = 0;
+  );
+);
+og_t = exp((slider22 + (gmode == 1 ? atrim : gmode == 2 ? slider24 : 0))*0.11512925);
+gr_pk = max(gr_pk, gr_blk); gr_blk = 0;
+
+@sample
+inL = spl0; inR = spl1;
+ims += ((inL*inL + inR*inR)*0.5 + 1e-30 - ims)*rmsg_c;
+
+wp = (wp + 1) & 63;
+dryL[wp] = inL; dryR[wp] = inR;
+rd = (wp - lat + 64) & 63;
+dlL = dryL[rd]; dlR = dryR[rd];
+
+// ------------------------------------------------------------ SAT
+sat_on ? (
+  bpL = inL; bpR = inR;
+  use_hp ? ( bpL = bq(hpsL, hpc, bpL); bpR = bq(hpsR, hpc, bpR); );
+  use_lp ? ( bpL = bq(lpsL, lpc, bpL); bpR = bq(lpsR, lpc, bpR); );
+  resL[wp] = inL - bpL; resR[wp] = inR - bpR;
+  shL = sh_proc(stAL, stBL, bpL*pre + bias);
+  shR = sh_proc(stAR, stBR, bpR*pre + bias);
+  // DC blocker after shaper (always on in this path)
+  yL = shL - dcxL + dcR*dcyL + 1e-30; dcxL = shL; dcyL = yL;
+  yR = shR - dcxR + dcR*dcyR + 1e-30; dcxR = shR; dcyR = yR;
+  use_tone ? ( yL = bq(tnsL, tnc, yL); yR = bq(tnsR, tnc, yR); );
+  cL = resL[rd] + yL; cR = resR[rd] + yR;
+) : (
+  resL[wp] = 0; resR[wp] = 0;
+  cL = dlL; cR = dlR;
+);
+
+// ------------------------------------------------------------ COMP
+xdL = cL + fb*(prevL - cL);
+xdR = cR + fb*(prevR - cR);
+use_dhp ? ( xdL = bq(dhsL, dhc, xdL); xdR = bq(dhsR, dhc, xdR); );
+aL = abs(xdL); aR = abs(xdR);
+rmL += (xdL*xdL + 1e-30 - rmL)*rms_c;
+rmR += (xdR*xdR + 1e-30 - rmR)*rms_c;
+det_m > 0 ? (
+  lvL = aL + det_m*(1.41421356*sqrt(rmL) - aL);
+  lvR = aR + det_m*(1.41421356*sqrt(rmR) - aR);
+) : ( lvL = aL; lvR = aR; );
+lmx = max(lvL, lvR);
+lvL += link*(lmx - lvL); lvR += link*(lmx - lvR);
+
+tgL = gcomp(8.6858896*log(max(lvL, 1e-6)));
+tgR = link_full ? tgL : gcomp(8.6858896*log(max(lvR, 1e-6)));
+
+tgL > grfL ? ( grfL += (tgL - grfL)*a_att; ) : ( grfL += (tgL - grfL)*a_relF; );
+tgR > grfR ? ( grfR += (tgR - grfR)*a_att; ) : ( grfR += (tgR - grfR)*a_relF; );
+grfL < 1e-9 ? ( grfL = 0; ); grfR < 1e-9 ? ( grfR = 0; );
+
+auto_rel ? (
+  tgL > grsL ? ( grsL += (tgL - grsL)*a_att; ) : ( grsL += (tgL - grsL)*a_relS; );
+  tgR > grsR ? ( grsR += (tgR - grsR)*a_att; ) : ( grsR += (tgR - grsR)*a_relS; );
+  grsL < 1e-9 ? ( grsL = 0; ); grsR < 1e-9 ? ( grsR = 0; );
+  pk_env = max(lmx, pk_env*pk_d);
+  ms_env += (lmx*lmx + 1e-30 - ms_env)*ms_c;
+  crest = pk_env/(sqrt(ms_env) + 1e-9);
+  cn = min(max((crest - 1.5)*0.2857, 0), 1);            // sine ~1.4 -> 0, sharp transients (>=5) -> 1
+  gavg += (max(grfL, grfR) - gavg)*avg_c;
+  wgt = 0.1 + 0.75*min(gavg*0.1111, 1)*(1 - cn);         // clamped 0.1 .. 0.85: deep+sustained -> slow
+  gL = grfL + wgt*(grsL - grfL);
+  gR = grfR + wgt*(grsR - grfR);
+) : ( gL = grfL; gR = grfR; );
+
+yL = cL*exp(-gL*0.11512925);
+yR = cR*exp(-gR*0.11512925);
+gdist > 0 ? (
+  ddL = gdist*min(gL*0.0833333, 1);
+  ddR = gdist*min(gR*0.0833333, 1);
+  yL += ddL*(yL/(1 + 0.5*abs(yL)) - yL);
+  yR += ddR*(yR/(1 + 0.5*abs(yR)) - yR);
+);
+prevL = yL; prevR = yR;                  // feedback tap: pre-makeup, previous sample
+
+// ------------------------------------------------------------ OUT
+wL = yL*mk; wR = yR*mk;
+oL = dlL + (wL - dlL)*mix;
+oR = dlR + (wR - dlR)*mix;
+oms += ((oL*oL + oR*oR)*0.5 + 1e-30 - oms)*rmsg_c;     // measured before out gain
+og += (og_t - og)*og_c;
+spl0 = oL*og; spl1 = oR*og;
+gr_blk = max(gr_blk, max(gL, gR));
+
+@gfx 560 240
+// ================================================================== UI
+gfx_clear = 0;
+
+// ---------- one-time setup
+ui_init == 0 ? (
+  ui_init = 1;
+  setp(2, 0, 100, 25, 0, 0, 0.5);
+  setp(3, -100, 100, 0, 0, 0, 1);
+  setp(4, 20, 2000, 20, 1, 1, 1);
+  setp(5, 1000, 20000, 20000, 1, 2, 10);
+  setp(6, 1000, 20000, 20000, 1, 2, 10);
+  setp(8, -40, 0, -18, 0, 0, 0.1);
+  setp(9, 1, 20, 4, 1, 2, 0.1);
+  setp(10, 0.05, 100, 10, 1, 0, 0.01);
+  setp(11, 5, 2000, 150, 1, 2, 1);
+  setp(12, 0, 100, 50, 0, 0, 1);
+  setp(13, 0, 24, 6, 0, 0, 0.1);
+  setp(14, 0, 100, 0, 0, 0, 1);
+  setp(15, 0, 100, 30, 0, 0, 1);
+  setp(16, 0, 400, 0, 2, 1, 1);
+  setp(17, 0, 100, 100, 0, 0, 1);
+  setp(18, 0, 100, 0, 0, 0, 1);
+  setp(19, 0, 100, 0, 0, 0, 1);
+  setp(20, 0, 24, 0, 0, 0, 0.1);
+  setp(21, 0, 100, 100, 0, 0, 1);
+  setp(22, -24, 12, 0, 0, 0, 0.1);
+  setp(1, 0, 8, 0, 0, 0, 1);
+  setp(7, 0, 2, 0, 0, 0, 1);
+  setp(23, 0, 2, 0, 0, 0, 1);
+  strcpy(#menu, "Tube|Soft|Rational|Atan|Hard|Tri Fold|Sine Fold|Crossover|Cheby");
+  gr_disp = 0; gr_hold = 0; gr_hold_t = 0; font_s = 0; act = 0;
+);
+
+// ---------- frame setup
+S = max(1, floor(min(gfx_w/560, gfx_h/240)));
+ox = floor((gfx_w - 560*S)/2); oy = floor((gfx_h - 240*S)/2);
+font_s != S ? ( font_s = S; pick_font(); );
+
+mx = (mouse_x - ox)/S; my = (mouse_y - oy)/S;
+down = mouse_cap & 1; press = down && !last_down; shift = mouse_cap & 8;
+last_down = down;
+wheel = mouse_wheel; mouse_wheel = 0;
+
+// drag update (single active widget)
+act ? (
+  down ? (
+    t_new = min(max(act_t + (last_my - my)*(shift ? 0.0008 : 0.006), 0), 1);
+    act_t = t_new;
+    commit(act, t_new);
+  ) : ( end_touch(act); act = 0; );
+);
+last_my = my;
+
+// ---------- header
+setc(0);
+gfx_setfont(3); Rtext(6, 2, "SATCOMP");
+gfx_setfont(1); Rtext(80, 6, "UPLINK TELEMETRY");
+tag(470, 3, 40, 12, "SIG", gate_open);
+tag(514, 3, 40, 12, "LOCK", gr_disp > 0.3);
+setc(0); Rfill(6, 18, 548, 1);
+
+gfx_setfont(1); setc(0);
+Rtext(6, 22, "SAT"); Rtext(196, 22, "COMP"); Rtext(398, 22, "OUT");
+
+// ---------- SAT column
+selector(1, 6, 34, 184, 14, "SHAPE");
+draw_plot(6, 52, 100, 100);
+cell(2, 110, 52, 38, 30, "DRIVE");
+cell(3, 152, 52, 38, 30, "BIAS");
+cell(4, 110, 86, 38, 30, "HP");
+cell(5, 152, 86, 38, 30, "LP");
+cell(6, 110, 120, 80, 30, "TONE");
+seg3(7, 6, 156, 184, 16, "OS OFF", "OS x2", "OS x4");
+
+// ---------- COMP column
+cell(8, 196, 34, 46, 30, "THRESH");
+cell(9, 246, 34, 46, 30, "RATIO");
+cell(10, 296, 34, 46, 30, "ATTACK");
+cell(11, 346, 34, 46, 30, "RELEASE");
+cell(13, 196, 68, 46, 30, "KNEE");
+cell(14, 246, 68, 46, 30, "K.SHAPE");
+cell(15, 296, 68, 46, 30, "DETECT");
+cell(16, 346, 68, 46, 30, "DET HP");
+cell(17, 196, 102, 46, 30, "LINK");
+cell(12, 246, 102, 46, 30, "SPEED");
+cell(18, 296, 102, 46, 30, "FF>FB");
+cell(19, 346, 102, 46, 30, "GR DIST");
+draw_ccurve(196, 138, 196, 96);
+
+// ---------- OUT column
+draw_meter(398, 34, 22, 116);
+cell(20, 424, 34, 62, 30, "MAKEUP");
+cell(21, 490, 34, 64, 30, "MIX");
+cell(22, 424, 68, 62, 30, "OUT GAIN");
+diff_box(490, 68, 64, 30);
+seg3(23, 424, 102, 130, 16, "MAN", "AUTO", "MATCH");
+gfx_setfont(1); setc(0);
+gmode == 1 ? sprintf(#s1, "TRIM %+.1f dB", atrim) : gmode == 2 ? (
+  meas ? sprintf(#s1, "MEASURING %.1f/3.0s", mt) : sprintf(#s1, "LOCKED %+.1f dB", slider24);
+) : sprintf(#s1, "TRIM ---");
+Rtext(424, 122, #s1);
+
