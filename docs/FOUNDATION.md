@@ -136,6 +136,11 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
   "(Trirat)" label needs Preferences > Plug-ins > VST > Clear cache / re-scan.
 
 ## Open / next
+- **Next session, idea 1: sidechain.** Add a second stereo input (nih-plug aux input) that feeds the detector, whole band,
+  with HP/LP filters to taper it. Needs: audio layout change (main 2in/2out + aux 2in), an engine detector source switch,
+  params (sidechain on, SC HP, SC LP) appended to `gen_params.py`, a UI home for them, and a listen/monitor option.
+- **Next session, idea 2: SatXComp**, a 3-band multiband compressor with the saturator. Likely a separate repo that forks
+  the `satcomp-dsp` crate, the egui canvas/UI toolkit, preset system and CI from here.
 - Owner heard a click while drawing/switching shapers and when the plug-in window regains focus. Fixed what is
   identifiable (table morph on shape/curve change, no allocation in `Curve::from_points` on the audio thread);
   **the focus-regain click is unconfirmed**: retest, and if it persists look at the UI/host param traffic on focus.
