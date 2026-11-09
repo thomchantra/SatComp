@@ -7,6 +7,7 @@ Refine tone with pre/post-compressor 3-band EQ, then dial in the desired gain in
 
 Double-click slider to reset parameter to its default value
 Left/Right-click top-left icon for more color ways
+Double-click top-left icon to switch between dark and light mode
 
 *insert attributions / Fira Code here*
 thomchantra

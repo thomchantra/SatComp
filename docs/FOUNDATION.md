@@ -28,8 +28,7 @@ scale exist only in the plug-in; the **Custom waveshaper** (shaper 14, pencil dr
 
 ## Colour schemes
 `docs/colorthemesV2.svg` (+ `.png`) is the design source (dark swatches on the left, light on the right, 20 rows); `docs/colorscheme.md`
-is its text export and `PALETTES` in `gui/canvas.rs` is `(name, dark, light)` generated from it (script not kept: parse the 51x51 swatch
-rects by y row, x=50/111/172 = dark BG/UI/accent, x=463/524/585 = light). Row names came from the owner's layer list; the second
+is its text export, now **edited by hand by the owner** (e.g. Sonar BG #000000) and the source of truth; `PALETTES` in `gui/canvas.rs` is `(name, dark, light)` generated from it by `tools/gen_palettes.py`. Row names came from the owner's layer list; the second
 "Magenta" row (purple #240132) is called **Midnight** here (its pre-0.5 name) to keep names unique. **Check with the owner.**
 Persisted as `palette-v2` (index into this table, default -1) + `light-mode` (bool). The legacy `palette` index (pre-0.5 table order) is
 migrated once in `ui::initial_palette` (old White = Mono light; old Bananas/Apricot/Berry/Matcha were light-BG schemes). Only append new schemes.
@@ -133,7 +132,8 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
   version is the only edit. Both crates are 0.5.0.
 - Clicking the title toggles the About page (`State.about`: 0 closed, 1 about, 2 changelog). It replaces the tab row, viz
   row and cells; the header, meter and right column stay live. Copy lives in `ABOUT_TEXT` / `CHANGELOG` (source text:
-  `docs/abouttextcopy.md`). Changelog entries: newest first, two short sentences at most, no em dashes.
+  `docs/abouttextcopy.md`). Changelog entries: newest first, one short sentence per bullet, no em dashes. About and Changelog text live in a row-based scroll box (`scroll_rows`: wheel = 3 rows, draggable thumb on the right, rows culled whole since the canvas has no clipping); scroll position resets on tab change.
+- `tools/gen_palettes.py` (run from `rust/`) rewrites `PALETTES` from `docs/colorscheme.md`; edit the md, then run it.
 - The signal-flow diagram is illustrative: dot size follows the live output level, and pre-compressor segments add the
   gain reduction back. There is no per-stage metering in the engine.
 - Preset marker: the name is shown as `*NAME*` when any stored parameter or the custom curve differs from the loaded

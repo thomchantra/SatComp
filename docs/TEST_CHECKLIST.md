@@ -35,6 +35,7 @@ Install: copy/symlink `SatComp.jsfx` into `Effects/`, insert as `JS: SatComp`. *
 ## v0.3 additions (all untested)
 28. **Load**: file compiles, window opens, header shows logo + `SATCOMP 0.3`; old project loads with EQ neutral (no filtering, EQ button square outline). Clicking the logo toggles palette; palette persists.
 29a. **Colour / light mode**: double-click the icon toggles light/dark of the same scheme; single click (after a short pause) cycles schemes; right-click menu has `MODE: DARK/LIGHT` on top; reopening the window keeps both.
+29c. **About / Changelog**: wheel scrolls (3 rows per notch), thumb on the right drags, tab switch resets to top; light mode inverts the icon (UI-coloured plate, BG-coloured glyph).
 29b. **Sidechain** (0.5): SIDECHAIN toggle, SC row under the comp plot, KEY MIX in place of FF>FB, SOLO.
 29. **Tab row**: OFF/x2/x4 buttons (no label since v0.5) set OS; DELTA | BYPASS behave as before; GR meter opens at 3 dB range; header meter spans the column.
 30. **GAIN MATCH**: click -> blinks ~3 s -> red LOCK; click again -> off; click mid-measure cancels. IN>OUT readout sane; Auto gone.

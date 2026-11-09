@@ -26,6 +26,13 @@ pub struct Meta {
     pub step: f32,
 }
 
+/// One line of the scrolling About / Changelog text. Head = version title (+ rule), takes the next Pad row too.
+enum Row {
+    Text(f32, String),
+    Head(String),
+    Pad,
+}
+
 enum MenuKind {
     Shape,
     Palette,
@@ -69,6 +76,8 @@ pub struct State {
     touched: [bool; 68],
     pub pal: usize,
     pub light: bool,
+    /// first visible row of the About / Changelog text box
+    about_scroll: usize,
     /// time of a logo click waiting out the double-click window (then it cycles the colour scheme)
     logo_pend: f64,
     // interaction
@@ -254,6 +263,7 @@ impl State {
             touched: [false; 68],
             pal,
             light,
+            about_scroll: 0,
             logo_pend: -1.0,
             act: 0,
             act_t: 0.0,
@@ -368,12 +378,12 @@ const ABOUT_TEXT: &[&[&str]] = &[
     &["A waveshaping saturator with compressor and 2-stage 3-band EQ", "Made with bricking intentions (:"],
     &["Use saturator module to give compressor more spice to squash.", "Left-click top-right pencil icon to enter custom draw mode."],
     &["Refine tone with pre/post-compressor 3-band EQ, then dial in the desired gain in the output module."],
-    &["Double-click slider to reset parameter to its default value", "Left/Right-click top-left icon for more color ways"],
+    &["Double-click slider to reset parameter to its default value", "Left/Right-click top-left icon for more color ways", "Double-click top-left icon to switch between dark and light mode"],
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
-    ("v0.5", &["Added a sidechain input with key gain, HP, LP, a solo monitor and KEY MIX.", "Every colour scheme now has a light mode: double-click the icon or use the scheme menu. LP filters reach down to 200 Hz."]),
+    ("v0.5", &["Added a sidechain input with key gain, HP, LP, a solo monitor and KEY MIX.", "Every colour scheme now has a light mode: double-click the icon or use the scheme menu.", "LP filters now reach down to 200 Hz."]),
     ("v0.4.1", &["Fixed the PK readout and peak reset after reopening the window."]),
     ("v0.4", &["Rebuilt as VST3 and CLAP with presets and window resize.", "Added a custom waveshaper, 20 colour schemes and this page."]),
     ("v0.3", &["Added two 3-band EQ stages with tilt and a spectrum view.", "Added lookahead and a GAIN MATCH button."]),
@@ -833,8 +843,14 @@ impl<'a> Gui<'a> {
         }
         // plug-in icon in a square box: fill = BG, stroke = UI (so light mode inverts it with the scheme)
         self.setc(false);
-        self.cv.boxr(x - 3.0, y - 3.0, 27.0, 27.0);
-        self.setc(false);
+        if self.light {
+            // light mode inverts the icon: UI-coloured plate, BG-coloured glyph
+            self.cv.fill(x - 3.0, y - 3.0, 27.0, 27.0);
+            self.cv.setbg();
+        } else {
+            self.cv.boxr(x - 3.0, y - 3.0, 27.0, 27.0);
+            self.setc(false);
+        }
         self.cv.boxr(x + 6.0, y + 6.0, 9.0, 9.0);
         let l = |c: &Canvas, a: f32, b: f32, cc: f32, d: f32| c.line(x + a, y + b, x + cc, y + d);
         l(&self.cv, 12.5, 0.5, 20.5, 0.5);
@@ -2152,45 +2168,93 @@ impl<'a> Gui<'a> {
         for (x, w, l, id) in [(10.0, 172.0, "ABOUT", 1u8), (182.0, 172.0, "CHANGELOG", 2u8)] {
             if self.btn(x, 34.0, w, 16.0, l, (self.about == id) as u8) {
                 self.about = id;
+                self.about_scroll = 0;
             }
         }
         if self.btn(356.0, 34.0, 62.0, 16.0, "X CLOSE", 0) {
             self.about = 0;
+            self.about_scroll = 0;
         }
         self.setc(false);
         self.cv.set_font(1);
         if self.about == 2 {
             self.cv.boxr(10.0, 56.0, 408.0, 266.0);
-            let mut y = 64.0;
+            let mut rows = Vec::new();
             for (ver, lines) in CHANGELOG {
-                self.cv.text(18.0, y, ver);
-                self.cv.fill(18.0, y + 13.0, 392.0, 1.0);
-                y += 22.0;
+                rows.push(Row::Head(ver.to_string()));
+                rows.push(Row::Pad);
                 for l in *lines {
-                    for (i, t) in self.wrap(l, 380.0).iter().enumerate() {
-                        self.cv.text(if i == 0 { 18.0 } else { 28.0 }, y, &if i == 0 { format!("- {t}") } else { t.clone() });
-                        y += 11.0;
+                    for (i, t) in self.wrap(l, 378.0).into_iter().enumerate() {
+                        rows.push(Row::Text(if i == 0 { 0.0 } else { 10.0 }, if i == 0 { format!("- {t}") } else { t }));
                     }
                 }
-                y += 10.0;
+                rows.push(Row::Pad);
             }
+            self.scroll_rows(10.0, 56.0, 408.0, 266.0, &rows);
             return;
         }
         self.draw_flow(10.0, 56.0, 408.0, 114.0, byp);
         self.setc(false);
         self.cv.boxr(10.0, 176.0, 408.0, 146.0);
-        let mut y = 183.0;
+        let mut rows = Vec::new();
         for para in ABOUT_TEXT {
             for l in *para {
-                for t in self.wrap(l, 396.0) {
-                    self.cv.text(16.0, y, &t);
-                    y += 11.0;
+                for t in self.wrap(l, 378.0) {
+                    rows.push(Row::Text(0.0, t));
                 }
             }
-            y += 5.0;
+            rows.push(Row::Pad);
         }
+        self.scroll_rows(10.0, 176.0, 408.0, 129.0, &rows);
+        self.setc(false);
         self.cv.text(16.0, 322.0 - 17.0, "Font: Fira Code (SIL OFL 1.1)");
         self.cv.textr(10.0, 322.0 - 17.0, 408.0 - 6.0, "thomchantra");
+    }
+
+    /// Text rows (11 units each) in a box whose frame the caller has drawn. Mouse wheel scrolls 3 rows per notch; when the
+    /// text overflows a thumb on the right edge shows the position and can be dragged. Rows are culled whole (no clipping).
+    fn scroll_rows(&mut self, x: f32, y: f32, w: f32, h: f32, rows: &[Row]) {
+        let vis = (((h - 10.0) / 11.0).floor() as usize).max(1);
+        let max = rows.len().saturating_sub(vis);
+        if self.hit(x, y, w, h) && self.wheel != 0 {
+            self.about_scroll = (self.about_scroll as i32 - self.wheel * 3).clamp(0, max as i32) as usize;
+        }
+        let (tx, ty, th) = (x + w - 8.0, y + 4.0, h - 8.0);
+        let thumb = (th * vis as f32 / rows.len().max(1) as f32).floor().max(14.0).min(th);
+        if max > 0 {
+            if self.hit(tx - 3.0, ty, 10.0, th) && self.press && self.act == 0 {
+                self.act = 140;
+                self.vt1 = 0;
+                self.vt2 = 0;
+                self.press = false;
+            }
+            if self.act == 140 && self.down {
+                let f = ((self.my - ty - thumb * 0.5) / (th - thumb).max(1.0)).clamp(0.0, 1.0);
+                self.about_scroll = (f * max as f32 + 0.5).floor() as usize;
+            }
+        }
+        self.about_scroll = self.about_scroll.min(max);
+        self.setc(false);
+        for (i, r) in rows.iter().skip(self.about_scroll).take(vis).enumerate() {
+            let yy = y + 7.0 + i as f32 * 11.0;
+            match r {
+                Row::Text(ind, t) => self.cv.text(x + 8.0 + ind, yy, t),
+                Row::Head(t) => {
+                    self.cv.text(x + 8.0, yy, t);
+                    if i + 1 < vis {
+                        self.cv.fill(x + 8.0, yy + 13.0, w - 16.0 - if max > 0 { 8.0 } else { 0.0 }, 1.0);
+                    }
+                }
+                Row::Pad => {}
+            }
+        }
+        if max > 0 {
+            self.cv.fill(tx + 3.0, ty, 1.0, th); // track
+            let top = ty + (th - thumb) * self.about_scroll as f32 / max as f32;
+            self.setc(self.act == 140);
+            self.cv.fill(tx + 1.0, top.floor(), 5.0, thumb);
+            self.setc(false);
+        }
     }
 
     /// Signal-flow diagram: SAT > PRE EQ > COMP > MIX (dry path) > POST EQ > OUT. Dots move along the path; their size
@@ -2370,6 +2434,7 @@ impl<'a> Gui<'a> {
         let tw = self.cv.text_w(&title);
         if self.hit(42.0, 5.0, tw + 4.0, 21.0) && self.press && self.act == 0 {
             self.about = if self.about == 0 { 1 } else { 0 };
+            self.about_scroll = 0;
             self.press = false;
         }
         self.cv.text(44.0, 12.0, &title);
