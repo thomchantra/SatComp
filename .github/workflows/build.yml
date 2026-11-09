@@ -65,6 +65,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -72,4 +73,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*.zip
-          generate_release_notes: true
+          # notes come from docs/releases/<tag>.md (falls back to generated notes when there is no file)
+          body_path: ${{ hashFiles(format('docs/releases/{0}.md', github.ref_name)) != '' && format('docs/releases/{0}.md', github.ref_name) || '' }}
+          generate_release_notes: ${{ !hashFiles(format('docs/releases/{0}.md', github.ref_name)) }}

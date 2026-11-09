@@ -1,0 +1,29 @@
+name: release-notes
+
+# Applies docs/releases/<tag>.md as the description of the matching GitHub release (when that release exists).
+on:
+  push:
+    branches: [main]
+    paths: ["docs/releases/*.md"]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Edit releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in docs/releases/v*.md; do
+            tag=$(basename "$f" .md)
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release edit "$tag" --notes-file "$f"
+              echo "updated $tag"
+            else
+              echo "no release for $tag yet"
+            fi
+          done
