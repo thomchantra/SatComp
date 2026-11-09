@@ -2,9 +2,9 @@
 
 Saturator + compressor + EQ with a black/white/red monospace UI.
 
-**Status:** early. The JSFX (`SatComp.jsfx`) is feature-complete (v0.3). A Rust VST3/CLAP port is in progress under `rust/` and currently only passes audio through with an Out Gain stub.
+**Status:** early. The **Rust VST3/CLAP plug-in (`rust/`) is the production build**: full saturator + compressor + EQ, presets, custom waveshaper, 19 colour schemes. `SatComp.jsfx` is the archival in-house prototype (feature-frozen at v0.3, kept for reference and A/B; new features land in the Rust build only).
 
-## Install (JSFX, REAPER)
+## Install (JSFX, archival)
 Copy `SatComp.jsfx` into REAPER's `Effects/` folder (Options → Show REAPER resource path).
 
 ## Build (VST3 / CLAP)

@@ -1,4 +1,4 @@
-> **Start with `docs/FOUNDATION.md`** (workflow JSFX -> Rust, consolidated gotchas, commands). This file keeps the JSFX-era decisions and history.
+> **Start with `docs/FOUNDATION.md`** (current workflow, gotchas, commands). This file is the JSFX-era history: the JSFX is now archival (frozen at v0.3) and the Rust build is production.
 
 # SatComp — handoff notes (for the next session / agent)
 

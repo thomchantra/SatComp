@@ -3,29 +3,32 @@
 Read this first. `HANDOFF.md` has the JSFX-era design decisions and history, `PARAMETERS.md` is the parameter
 reference (the spec for both implementations), `TEST_CHECKLIST.md` is the manual test list.
 
-## The loop: prototype in JSFX, ship as VST3/CLAP
+## Status of the two builds (decided 2026-11-09)
 
-The JSFX is the **sketchbook** (fast to change, hot reload in REAPER). The Rust plug-in is **production**.
-New ideas start in the JSFX; once the owner signs one off it is ported, never the other way round.
+**The Rust VST3/CLAP plug-in is the production build and the only one that gets new features.**
+`SatComp.jsfx` is the **archival in-house prototype**: frozen at v0.3, kept as the reference for the DSP port and for
+A/B and null tests. Do not add features to it and do not edit it unless the owner asks (e.g. to fix a reference bug).
+This replaces the earlier "prototype in JSFX first, then port" loop; the steps below still describe how a parameter
+or UI element is added, minus the JSFX step.
 
-1. **Prototype in `SatComp.jsfx`.** Append new sliders at the end (keeps automation mapping), keep slider-dispatch
-   chains short, run the case-insensitive-identifier check (see JSFX gotchas).
-2. **Write it down in `PARAMETERS.md`** (what the code does today, AUDIT flags for anything odd). This is the port spec.
-3. **Port the DSP** into `rust/satcomp-dsp` (pure, f64, no allocation in `tick`). Add unit tests with the port,
-   not later. Keep the JSFX variable names where practical so the two read side by side.
-4. **Add the parameter**: a row in `rust/tools/gen_params.py` (slider number, id, range, default) and the field in
+1. **Spec it** in `PARAMETERS.md` (what it does, AUDIT flags for anything odd).
+2. **DSP** in `rust/satcomp-dsp` (pure, f64, no allocation or locks in the audio path). Unit tests with the change.
+3. **Add the parameter**: a row in `rust/tools/gen_params.py` (slider number, id, range, default) and the field in
    `satcomp_dsp::Params`; map it in the generator's `to_dsp`. Run `python3 tools/gen_params.py` from `rust/`.
    Ids are permanent once released; slider numbers are the UI's addressing scheme (`sget(n)`).
-5. **Port the UI** in `rust/satcomp-plugin/src/gui/ui.rs`: `State::new` meta table (mode/snap/step = the JSFX `setp`),
-   `fmt()` for the readout, then the widget in `frame()`. Same logical 560x336 grid as the JSFX.
-6. **Validate**: `cargo test`, `cargo xtask bundle satcomp --release`, pluginval (below), then A/B against the JSFX
-   in REAPER (load both on the same track, same settings). Nothing counts as verified until the owner has done that.
-7. **Bug found in the VST first?** Fix it in the JSFX too if the JSFX is still the prototype of record, and note the
-   divergence below.
+4. **UI** in `rust/satcomp-plugin/src/gui/ui.rs`: `State::new` meta table (mode/snap/step), `fmt()` for the readout,
+   then the widget in `frame()`. Same logical 560x336 grid.
+5. **Validate**: `cargo test`, `cargo xtask bundle satcomp --release`, pluginval (below), then the owner tests in REAPER.
+   Nothing counts as verified until they have.
+6. **A bug that exists in both builds?** Fix it in Rust; mention the JSFX still has it unless asked to touch it.
 
-Known intentional divergences (Rust vs JSFX): internal smoothing on Drive / Bias / Makeup / Mix / Sat Mix
+Known intentional divergences (Rust vs the archival JSFX): internal smoothing on Drive / Bias / Makeup / Mix / Sat Mix
 (`Engine.smoothing`, set false for null tests); Gain Match is on/off (Auto is retired); presets and the window
 scale exist only in the plug-in; the **Custom waveshaper** (shaper 14, pencil draw view, `Curve` in `satcomp-dsp/src/shapers.rs`) is Rust-only, not in the JSFX; the sat level-match result is written by the UI thread (audio thread cannot set params).
+
+## Colour schemes
+`docs/colorscheme.md` is the source; `PALETTES` in `gui/canvas.rs` is generated from it in file order (19 schemes).
+The index is persisted in project state, so only append (Bananas replaced Midnight at index 9 on 2026-11-09, pre-release).
 
 ## Git convention
 - **Commit as you go, in small layers** so `git diff`/`git log -p` reads cleanly: one concern per commit, typically
@@ -112,6 +115,9 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 - Not covered by tests: the mouse interaction (verified by screenshot only until tried in REAPER).
 
 ## Open / next
+- Owner heard a click while drawing/switching shapers and when the plug-in window regains focus. Fixed what is
+  identifiable (table morph on shape/curve change, no allocation in `Curve::from_points` on the audio thread);
+  **the focus-regain click is unconfirmed**: retest, and if it persists look at the UI/host param traffic on focus.
 - Null test against JSFX renders (REAPER offline render of sweep / noise / drum loop at fixed settings, compare with
   `smoothing = false`).
 - Owner supplies hand-tuned presets for `rust/satcomp-plugin/presets/`.
