@@ -28,7 +28,7 @@ scale exist only in the plug-in; the **Custom waveshaper** (shaper 14, pencil dr
 
 ## Colour schemes
 `docs/colorscheme.md` is the source; `PALETTES` in `gui/canvas.rs` is generated from it in file order (20 schemes).
-The index is persisted in project state, so only append (Bananas replaced Midnight at index 9 on 2026-11-09, pre-release; Midnight was re-added at the end, index 19).
+The index is persisted in project state, so only append (Bananas replaced Midnight at index 9 on 2026-11-09, pre-release; Midnight was then restored by the owner at index 9, Bananas moved to 10).
 
 ## Git convention
 - **Commit as you go, in small layers** so `git diff`/`git log -p` reads cleanly: one concern per commit, typically
