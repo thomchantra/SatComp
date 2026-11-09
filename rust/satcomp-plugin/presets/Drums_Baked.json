@@ -1,0 +1,86 @@
+{
+  "format": "satcomp-preset",
+  "version": 1,
+  "name": "Drums_Baked",
+  "params": {
+    "attack": 21.72,
+    "bias": 0.0,
+    "det_hp": 0.0,
+    "detector": 30.000002,
+    "drive": 40.5,
+    "eq_module_bypass": 0.0,
+    "eq_post_bypass": 0.0,
+    "eq_pre_bypass": 0.0,
+    "ff_fb": 0.0,
+    "gr_dist": 0.0,
+    "knee": 0.0,
+    "knee_shape": 0.0,
+    "lookahead": 0.0,
+    "makeup": 0.0,
+    "mix": 100.0,
+    "os": 0.0,
+    "out_gain": 0.0,
+    "post_b1_freq": 80.0,
+    "post_b1_gain": 0.0,
+    "post_b1_q": 0.50000006,
+    "post_b1_type": 0.0,
+    "post_b2_freq": 200.0,
+    "post_b2_gain": 0.0,
+    "post_b2_q": 0.50000006,
+    "post_b2_type": 0.0,
+    "post_b3_freq": 6000.0,
+    "post_b3_gain": 0.0,
+    "post_b3_q": 0.50000006,
+    "post_b3_type": 0.0,
+    "post_out_gain": 0.0,
+    "post_pivot": 600.0,
+    "post_tilt": 0.0,
+    "pre_b1_freq": 80.0,
+    "pre_b1_gain": 0.0,
+    "pre_b1_q": 0.50000006,
+    "pre_b1_type": 0.0,
+    "pre_b2_freq": 200.0,
+    "pre_b2_gain": 0.0,
+    "pre_b2_q": 0.50000006,
+    "pre_b2_type": 0.0,
+    "pre_b3_freq": 6000.0,
+    "pre_b3_gain": 0.0,
+    "pre_b3_q": 0.50000006,
+    "pre_b3_type": 0.0,
+    "pre_out_gain": 0.0,
+    "pre_pivot": 600.0,
+    "pre_tilt": 0.0,
+    "ratio": 4.0,
+    "release": 26.0,
+    "sat_hp": 34.0,
+    "sat_lp": 13120.0,
+    "sat_mix": 95.0,
+    "sat_out": -5.799999,
+    "shape": 5.0,
+    "speed": 50.0,
+    "thresh": -17.0,
+    "tone": 20000.0
+  },
+  "curve": [
+    [
+      -1.0,
+      -1.0
+    ],
+    [
+      -0.7730856,
+      -0.38604796
+    ],
+    [
+      -0.1739865,
+      -0.5899621
+    ],
+    [
+      0.16998863,
+      0.5805556
+    ],
+    [
+      1.0,
+      1.0
+    ]
+  ]
+}

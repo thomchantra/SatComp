@@ -162,6 +162,17 @@ mod tests {
     }
 
     #[test]
+    fn factory_bank_has_the_drum_presets() {
+        let f = factory();
+        for n in ["Drums_Baked", "Drums_Bricked", "Drums_Cooked", "Drums_Cruncher", "Drums_Thicc", "Drums_Tubed"] {
+            assert!(f.iter().any(|p| p.name == n), "missing factory preset {n}");
+        }
+        // Cruncher uses the Custom shaper and ships its curve
+        let c = f.iter().find(|p| p.name == "Drums_Cruncher").unwrap();
+        assert!(c.curve.len() >= 2);
+    }
+
+    #[test]
     fn factory_starts_with_init() {
         assert_eq!(factory()[0].name, "INIT");
     }

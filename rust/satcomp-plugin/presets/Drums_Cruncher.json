@@ -1,0 +1,86 @@
+{
+  "format": "satcomp-preset",
+  "version": 1,
+  "name": "Drums_Cruncher",
+  "params": {
+    "attack": 13.580001,
+    "bias": 0.0,
+    "det_hp": 0.0,
+    "detector": 30.000002,
+    "drive": 25.0,
+    "eq_module_bypass": 0.0,
+    "eq_post_bypass": 0.0,
+    "eq_pre_bypass": 0.0,
+    "ff_fb": 0.0,
+    "gr_dist": 0.0,
+    "knee": 0.0,
+    "knee_shape": 0.0,
+    "lookahead": 0.0,
+    "makeup": 0.0,
+    "mix": 100.0,
+    "os": 0.0,
+    "out_gain": 0.0,
+    "post_b1_freq": 80.0,
+    "post_b1_gain": 0.0,
+    "post_b1_q": 0.50000006,
+    "post_b1_type": 0.0,
+    "post_b2_freq": 200.0,
+    "post_b2_gain": 0.0,
+    "post_b2_q": 0.50000006,
+    "post_b2_type": 0.0,
+    "post_b3_freq": 6000.0,
+    "post_b3_gain": 0.0,
+    "post_b3_q": 0.50000006,
+    "post_b3_type": 0.0,
+    "post_out_gain": 0.0,
+    "post_pivot": 600.0,
+    "post_tilt": 0.0,
+    "pre_b1_freq": 129.0,
+    "pre_b1_gain": 1.2999992,
+    "pre_b1_q": 0.50000006,
+    "pre_b1_type": 0.0,
+    "pre_b2_freq": 272.0,
+    "pre_b2_gain": -3.0,
+    "pre_b2_q": 0.50000006,
+    "pre_b2_type": 0.0,
+    "pre_b3_freq": 2135.0,
+    "pre_b3_gain": 3.5,
+    "pre_b3_q": 0.50000006,
+    "pre_b3_type": 0.0,
+    "pre_out_gain": 0.0,
+    "pre_pivot": 600.0,
+    "pre_tilt": 0.0,
+    "ratio": 6.0,
+    "release": 10.0,
+    "sat_hp": 20.0,
+    "sat_lp": 9570.0,
+    "sat_mix": 63.0,
+    "sat_out": -2.6000004,
+    "shape": 14.0,
+    "speed": 50.0,
+    "thresh": -17.1,
+    "tone": 20000.0
+  },
+  "curve": [
+    [
+      -1.0,
+      -1.0
+    ],
+    [
+      -0.7730856,
+      -0.38604796
+    ],
+    [
+      -0.1739865,
+      -0.5899621
+    ],
+    [
+      0.16998863,
+      0.5805556
+    ],
+    [
+      1.0,
+      1.0
+    ]
+  ]
+}
