@@ -114,6 +114,19 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
   `click_set` and expect the new value (the draw view's auto-exit waits until it has seen shape 14).
 - Not covered by tests: the mouse interaction (verified by screenshot only until tried in REAPER).
 
+## Header, About page, preset marker (v0.4)
+- Version: the header and About page read `CARGO_PKG_VERSION` (`version_short()` in `gui/ui.rs`), so bumping the crate
+  version is the only edit. Both crates are 0.4.0.
+- Clicking the title toggles the About page (`State.about`: 0 closed, 1 about, 2 changelog). It replaces the tab row, viz
+  row and cells; the header, meter and right column stay live. Copy lives in `ABOUT_TEXT` / `CHANGELOG` (source text:
+  `docs/abouttextcopy.md`). Changelog entries: newest first, two short sentences at most, no em dashes.
+- The signal-flow diagram is illustrative: dot size follows the live output level, and pre-compressor segments add the
+  gain reduction back. There is no per-stage metering in the engine.
+- Preset marker: the name is shown as `*NAME*` when any stored parameter or the custom curve differs from the loaded
+  preset (`is_modified`, cached by name, 0.6 s settle after a load because host writes land late).
+- VST3 vendor string is `thomchantra` (`lib.rs` `VENDOR`). REAPER caches the vendor from the first scan, so an older
+  "(Trirat)" label needs Preferences > Plug-ins > VST > Clear cache / re-scan.
+
 ## Open / next
 - Owner heard a click while drawing/switching shapers and when the plug-in window regains focus. Fixed what is
   identifiable (table morph on shape/curve change, no allocation in `Curve::from_points` on the audio thread);
@@ -122,4 +135,4 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
   `smoothing = false`).
 - Owner supplies hand-tuned presets for `rust/satcomp-plugin/presets/`.
 - **Resize grip is still broken** (drag causes a stutter/scaling loop; two fix attempts, last = `80cd756`). Use the size dropdown (right-click grip). Revisit: commit-on-release with a ghost outline is the fallback design. File dialogs still need an owner test in REAPER. `clap-validator`, GitHub repo + CI (mac + Windows), signing/notarization.
-- Not done: unsaved-changes marker, preset rename/delete, AU via clap-wrapper, `desc:`/version in the title.
+- Not done: preset rename/delete, AU via clap-wrapper.
