@@ -61,6 +61,7 @@ scheme menu (right-click the icon). Not verified in REAPER (clicks go through th
 
 ```
 cargo test                                         # DSP + preset tests
+cargo run --release -p satcomp-dsp --example bench   # DSP CPU per config (0.5.1: all under 1% of one core at 48 kHz)
 cargo xtask bundle satcomp --release               # target/bundled/satcomp.vst3 + .clap
 cargo xtask bundle-universal satcomp --release     # macOS arm64 + x86_64 (needs both rustup targets)
 /Applications/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate target/bundled/satcomp.vst3

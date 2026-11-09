@@ -323,14 +323,26 @@ impl SatCompParams {
         Curve::from_points(&self.custom_curve.lock())
     }
 
-    /// Snapshot for the DSP engine.
+    /// Snapshot for the DSP engine (UI side: may wait briefly for the curve lock).
     pub fn to_dsp(&self) -> satcomp_dsp::Params {
+        self.to_dsp_with(self.curve_snapshot())
+    }
+
+    /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.
+    pub fn to_dsp_rt(&self, last: &mut satcomp_dsp::shapers::Curve) -> satcomp_dsp::Params {
+        if let Some(g) = self.custom_curve.try_lock() {
+            *last = satcomp_dsp::shapers::Curve::from_points(&g);
+        }
+        self.to_dsp_with(*last)
+    }
+
+    fn to_dsp_with(&self, curve: satcomp_dsp::shapers::Curve) -> satcomp_dsp::Params {
         let stage = |bands: [(&IntParam, &FloatParam, &FloatParam, &FloatParam); 3], tilt: &FloatParam, pivot: &FloatParam, og: &FloatParam| EqStageParams {
             bands: [0, 1, 2].map(|i| EqBandParams { ty: bands[i].0.value() as f64, freq: bands[i].1.value() as f64, gain: bands[i].2.value() as f64, q: bands[i].3.value() as f64 }),
             tilt: tilt.value() as f64, pivot: pivot.value() as f64, out_gain: og.value() as f64,
         };
         satcomp_dsp::Params {
-            shape: self.shape.value(), curve: self.curve_snapshot(), drive: self.drive.value() as f64, bias: self.bias.value() as f64,
+            shape: self.shape.value(), curve, drive: self.drive.value() as f64, bias: self.bias.value() as f64,
             sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64, os: self.os.value(),
             thresh: self.thresh.value() as f64, ratio: self.ratio.value() as f64, attack: self.attack.value() as f64,
             release: self.release.value() as f64, speed: self.speed.value() as f64, knee: self.knee.value() as f64,
