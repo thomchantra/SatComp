@@ -72,6 +72,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (64, "sc_gain", -24.0, 24.0, 0.0),
     (65, "sc_hp", 20.0, 2000.0, 20.0),
     (66, "sc_lp", 200.0, 20000.0, 20000.0),
+    (67, "sc_mix", 0.0, 100.0, 100.0),
 ];
 
 #[derive(Params)]
@@ -216,6 +217,8 @@ pub struct SatCompParams {
     pub sc_hp: FloatParam,
     #[id = "sc_lp"]
     pub sc_lp: FloatParam,
+    #[id = "sc_mix"]
+    pub sc_mix: FloatParam,
 }
 
 impl Default for SatCompParams {
@@ -289,6 +292,7 @@ impl Default for SatCompParams {
             sc_gain: FloatParam::new("SC Gain", 0.0, FloatRange::Linear { min: -24.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             sc_hp: FloatParam::new("SC HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             sc_lp: FloatParam::new("SC LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            sc_mix: FloatParam::new("Key Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
         }
     }
 }
@@ -317,7 +321,7 @@ impl SatCompParams {
             eq: [stage([(&self.pre_b1_type, &self.pre_b1_freq, &self.pre_b1_gain, &self.pre_b1_q), (&self.pre_b2_type, &self.pre_b2_freq, &self.pre_b2_gain, &self.pre_b2_q), (&self.pre_b3_type, &self.pre_b3_freq, &self.pre_b3_gain, &self.pre_b3_q)], &self.pre_tilt, &self.pre_pivot, &self.pre_out_gain), stage([(&self.post_b1_type, &self.post_b1_freq, &self.post_b1_gain, &self.post_b1_q), (&self.post_b2_type, &self.post_b2_freq, &self.post_b2_gain, &self.post_b2_q), (&self.post_b3_type, &self.post_b3_freq, &self.post_b3_gain, &self.post_b3_q)], &self.post_tilt, &self.post_pivot, &self.post_out_gain)],
             lookahead_ms: self.lookahead.value() as f64, eq_pre_bypass: self.eq_pre_bypass.value(),
             eq_post_bypass: self.eq_post_bypass.value(), eq_module_bypass: self.eq_module_bypass.value(),
-            sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64,
+            sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64, sc_mix: self.sc_mix.value() as f64,
         }
     }
 
@@ -387,6 +391,7 @@ impl SatCompParams {
             64 => self.sc_gain.as_ptr(),
             65 => self.sc_hp.as_ptr(),
             66 => self.sc_lp.as_ptr(),
+            67 => self.sc_mix.as_ptr(),
             _ => return None,
         })
     }

@@ -65,8 +65,8 @@ pub enum Dlg {
 }
 
 pub struct State {
-    meta: [Meta; 67],
-    touched: [bool; 67],
+    meta: [Meta; 68],
+    touched: [bool; 68],
     pub pal: usize,
     // interaction
     act: i32,
@@ -197,7 +197,7 @@ impl State {
     }
 
     pub fn new(pal: usize) -> Self {
-        let mut meta = [Meta::default(); 67];
+        let mut meta = [Meta::default(); 68];
         for &(n, _, mn, mx, df) in TABLE {
             meta[n] = Meta { min: mn, max: mx, def: df, mode: 0, snap: 0, step: 1.0 };
         }
@@ -231,6 +231,7 @@ impl State {
         sp(64, 0, 0, 0.1);
         sp(65, 1, 1, 1.0);
         sp(66, 1, 2, 10.0);
+        sp(67, 0, 0, 1.0);
         for st in 0..2 {
             let base = 29 + st * 15;
             for b in 0..3 {
@@ -247,7 +248,7 @@ impl State {
         let fwin = (0..4096).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / 4096.0).cos()).collect();
         Self {
             meta,
-            touched: [false; 67],
+            touched: [false; 68],
             pal,
             act: 0,
             act_t: 0.0,
@@ -412,7 +413,7 @@ impl<'a> Gui<'a> {
     }
 
     fn end_touch(&mut self, n: usize) {
-        if n < 67 && self.touched[n] {
+        if n < 68 && self.touched[n] {
             if let Some(p) = self.env.params.ptr(n) {
                 unsafe { self.env.setter.raw_context.raw_end_set_parameter(p) };
             }
@@ -563,7 +564,7 @@ impl<'a> Gui<'a> {
                     format!("{:.1}ms", v)
                 }
             }
-            2 | 12 | 14 | 15 | 17 | 18 | 19 | 21 | 25 => format!("{:.0}%", v),
+            2 | 12 | 14 | 15 | 17 | 18 | 19 | 21 | 25 | 67 => format!("{:.0}%", v),
             3 => format!("{:+.0}%", v),
             4 | 16 | 65 => {
                 if v <= if n == 4 || n == 65 { 20.5 } else { 15.0 } {
@@ -2408,7 +2409,11 @@ impl<'a> Gui<'a> {
             self.cell(16, 356.0, 240.0, 62.0, 38.0, "LOW CUT");
             self.cell(59, 152.0, 284.0, 62.0, 38.0, "L.AHEAD");
             self.cell(12, 220.0, 284.0, 62.0, 38.0, "SPEED");
-            self.cell(18, 288.0, 284.0, 62.0, 38.0, "FF>FB");
+            if self.sget(63) > 0.5 {
+                self.cell(67, 288.0, 284.0, 62.0, 38.0, "KEY MIX"); // stands in for FF>FB while the sidechain is on
+            } else {
+                self.cell(18, 288.0, 284.0, 62.0, 38.0, "FF>FB");
+            }
             self.cell(19, 356.0, 284.0, 62.0, 38.0, "GR DIST");
         }
         }

@@ -186,6 +186,9 @@ pub struct Engine {
     sc_lps: [[f64; 2]; 2],
     scd: [[f64; 64]; 2],
     sc_s: f64,
+    sc_mix: f64,
+    rm_k: [f64; 2],
+    dhs_k: [[f64; 2]; 2],
 
     // ---- out
     mk: f64,
@@ -370,6 +373,9 @@ impl Engine {
             sc_lps: [[0.0; 2]; 2],
             scd: [[0.0; 64]; 2],
             sc_s: 0.0,
+            sc_mix: 1.0,
+            rm_k: [0.0; 2],
+            dhs_k: [[0.0; 2]; 2],
             mt: 0.0,
             match_trim: 0.0,
             match_req: false,
@@ -518,6 +524,7 @@ impl Engine {
             self.dhc = biquad::hp(p.det_hp, 0.70710678, sr);
         }
         self.fb = p.ff_fb * 0.01;
+        self.sc_mix = (p.sc_mix * 0.01).clamp(0.0, 1.0);
         self.sc_g_t = (p.sc_gain * LN10_20).exp();
         self.use_sc_hp = p.sc_hp > 20.5;
         if self.use_sc_hp {
@@ -815,13 +822,20 @@ impl Engine {
         // ------------------------------------------------ COMP
         let mut lv = [0.0f64; 2];
         for c in 0..2 {
-            let mut xd = if self.sc_act { scv[c] } else { cc[c] + self.fb * (self.prev[c] - cc[c]) };
-            if self.use_dhp {
-                xd = bq(&mut self.dhs[c], &self.dhc, xd);
+            // KEY MIX: detector level = (1-m) * main + m * key (levels, not audio, so the two never phase-interact).
+            // Without an active sidechain m = 0. With one, FF>FB is not applied (it is replaced by KEY MIX).
+            let km = if self.sc_act { self.sc_mix } else { 0.0 };
+            let mut l = 0.0;
+            if km < 1.0 {
+                let xd = if self.sc_act { cc[c] } else { cc[c] + self.fb * (self.prev[c] - cc[c]) };
+                l += (1.0 - km)
+                    * det_level(xd, &mut self.rm[c], &mut self.dhs[c], self.use_dhp, &self.dhc, self.det_m, self.rms_c);
             }
-            let a = xd.abs();
-            self.rm[c] += (xd * xd + DENORM - self.rm[c]) * self.rms_c;
-            lv[c] = if self.det_m > 0.0 { a + self.det_m * (1.41421356 * self.rm[c].sqrt() - a) } else { a };
+            if km > 0.0 {
+                l += km
+                    * det_level(scv[c], &mut self.rm_k[c], &mut self.dhs_k[c], self.use_dhp, &self.dhc, self.det_m, self.rms_c);
+            }
+            lv[c] = l;
         }
         let lmx = lv[0].max(lv[1]);
         self.vz_blk = self.vz_blk.max(lmx);
@@ -925,6 +939,21 @@ impl Engine {
         self.fms += ((out[0] * out[0] + out[1] * out[1]) * 0.5 + DENORM - self.fms) * self.fms_c;
         self.gr_blk = self.gr_blk.max(g[0].max(g[1]));
         (out[0], out[1])
+    }
+}
+
+/// Detector level of one source: optional low cut, then peak/RMS blend.
+#[inline]
+fn det_level(mut xd: f64, rm: &mut f64, hs: &mut [f64; 2], use_hp: bool, hc: &Coef, det_m: f64, rms_c: f64) -> f64 {
+    if use_hp {
+        xd = bq(hs, hc, xd);
+    }
+    let a = xd.abs();
+    *rm += (xd * xd + DENORM - *rm) * rms_c;
+    if det_m > 0.0 {
+        a + det_m * (1.41421356 * rm.sqrt() - a)
+    } else {
+        a
     }
 }
 
@@ -1238,5 +1267,22 @@ mod tests {
         let y = run_sc(&mut e, &sine(24000, 440.0, 0.1), &key);
         let want = rms(&key[12000..]) * 0.5012; // -6 dB
         assert!((rms(&y[12000..]) - want).abs() < want * 0.03);
+    }
+
+    #[test]
+    fn key_mix_zero_ignores_the_key_and_half_sits_between() {
+        let x = sine(24000, 440.0, 0.005); // -46 dB, clear of the knee
+        let key = sine(24000, 440.0, 0.9);
+        let rms_for = |mix: f64| {
+            let mut p = sc_params();
+            p.sc_mix = mix;
+            let mut e = Engine::new(SR);
+            e.set_params(&p);
+            let y = run_sc(&mut e, &x, &key);
+            rms(&y[12000..])
+        };
+        let (m0, m50, m100) = (rms_for(0.0), rms_for(50.0), rms_for(100.0));
+        assert!((m0 - rms(&x[12000..])).abs() < 1e-4, "mix 0 = main detector only (main is below threshold)");
+        assert!(m100 < m50 && m50 < m0, "{m0} {m50} {m100}");
     }
 }

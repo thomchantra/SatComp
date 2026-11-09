@@ -50,6 +50,7 @@ add(63, "sc_on", "Sidechain", "bool", 0, 1, 0)
 add(64, "sc_gain", "SC Gain", "f", -24, 24, 0, 0.1, " dB")
 add(65, "sc_hp", "SC HP", "f", 20, 2000, 20, 1, " Hz")
 add(66, "sc_lp", "SC LP", "f", 200, 20000, 20000, 1, " Hz")
+add(67, "sc_mix", "Key Mix", "f", 0, 100, 100, 1, " %")
 
 def f(x):
     s = repr(float(x))
@@ -110,7 +111,7 @@ def stage_expr(sp):
 o.append(f"            eq: [{stage_expr('pre')}, {stage_expr('post')}],")
 o.append("            lookahead_ms: self.lookahead.value() as f64, eq_pre_bypass: self.eq_pre_bypass.value(),")
 o.append("            eq_post_bypass: self.eq_post_bypass.value(), eq_module_bypass: self.eq_module_bypass.value(),")
-o.append("            sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64,")
+o.append("            sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64, sc_mix: self.sc_mix.value() as f64,")
 o.append("        }\n    }\n")
 o.append("    /// Parameter by JSFX slider number (UI addressing).\n    pub fn ptr(&self, n: usize) -> Option<ParamPtr> {\n        Some(match n {")
 for n, fl, *_ in P:

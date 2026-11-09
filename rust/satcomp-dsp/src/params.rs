@@ -68,6 +68,7 @@ pub struct Params {
     pub sc_gain: f64,  // 64  -24..24 dB
     pub sc_hp: f64,    // 65  20..2000 Hz (<=20.5 = off)
     pub sc_lp: f64,    // 66  200..20000 Hz (>=19900 = off)
+    pub sc_mix: f64,   // 67  0..100 % key mix (0 = main detector only, 100 = key only)
 }
 
 impl Default for Params {
@@ -108,6 +109,7 @@ impl Default for Params {
             sc_gain: 0.0,
             sc_hp: 20.0,
             sc_lp: 20000.0,
+            sc_mix: 100.0,
         }
     }
 }
