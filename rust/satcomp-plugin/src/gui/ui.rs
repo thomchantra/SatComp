@@ -65,8 +65,8 @@ pub enum Dlg {
 }
 
 pub struct State {
-    meta: [Meta; 63],
-    touched: [bool; 63],
+    meta: [Meta; 67],
+    touched: [bool; 67],
     pub pal: usize,
     // interaction
     act: i32,
@@ -197,7 +197,7 @@ impl State {
     }
 
     pub fn new(pal: usize) -> Self {
-        let mut meta = [Meta::default(); 63];
+        let mut meta = [Meta::default(); 67];
         for &(n, _, mn, mx, df) in TABLE {
             meta[n] = Meta { min: mn, max: mx, def: df, mode: 0, snap: 0, step: 1.0 };
         }
@@ -228,6 +228,9 @@ impl State {
         sp(25, 0, 0, 1.0);
         sp(27, 0, 0, 0.1);
         sp(59, 0, 0, 0.1);
+        sp(64, 0, 0, 0.1);
+        sp(65, 1, 1, 1.0);
+        sp(66, 1, 2, 10.0);
         for st in 0..2 {
             let base = 29 + st * 15;
             for b in 0..3 {
@@ -244,7 +247,7 @@ impl State {
         let fwin = (0..4096).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / 4096.0).cos()).collect();
         Self {
             meta,
-            touched: [false; 63],
+            touched: [false; 67],
             pal,
             act: 0,
             act_t: 0.0,
@@ -408,7 +411,7 @@ impl<'a> Gui<'a> {
     }
 
     fn end_touch(&mut self, n: usize) {
-        if n < 63 && self.touched[n] {
+        if n < 67 && self.touched[n] {
             if let Some(p) = self.env.params.ptr(n) {
                 unsafe { self.env.setter.raw_context.raw_end_set_parameter(p) };
             }
@@ -561,14 +564,14 @@ impl<'a> Gui<'a> {
             }
             2 | 12 | 14 | 15 | 17 | 18 | 19 | 21 | 25 => format!("{:.0}%", v),
             3 => format!("{:+.0}%", v),
-            4 | 16 => {
-                if v <= if n == 4 { 20.5 } else { 15.0 } {
+            4 | 16 | 65 => {
+                if v <= if n == 4 || n == 65 { 20.5 } else { 15.0 } {
                     "OFF".into()
                 } else {
                     format!("{:.0}Hz", v)
                 }
             }
-            5 | 6 => {
+            5 | 6 | 66 => {
                 if v >= 19900.0 {
                     "OFF".into()
                 } else {
@@ -600,7 +603,7 @@ impl<'a> Gui<'a> {
                 }
             }
             13 | 20 => format!("{:.1}dB", v),
-            22 | 27 => format!("{:+.1}dB", v),
+            22 | 27 | 64 => format!("{:+.1}dB", v),
             _ => format!("{:.1}", v),
         }
     }
@@ -1167,6 +1170,39 @@ impl<'a> Gui<'a> {
     }
 
     // ------------------------------------------------------------------ comp plot
+    /// Sidechain control row under the compressor plot: SC gain | HP | LP | SOLO (solo = hear the key as the detector
+    /// sees it, i.e. after gain/HP/LP).
+    fn sc_row(&mut self, x: f32, y: f32) {
+        let h = 17.0;
+        let cells = [(64usize, "SC", 71.0f32), (65, "HP", 66.0), (66, "LP", 66.0)];
+        let mut cx = x;
+        for (n, lbl, w) in cells {
+            let hv = self.hit(cx, y, w, h);
+            if hv && self.press && self.act == 0 {
+                self.begin_drag(n);
+            }
+            if hv && self.wheel != 0 {
+                self.wheel_adj(n);
+            }
+            let act = self.act == n as i32;
+            self.setc(act);
+            self.cv.boxr(cx, y, w, h);
+            self.cv.set_font(1);
+            self.cv.text(cx + 4.0, y + 5.0, lbl);
+            let v = self.sget(n);
+            let t = self.fmt(n, v);
+            self.cv.textr(cx, y + 5.0, w - 4.0, &t);
+            let tn = self.n2t(n, v);
+            self.cv.fill(cx + 2.0, y + h - 3.0, ((tn * (w - 4.0)).floor()).max(1.0), 1.0);
+            self.setc(false);
+            cx += w - 1.0;
+        }
+        let solo = self.env.shared.sc_solo.load(Ordering::Relaxed);
+        if self.btn(cx, y, x + 266.0 - cx, h, "SOLO", if solo { 2 } else { 0 }) {
+            self.env.shared.sc_solo.store(!solo, Ordering::Relaxed);
+        }
+    }
+
     fn draw_ccurve(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let gc = GainComputer::from_params(&self.env.dsp);
         let hv = self.hit(x, y, w, h);
@@ -1251,6 +1287,17 @@ impl<'a> Gui<'a> {
         }
         let tx = x + (thr + 48.0) / 48.0 * (w - 1.0);
         self.cv.fill(tx, y + h - 4.0, 1.0, 3.0);
+        // sidechain: the plot's x axis is the KEY level. Markers on the side edges show the main signal: left = level
+        // entering the compressor, right = level after the gain reduction (the gap between them is the GR).
+        let sc_mode = self.sget(63) > 0.5;
+        let mn_db = (8.6858896 * self.env.shared.mn_lv.load(Ordering::Relaxed).max(0.000001).ln()).clamp(-48.0, 0.0);
+        if sc_mode && mn_db > -47.9 {
+            let gr_now = if lvl > -47.9 { gc.gr(lvl as f64) as f32 } else { 0.0 };
+            let yin = y + (1.0 - (mn_db + 48.0) / 48.0) * (h - 1.0);
+            let yout = y + (1.0 - ((mn_db - gr_now).max(-48.0) + 48.0) / 48.0) * (h - 1.0);
+            self.cv.tri((x + 1.0, yin - 3.0), (x + 1.0, yin + 4.0), (x + 6.0, yin + 0.5));
+            self.cv.tri((x + w - 2.0, yout - 3.0), (x + w - 2.0, yout + 4.0), (x + w - 7.0, yout + 0.5));
+        }
         // handles
         self.setc(self.act == 120);
         self.cv.disc(hxt, hyt, 3.5);
@@ -1262,7 +1309,14 @@ impl<'a> Gui<'a> {
             self.rd_lvl = lvl;
             self.rd_ghr = if lvl > -47.9 { gc.gr(lvl as f64) as f32 } else { 0.0 };
         }
-        let s = if self.rd_lvl > -47.9 {
+        let s = if sc_mode {
+            let mn = if mn_db > -47.9 { format!("{:+05.1}", mn_db) } else { "-----".to_string() };
+            if self.rd_lvl > -47.9 {
+                format!("SC {:+05.1}  IN {}  GR {:04.1}dB", self.rd_lvl, mn, self.rd_ghr)
+            } else {
+                format!("SC -----  IN {}  GR 00.0dB", mn)
+            }
+        } else if self.rd_lvl > -47.9 {
             format!("LVL {:+05.1}  OUT {:+05.1}  GR {:04.1}dB", self.rd_lvl, self.rd_lvl - self.rd_ghr, self.rd_ghr)
         } else {
             "LVL -----  OUT -----  GR 00.0dB".to_string()
@@ -2176,7 +2230,26 @@ impl<'a> Gui<'a> {
         }
         self.set_dk(prev);
         let s = format!("GR {:.1}", gr);
-        self.cv.textc(bx[3] - 10.0, cy - bh * 0.5 - 14.0, bw[3] + 20.0, &s);
+        if self.sget(63) > 0.5 {
+            // sidechain chain: SIDECHAIN IN > SC GAIN/LP/HP, dropping into COMP
+            let ccx = (bx[3] + bw[3] * 0.5).floor();
+            let (wa, wb, sy, sh_) = (66.0, 90.0, y + 4.0, 22.0);
+            let b1 = ccx - 24.0;
+            let a1 = b1 - 14.0;
+            self.setc(false);
+            for (bxl, wd, t) in [(a1 - wa, wa, "SIDECHAIN"), (b1, wb, "SC GAIN/LP/HP")] {
+                self.cv.boxr(bxl, sy, wd, sh_);
+                self.cv.textc(bxl, sy + 7.0, wd, t);
+            }
+            self.cv.fill(a1, sy + 11.0, 10.0, 1.0);
+            self.cv.tri((a1 + 6.0, sy + 8.0), (a1 + 6.0, sy + 15.0), (a1 + 10.0, sy + 11.5));
+            let ytop = cy - bh * 0.5 + 0.5;
+            self.cv.fill(ccx, sy + sh_, 1.0, ytop - sy - sh_ - 3.0);
+            self.cv.tri((ccx - 3.0, ytop - 4.0), (ccx + 4.0, ytop - 4.0), (ccx + 0.5, ytop));
+            self.cv.text(ccx + 8.0, sy + sh_ + 3.0, &s);
+        } else {
+            self.cv.textc(bx[3] - 10.0, cy - bh * 0.5 - 14.0, bw[3] + 20.0, &s);
+        }
         self.cv.text(x + 6.0, y + h - 15.0, if sig { "DOT SIZE = LEVEL" } else { "PLAY AUDIO TO SEE THE FLOW" });
         let _ = byp;
     }
@@ -2256,15 +2329,18 @@ impl<'a> Gui<'a> {
         if !ab {
         self.selector(1, 10.0, 34.0, 130.0, 16.0);
         self.setc(false);
-        self.cv.boxr(152.0, 34.0, 96.0, 16.0);
-        self.cv.set_font(1);
-        self.cv.textc(152.0, 38.0, 96.0, "OVERSAMPLING");
         let os_i = (self.sget(7) + 0.5).floor() as i32;
         for i in 0..3 {
             let l = ["OFF", "x2", "x4"][i as usize];
-            if self.btn(248.0 + i as f32 * 34.0, 34.0, 34.0, 16.0, l, (os_i == i) as u8) {
+            if self.btn(152.0 + i as f32 * 40.0, 34.0, 40.0, 16.0, l, (os_i == i) as u8) {
                 self.click_set(7, i as f32);
             }
+        }
+        // sidechain key: white = detector keyed from the aux input, red = on but the host gave no sidechain bus
+        let sc_on = self.sget(63) > 0.5;
+        let sc_lit = if !sc_on { 0 } else if sh.sc_bus.load(Ordering::Relaxed) { 1 } else { 2 };
+        if self.btn(276.0, 34.0, 76.0, 16.0, "SIDECHAIN", sc_lit) {
+            self.click_set(63, if sc_on { 0.0 } else { 1.0 });
         }
         self.sq_tog(62, 366.0, 38.0, 8.0);
         if self.btn(356.0, 34.0, 62.0, 16.0, "EQ", self.eq_page as u8) {
@@ -2274,6 +2350,9 @@ impl<'a> Gui<'a> {
         self.sqind(366.0, 38.0, 8.0, a0 || a1, self.eq_page, eq_mod_byp);
         }
         self.set_dk(1.0);
+        if self.sget(63) < 0.5 && sh.sc_solo.load(Ordering::Relaxed) {
+            sh.sc_solo.store(false, Ordering::Relaxed); // solo never outlives the sidechain switch
+        }
         let delta = sh.delta_on.load(Ordering::Relaxed);
         if self.btn(430.0, 34.0, 60.0, 16.0, "DELTA", if delta { 2 } else { 0 }) {
             sh.delta_on.store(!delta, Ordering::Relaxed);
@@ -2289,6 +2368,10 @@ impl<'a> Gui<'a> {
             self.set_dk(if byp || (self.eq_page && eq_mod_byp) { 0.5 } else { 1.0 });
             if self.eq_page {
                 self.draw_eq(152.0, 56.0, 266.0, 128.0);
+            } else if self.sget(63) > 0.5 {
+                // sidechain: shorter plot + a control row for the key (SC gain, HP, LP, solo)
+                self.draw_ccurve(152.0, 56.0, 266.0, 112.0);
+                self.sc_row(152.0, 167.0);
             } else {
                 self.draw_ccurve(152.0, 56.0, 266.0, 128.0);
             }

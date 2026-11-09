@@ -71,7 +71,7 @@ impl Shared {
             eq_vis_ms: AtomicU64::new(0),
             eq_vs: AtomicUsize::new(0),
             sc_solo: AtomicBool::new(false),
-            sc_bus: AtomicBool::new(false),
+            sc_bus: AtomicBool::new(true),
             mn_lv: AtomicF32::new(0.0),
         }
     }
