@@ -13,7 +13,7 @@ use std::time::Duration;
 use ui::{Env, Gui, State};
 
 pub fn create(params: Arc<SatCompParams>, shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
-    let state = State::new(params.palette.load(Ordering::Relaxed).clamp(0, 9) as usize);
+    let state = State::new(params.palette.load(Ordering::Relaxed).clamp(0, canvas::PALETTES.len() as i32 - 1) as usize);
     let editor_state = params.editor_state.clone();
     create_egui_editor(
         editor_state,

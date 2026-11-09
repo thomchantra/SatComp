@@ -14,18 +14,28 @@ pub const TEXT_LIFT_EM: f32 = 0.28;
 /// (measured from side-by-side screenshots), so scale to match and keep the labels inside their cells.
 pub const FONT_SCALE: f32 = 0.86;
 
-/// Colour schemes (BG rgb, UI rgb, ACCENT rgb), from docs/colorscheme.md. Index 0/1 = Black/White.
-pub const PALETTES: [(&str, [f32; 9]); 10] = [
+/// Colour schemes (BG rgb, UI rgb, ACCENT rgb), generated from docs/colorscheme.md in file order. Index 0/1 = Black/White.
+/// Order is persisted (project state stores the index): append new schemes, do not reorder.
+pub const PALETTES: [(&str, [f32; 9]); 19] = [
     ("Black", [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0]),
     ("White", [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
-    ("Teal", [0.0784, 0.2196, 0.1961, 0.6431, 1.0, 0.9647, 0.0, 1.0, 0.8980]),
-    ("Cadmium", [0.3137, 0.3137, 0.3137, 1.0, 1.0, 1.0, 1.0, 0.4510, 0.0]),
-    ("Ultramarine", [0.0, 0.1020, 0.5490, 1.0, 1.0, 1.0, 0.1490, 0.3059, 1.0]),
+    ("Teal", [0.0784, 0.2196, 0.1961, 0.6431, 1.0, 0.9647, 0.0, 1.0, 0.898]),
+    ("Cadmium", [0.3137, 0.3137, 0.3137, 1.0, 1.0, 1.0, 1.0, 0.451, 0.0]),
+    ("Ultramarine", [0.0, 0.102, 0.549, 1.0, 1.0, 1.0, 0.149, 0.3059, 1.0]),
     ("Azure", [0.1686, 0.1961, 0.2353, 0.8157, 0.8588, 0.8941, 0.0, 0.8, 1.0]),
     ("Magenta", [0.3098, 0.0, 0.4314, 1.0, 0.4196, 0.8471, 1.0, 0.0, 0.6824]),
     ("Sulfur", [0.0, 0.0, 0.0, 1.0, 0.9333, 0.0, 1.0, 0.9333, 0.0]),
     ("Uranium", [0.0235, 0.2314, 0.0275, 0.7216, 0.9647, 0.5059, 0.5255, 0.9882, 0.1216]),
-    ("Midnight", [0.1412, 0.0039, 0.1961, 0.9255, 0.2471, 1.0, 0.9647, 1.0, 0.0]),
+    ("Bananas", [1.0, 0.851, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5843, 1.0]),
+    ("Crimson", [0.0, 0.0, 0.0, 0.8471, 0.0, 0.0, 0.0, 1.0, 1.0]),
+    ("Cyberware", [0.0, 0.0, 0.0, 0.0, 1.0, 0.8157, 0.9176, 0.0, 1.0]),
+    ("Ashen", [0.1804, 0.1804, 0.1804, 0.6431, 0.6431, 0.6431, 0.8196, 0.8196, 0.8196]),
+    ("Sailor", [0.0667, 0.1843, 0.4549, 0.7059, 0.8314, 1.0, 0.6706, 0.1961, 0.2039]),
+    ("Sonar", [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0]),
+    ("Apricot", [1.0, 0.7961, 0.5765, 0.2902, 0.2392, 0.2, 1.0, 0.451, 0.0]),
+    ("Berry", [1.0, 0.5961, 0.8196, 0.4627, 0.1176, 0.2745, 1.0, 0.298, 0.298]),
+    ("Night Rider", [0.0588, 0.0, 0.3804, 1.0, 0.2627, 0.7529, 0.298, 0.9529, 1.0]),
+    ("Matcha", [0.6588, 0.7804, 0.4745, 0.1529, 0.2627, 0.1255, 0.149, 0.6039, 0.0]),
 ];
 
 pub fn fira() -> FontFamily {
@@ -55,7 +65,7 @@ fn rgb(c: [f32; 3]) -> Color32 {
 
 impl<'a> Canvas<'a> {
     pub fn new(p: &'a Painter, ppp: f32, ox: f32, oy: f32, s: f32, pal: usize) -> Self {
-        let a = PALETTES[pal.min(9)].1;
+        let a = PALETTES[pal.min(PALETTES.len() - 1)].1;
         let mut c = Self {
             p,
             ppp,

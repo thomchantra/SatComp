@@ -726,7 +726,7 @@ impl<'a> Gui<'a> {
     fn logo(&mut self, x: f32, y: f32) {
         let hv = self.hit(x, y, 21.0, 21.0);
         if hv && self.press && self.act == 0 {
-            self.set_pal((self.pal + 1) % 10);
+            self.set_pal((self.pal + 1) % PALETTES.len());
             self.press = false;
         }
         if hv && self.rpress {
@@ -745,7 +745,7 @@ impl<'a> Gui<'a> {
     }
 
     fn set_pal(&mut self, p: usize) {
-        self.pal = p.min(9);
+        self.pal = p.min(PALETTES.len() - 1);
         self.env.params.palette.store(self.pal as i32, Ordering::Relaxed);
         let a = PALETTES[self.pal].1;
         self.cv.bk = [a[0], a[1], a[2]];
