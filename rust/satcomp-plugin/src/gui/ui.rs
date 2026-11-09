@@ -364,15 +364,17 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
+    ("v0.4.1", &["Fixed the PK readout and peak reset after reopening the window."]),
     ("v0.4", &["Rebuilt as VST3 and CLAP with presets and window resize.", "Added a custom waveshaper, 20 colour schemes and this page."]),
     ("v0.3", &["Added two 3-band EQ stages with tilt and a spectrum view.", "Added lookahead and a GAIN MATCH button."]),
     ("v0.2", &["Added a grid UI, bypass, meters and a delta monitor.", "Added Sat Mix, Sat Out and 14 saturator shapes."]),
     ("v0.1", &["First prototype with a saturator and a compressor."]),
 ];
 
-/// "0.4" from the crate version "0.4.0" (shown in the header and About page)
+/// Crate version for the header: "0.4" for 0.4.0, "0.4.1" for a patch release.
 fn version_short() -> String {
-    env!("CARGO_PKG_VERSION").split('.').take(2).collect::<Vec<_>>().join(".")
+    let v = env!("CARGO_PKG_VERSION");
+    v.strip_suffix(".0").unwrap_or(v).to_string()
 }
 
 fn blink(t: f64) -> bool {
