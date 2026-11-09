@@ -12,6 +12,7 @@ use satcomp_dsp::shapers::{Curve, ShaperLut, CUSTOM, MAX_PTS, MIN_GAP, SHAPER_NA
 use satcomp_dsp::GainComputer;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Default)]
 pub struct Meta {
@@ -53,6 +54,14 @@ struct Menu {
     items: Vec<MItem>,
     checked: i32,
     scroll: usize,
+}
+
+/// Outcome of a file dialog on its worker thread.
+pub enum Dlg {
+    Pending,
+    Cancelled,
+    Loaded(Preset),
+    Saved(String),
 }
 
 pub struct State {
@@ -146,6 +155,8 @@ pub struct State {
     user: Vec<(String, std::path::PathBuf)>,
     /// 1 = load dialog, 2 = save dialog (run after the frame is drawn, they block)
     pending: u8,
+    /// result slot of a file dialog running on a worker thread (never block the UI/host thread in a modal)
+    dlg: Option<Arc<parking_lot::Mutex<Dlg>>>,
 }
 
 impl State {
@@ -294,6 +305,7 @@ impl State {
             factory: presets::factory(),
             user: presets::scan_user(),
             pending: 0,
+            dlg: None,
         }
     }
 }
@@ -1820,33 +1832,62 @@ impl<'a> Gui<'a> {
         }
     }
 
-    /// File dialogs block, so they run after the frame has been drawn.
+    /// File dialogs run on a worker thread: a modal NSSavePanel started inside our frame callback re-enters
+    /// the host window's event handling (resign-key) while the editor state is borrowed, which aborted REAPER.
+    /// rfd dispatches the panel to the main thread itself; the result is picked up by `poll_dialog`.
     fn run_pending(&mut self) {
         let what = std::mem::take(&mut self.pending);
+        if what == 0 || self.dlg.is_some() {
+            return;
+        }
+        let slot = Arc::new(parking_lot::Mutex::new(Dlg::Pending));
+        self.dlg = Some(slot.clone());
         match what {
             1 => {
-                if let Some(path) = presets::open_dialog() {
-                    if let Some(mut p) = presets::load_file(&path) {
-                        if let Some(stem) = path.file_stem() {
-                            p.name = stem.to_string_lossy().into_owned();
-                        }
-                        self.apply_preset(&p);
-                    }
-                }
+                std::thread::spawn(move || {
+                    let r = presets::open_dialog().and_then(|path| {
+                        presets::load_file(&path).map(|mut p| {
+                            if let Some(stem) = path.file_stem() {
+                                p.name = stem.to_string_lossy().into_owned();
+                            }
+                            p
+                        })
+                    });
+                    *slot.lock() = r.map_or(Dlg::Cancelled, Dlg::Loaded);
+                });
             }
             2 => {
                 let cur = self.preset_name();
                 let def = if cur.is_empty() || cur == "INIT" { "My preset".to_string() } else { cur };
-                if let Some(path) = presets::save_dialog(&def) {
-                    let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(def);
-                    if presets::save_file(&path, &self.capture(&name)).is_ok() {
-                        self.set_preset_name(&name);
-                        self.user = presets::scan_user();
-                    }
-                }
+                let snapshot = self.capture(&def); // parameters as of the click
+                std::thread::spawn(move || {
+                    let r = presets::save_dialog(&def).and_then(|path| {
+                        let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(def);
+                        let mut p = snapshot;
+                        p.name = name.clone();
+                        presets::save_file(&path, &p).ok().map(|_| name)
+                    });
+                    *slot.lock() = r.map_or(Dlg::Cancelled, Dlg::Saved);
+                });
             }
-            _ => {}
+            _ => self.dlg = None,
         }
+    }
+
+    /// Apply the outcome of a finished file dialog (called every frame).
+    fn poll_dialog(&mut self) {
+        let Some(slot) = self.dlg.clone() else { return };
+        let r = std::mem::replace(&mut *slot.lock(), Dlg::Pending);
+        match r {
+            Dlg::Pending => return,
+            Dlg::Loaded(p) => self.apply_preset(&p),
+            Dlg::Saved(name) => {
+                self.set_preset_name(&name);
+                self.user = presets::scan_user();
+            }
+            Dlg::Cancelled => {}
+        }
+        self.dlg = None;
     }
 
     /// Header preset bar (save icon | name | prev next) and the window-scale button.
@@ -2081,6 +2122,7 @@ impl<'a> Gui<'a> {
 
         self.resize_grip();
         self.menu_draw();
+        self.poll_dialog();
         self.run_pending();
     }
 }
