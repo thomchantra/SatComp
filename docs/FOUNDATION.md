@@ -115,7 +115,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
   File dialogs (`rfd`) block the UI and are untested inside REAPER (macOS) and on Windows.
 - Dropbox syncs `rust/target/`: move it out (`CARGO_TARGET_DIR`) or mark it ignored.
 - **Windows builds must come from a Windows machine** (GitHub Actions `windows-latest`); no cross-compile. Not set up yet.
-- GPL is fine for this project; `nih_plug_egui` is ISC, Fira Code is OFL (keep the licence with any distribution).
+- GPL is fine for this project; `nih_plug_egui` is ISC, the six UI fonts are OFL (keep the licences with any distribution; sources and licences in `Fonts/`, only the embedded TTFs under `satcomp-plugin/assets/fonts/` are built in).
 
 ## Custom waveshaper (v0.4)
 - Shaper 14 = a user curve: <=10 points (x=-1 and x=+1 fixed in x, y editable, up to 8 interior), monotone cubic
@@ -131,7 +131,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 ## Header, About page, preset marker (v0.4)
 - Version: the header and About page read `CARGO_PKG_VERSION` (`version_short()` in `gui/ui.rs`), so bumping the crate
   version is the only edit. Both crates are 0.5.1.
-- Clicking the title toggles the About page (`State.about`: 0 closed, 1 about, 2 changelog). It replaces the tab row, viz
+- Clicking the title toggles the About page (`State.about`: 0 closed, 1 about, 2 changelog, 3 appearance). It replaces the tab row, viz
   row and cells; the header, meter and right column stay live. Copy lives in `ABOUT_TEXT` / `CHANGELOG` (source text:
   `docs/abouttextcopy.md`). Changelog entries: newest first, one short sentence per bullet, no em dashes. About and Changelog text live in a row-based scroll box (`scroll_rows`: wheel = 3 rows, draggable thumb on the right, rows culled whole since the canvas has no clipping); scroll position resets on tab change.
 - `tools/gen_palettes.py` (run from `rust/`) rewrites `PALETTES` from `docs/colorscheme.md`; edit the md, then run it.
@@ -142,6 +142,22 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 - VST3 vendor string is `thomchantra` (`lib.rs` `VENDOR`). REAPER caches the vendor from the first scan, so an older
   "(Trirat)" label needs Preferences > Plug-ins > VST > Clear cache / re-scan.
 
+## 0.5.1 notes
+- **Thump on FX enable / refocus:** REAPER rebuilds the engine on every enable. `Engine::new` consumed the one-shot `snap` on
+  default params, so the first real `set_params` glided and the shaper table morphed from shape 0. Fixed with `first_set`
+  (snap + no LUT fade), a pre-settled oversampler and a primed DC blocker (`dc_warm`). Test: `fresh_engine_with_bias_has_no_startup_thump`.
+- **Appearance tab + theme editor** (`gui/ui.rs`, `gui/ui/theme.rs`): fonts are `ui-font` (index into `FONT_NAMES`, append only).
+  Theme editor = the INIT page drawn as a dummy (State holds `dummy_params` / `dummy_shared`; widget input is masked, `sset` is a
+  no-op while `edit` is Some) with the comp area replaced by the editor cells; HSV picker and an on-screen keyboard overlay the
+  compressor plot. **REAPER turns typing in plug-in windows into its own hotkeys and an osascript prompt did nothing there, so
+  all text entry is on-screen.** User themes: `themes.json` beside `Presets/` + `custom-theme` (name|hex) in the project; scheme
+  index >= 20 = user theme.
+- **Scope** (`gui/ui/scope.rs`, `ScopeRing` in `engine.rs`): 2 ms buckets (output peak, peak with GR added back) in a lock-free
+  ring; settings packed in `scope-v3`. Sidechain row is hidden while the scope shows.
+- **Perf (0.5.1 audit):** DSP 0.26-0.63% of one core (`cargo run --release -p satcomp-dsp --example bench`); the audio thread no
+  longer blocks on the custom-curve mutex (`to_dsp_rt`). GUI: ~9-12% of a core at 60 fps in the standalone, of which our drawing
+  is ~2% and the GL buffer swap is most of the rest. Many open editors at once are untested (see Open / next).
+
 ## Sidechain (v0.5)
 - Spec in `PARAMETERS.md` (SIDECHAIN). Params 63-66 (`sc_on` is excluded from presets); layouts = stereo + aux "Sidechain",
   then plain stereo (`lib.rs`). Engine: `process_sc(l, r, Option<(&[f32], &[f32])>)`; `None` = no bus = internal detector.
@@ -150,6 +166,9 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 - **Unverified in a host:** how REAPER shows/routes the aux pins, pluginval with the aux layout, Windows. Nothing ran in REAPER yet.
 
 ## Open / next
+- **Multi-instance GUI load (deferred from 0.5.1):** with several editors open the GL swaps at 60 fps add up. Test in a real
+  session first; likely fix = repaint ~20 fps when idle (no signal, no mouse) and 60 fps otherwise, possibly pause when the
+  window is not visible. Also unmeasured: Windows, AU (clap-wrapper, idea for 0.5.2).
 - ~~Next session, idea 1: sidechain.~~ Done in 0.5 (see above); original brief: Add a second stereo input (nih-plug aux input) that feeds the detector, whole band,
   with HP/LP filters to taper it. Needs: audio layout change (main 2in/2out + aux 2in), an engine detector source switch,
   params (sidechain on, SC HP, SC LP) appended to `gen_params.py`, a UI home for them, and a listen/monitor option.
