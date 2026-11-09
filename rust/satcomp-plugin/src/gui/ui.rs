@@ -175,6 +175,17 @@ impl State {
         self.rpress = rdown && !self.last_rdown;
         self.last_rdown = rdown;
         self.shift = shift;
+        // The egui clock restarts from 0 whenever the editor window is reopened, but this State lives on. Re-base every
+        // stored timestamp, otherwise `now - last` stays negative and the ~8 Hz readouts (PK, RMS, GR) stay frozen.
+        if now < self.now {
+            self.rd_last = now;
+            self.hl_l_t = now;
+            self.hl_r_t = now;
+            self.gr_hold_t = now;
+            self.last_clk_t = now;
+            self.hold_until = now;
+            self.spec_t = now;
+        }
         self.now = now;
         // notch the scroll: a mouse wheel reports big steps, a trackpad many small ones
         self.wacc += scroll;
