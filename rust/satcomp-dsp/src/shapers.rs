@@ -1,10 +1,122 @@
 //! The 14 waveshapers and the +-8 lookup table (4097 points) the JSFX uses.
 
 pub const LUT_LEN: usize = 4097;
-pub const SHAPER_NAMES: [&str; 14] = [
+pub const SHAPER_NAMES: [&str; 15] = [
     "Tube", "Soft", "Rational", "Atan", "Hard", "Tri Fold", "Sine Fold", "Crossover", "Cheby", "Wrap",
-    "Rectify", "Bitcrush", "Asym Fold", "Diode",
+    "Rectify", "Bitcrush", "Asym Fold", "Diode", "Custom",
 ];
+/// Shaper index of the user-drawn curve.
+pub const CUSTOM: i32 = 14;
+
+/// Max points of the custom curve, including the two fixed-x end points.
+pub const MAX_PTS: usize = 10;
+/// Minimum x distance between neighbouring points.
+pub const MIN_GAP: f32 = 0.02;
+
+/// User-drawn transfer curve on x in [-1, 1]: sorted by x, first/last x fixed at -1/+1,
+/// y in [-1, 1]. Plain `Copy` data so it can ride inside the DSP `Params` snapshot.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Curve {
+    pub n: usize,
+    pub p: [(f32, f32); MAX_PTS],
+}
+
+impl Default for Curve {
+    fn default() -> Self {
+        Self::linear()
+    }
+}
+
+impl Curve {
+    pub fn linear() -> Self {
+        let mut p = [(0.0, 0.0); MAX_PTS];
+        p[0] = (-1.0, -1.0);
+        p[1] = (1.0, 1.0);
+        Self { n: 2, p }
+    }
+
+    pub fn pts(&self) -> &[(f32, f32)] {
+        &self.p[..self.n]
+    }
+
+    /// Sanitising constructor (persisted/preset data is untrusted): sorts, clamps, enforces end points
+    /// and the gap, truncates to MAX_PTS. Falls back to linear if fewer than 2 points.
+    pub fn from_points(pts: &[(f32, f32)]) -> Self {
+        let mut v: Vec<(f32, f32)> = pts
+            .iter()
+            .filter(|(x, y)| x.is_finite() && y.is_finite())
+            .map(|&(x, y)| (x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0)))
+            .collect();
+        if v.len() < 2 {
+            return Self::linear();
+        }
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (first, last) = (v[0].1, v[v.len() - 1].1);
+        // interior points only, strictly inside the gap-padded range
+        let mut inner: Vec<(f32, f32)> = Vec::new();
+        let mut lo = -1.0 + MIN_GAP;
+        for &(x, y) in &v[1..v.len() - 1] {
+            if inner.len() + 2 >= MAX_PTS {
+                break;
+            }
+            if x >= lo && x <= 1.0 - MIN_GAP {
+                inner.push((x, y));
+                lo = x + MIN_GAP;
+            }
+        }
+        let mut c = Self::linear();
+        c.p[0] = (-1.0, first);
+        for (i, q) in inner.iter().enumerate() {
+            c.p[i + 1] = *q;
+        }
+        c.n = inner.len() + 2;
+        c.p[c.n - 1] = (1.0, last);
+        c
+    }
+
+    /// Value of the monotone cubic (Fritsch-Carlson) through the points; flat beyond the ends.
+    /// Never overshoots between points, so the transfer curve stays single-valued and tame.
+    pub fn eval(&self, x: f64) -> f64 {
+        let pts = self.pts();
+        let n = pts.len();
+        let xs = |i: usize| pts[i].0 as f64;
+        let ys = |i: usize| pts[i].1 as f64;
+        if x <= xs(0) {
+            return ys(0);
+        }
+        if x >= xs(n - 1) {
+            return ys(n - 1);
+        }
+        let mut k = 0;
+        while k + 2 < n && x > xs(k + 1) {
+            k += 1;
+        }
+        let delta = |i: usize| (ys(i + 1) - ys(i)) / (xs(i + 1) - xs(i)).max(1e-9);
+        let tangent = |i: usize| -> f64 {
+            if i == 0 {
+                return delta(0);
+            }
+            if i == n - 1 {
+                return delta(n - 2);
+            }
+            let (d0, d1) = (delta(i - 1), delta(i));
+            if d0 * d1 <= 0.0 {
+                return 0.0;
+            }
+            // weighted harmonic mean (keeps monotonicity for uneven spacing)
+            let (h0, h1) = (xs(i) - xs(i - 1), xs(i + 1) - xs(i));
+            let (w1, w2) = (2.0 * h1 + h0, h1 + 2.0 * h0);
+            (w1 + w2) / (w1 / d0 + w2 / d1)
+        };
+        let h = xs(k + 1) - xs(k);
+        let t = (x - xs(k)) / h;
+        let (t2, t3) = (t * t, t * t * t);
+        (2.0 * t3 - 3.0 * t2 + 1.0) * ys(k)
+            + (t3 - 2.0 * t2 + t) * h * tangent(k)
+            + (-2.0 * t3 + 3.0 * t2) * ys(k + 1)
+            + (t3 - t2) * h * tangent(k + 1)
+    }
+}
 
 fn th(x: f64) -> f64 {
     let x = x.clamp(-20.0, 20.0);
@@ -74,11 +186,13 @@ pub struct ShaperLut {
     pub table: Vec<f64>,
     pub periodic: bool,
     pub sel: i32,
+    /// Curve the table was last baked from (only meaningful while `sel == CUSTOM`).
+    pub curve: Curve,
 }
 
 impl ShaperLut {
     pub fn new(sel: i32) -> Self {
-        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1 };
+        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, curve: Curve::linear() };
         l.build(sel);
         l
     }
@@ -89,6 +203,27 @@ impl ShaperLut {
         }
         self.periodic = is_periodic(sel);
         self.sel = sel;
+    }
+
+    /// Bake the custom curve into the table (flat outside +-1, like a hard clip).
+    pub fn build_custom(&mut self, curve: &Curve) {
+        for (i, v) in self.table.iter_mut().enumerate() {
+            *v = curve.eval(i as f64 / 256.0 - 8.0);
+        }
+        self.periodic = false;
+        self.sel = CUSTOM;
+        self.curve = *curve;
+    }
+
+    /// Make the table match `sel` (and `curve` when custom); no-op when already current.
+    pub fn sync(&mut self, sel: i32, curve: &Curve) {
+        if sel == CUSTOM {
+            if self.sel != CUSTOM || self.curve != *curve {
+                self.build_custom(curve);
+            }
+        } else if self.sel != sel {
+            self.build(sel);
+        }
     }
 
     #[inline]
@@ -130,6 +265,52 @@ mod tests {
         assert_eq!(shaper(9, 0.0), 0.0);
         assert!((shaper(9, 1.5) - (-0.5)).abs() < 1e-12); // wrap
         assert!((shaper(11, 0.51) - 0.5).abs() < 1e-12); // bitcrush step
+    }
+
+    #[test]
+    fn custom_linear_is_identity_and_curve_is_monotone_without_overshoot() {
+        let lin = Curve::linear();
+        for x in [-1.0, -0.37, 0.0, 0.5, 1.0] {
+            assert!((lin.eval(x) - x).abs() < 1e-9);
+        }
+        assert_eq!(lin.eval(3.0), 1.0); // flat beyond the ends
+        // steep knee: values must stay between neighbouring point values
+        let c = Curve::from_points(&[(-1.0, -1.0), (-0.2, -0.1), (0.1, 0.9), (1.0, 1.0)]);
+        assert_eq!(c.n, 4);
+        let mut prev = -2.0;
+        for i in 0..=400 {
+            let y = c.eval(-1.0 + i as f64 / 200.0);
+            assert!(y >= prev - 1e-9 && (-1.0..=1.0).contains(&y), "y={y}");
+            prev = y;
+        }
+        // passes through every point
+        for &(x, y) in c.pts() {
+            assert!((c.eval(x as f64) - y as f64).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn from_points_sanitises() {
+        assert_eq!(Curve::from_points(&[]), Curve::linear());
+        assert_eq!(Curve::from_points(&[(0.0, 0.0)]), Curve::linear());
+        let many: Vec<(f32, f32)> = (0..30).map(|i| (-1.0 + i as f32 / 14.5, 0.5)).collect();
+        assert_eq!(Curve::from_points(&many).n, MAX_PTS);
+        let c = Curve::from_points(&[(0.5, 2.0), (f32::NAN, 0.0), (-3.0, -2.0), (0.5, 0.1)]);
+        assert_eq!((c.p[0].0, c.p[0].1), (-1.0, -1.0)); // clamped end y
+        assert!(c.pts().windows(2).all(|w| w[1].0 - w[0].0 >= MIN_GAP - 1e-6));
+    }
+
+    #[test]
+    fn sync_rebuilds_only_on_change() {
+        let mut l = ShaperLut::new(1);
+        let mut c = Curve::linear();
+        l.sync(CUSTOM, &c);
+        assert!((l.eval(0.3) - 0.3).abs() < 1e-3);
+        c.p[1].1 = 0.5;
+        l.sync(CUSTOM, &c);
+        assert!((l.eval(1.0) - 0.5).abs() < 1e-3);
+        l.sync(2, &c);
+        assert_eq!(l.sel, 2);
     }
 
     #[test]

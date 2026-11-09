@@ -431,9 +431,7 @@ impl Engine {
         self.dirty = false;
 
         // ---- SAT
-        if p.shape != self.lut.sel {
-            self.lut.build(p.shape);
-        }
+        self.lut.sync(p.shape, &p.curve);
         self.pre_t = (p.drive * 0.01 * 36.0 * LN10_20).exp();
         self.bias_t = p.bias * 0.01;
         self.sat_on = p.drive > 0.0 || p.bias != 0.0;
@@ -992,7 +990,7 @@ mod tests {
 
     #[test]
     fn all_shapers_and_oversampling_modes_run_clean() {
-        for shape in 0..14 {
+        for shape in 0..15 {
             for os in 0..3 {
                 let mut p = Params::default();
                 p.shape = shape;

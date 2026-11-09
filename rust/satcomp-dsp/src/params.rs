@@ -1,5 +1,7 @@
 //! Parameter set, mirroring the JSFX sliders (see docs/PARAMETERS.md). Slider numbers in comments.
 
+use crate::shapers::Curve;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct EqBandParams {
     /// Stored type, relative to the band's default (0 = default). 0..2. (sliders 29, 33, 37, ...)
@@ -27,7 +29,8 @@ impl Default for EqStageParams {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Params {
     // SAT
-    pub shape: i32,       // 1   0..13
+    pub shape: i32,       // 1   0..14 (14 = custom curve, Rust only)
+    pub curve: Curve,     // user-drawn transfer curve, used when shape == 14
     pub drive: f64,       // 2   0..100 %
     pub bias: f64,        // 3   -100..100 %
     pub sat_hp: f64,      // 4   20..2000 Hz (<=20.5 = off)
@@ -66,6 +69,7 @@ impl Default for Params {
     fn default() -> Self {
         Self {
             shape: 0,
+            curve: Curve::linear(),
             drive: 25.0,
             bias: 0.0,
             sat_hp: 20.0,
