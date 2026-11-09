@@ -79,8 +79,6 @@ pub struct State {
     pub edit: Option<ThemeEdit>,
     pub dummy_params: Arc<SatCompParams>,
     pub dummy_shared: Arc<Shared>,
-    /// pending native text prompt: (0 theme name | 1 hex, result slot)
-    prompt: Option<(u8, Arc<parking_lot::Mutex<Option<Option<String>>>>)>,
     real_in: (bool, bool, bool, i32, f32, f32),
     del_arm: f64,
     meta: [Meta; 68],
@@ -283,7 +281,6 @@ impl State {
             edit: None,
             dummy_params: Arc::new(SatCompParams::default()),
             dummy_shared: Arc::new(Shared::new()),
-            prompt: None,
             real_in: (false, false, false, 0, -1000.0, -1000.0),
             del_arm: -10.0,
             ap_scroll: 0,
@@ -2784,8 +2781,15 @@ impl<'a> Gui<'a> {
         self.run_pending();
         if editing {
             self.unmask_in();
-            self.poll_prompt();
+            let osk = self.edit.as_ref().map(|e| e.osk.is_some()).unwrap_or(false);
+            if osk {
+                self.mask_in(); // picker stays visible underneath but inert
+            }
             self.theme_picker();
+            if osk {
+                self.unmask_in();
+                self.theme_osk();
+            }
         }
     }
 }

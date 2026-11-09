@@ -16,58 +16,6 @@ pub struct UserTheme {
 const SLOT_NAMES: [&str; 6] = ["DARK BG", "DARK UI", "DARK ACCENT", "LIGHT BG", "LIGHT UI", "LIGHT ACCENT"];
 const SLOT_SHORT: [&str; 6] = ["DARK BG", "DARK UI", "DARK ACC", "LIGHT BG", "LIGHT UI", "LIGHT ACC"];
 
-/// Native single-line text prompt (blocking: call on a worker thread). REAPER swallows typing in plug-in windows as hotkeys,
-/// so text is entered in an OS dialog instead. None = cancelled / unavailable.
-fn text_prompt(title: &str, msg: &str, default: &str) -> Option<String> {
-    use std::process::Command;
-    #[cfg(target_os = "macos")]
-    let out = Command::new("osascript")
-        .args([
-            "-e",
-            "on run argv",
-            "-e",
-            "tell application \"System Events\"",
-            "-e",
-            "activate",
-            "-e",
-            "set r to display dialog (item 1 of argv) default answer (item 2 of argv) with title (item 3 of argv) buttons {\"Cancel\", \"OK\"} default button \"OK\"",
-            "-e",
-            "end tell",
-            "-e",
-            "return text returned of r",
-            "-e",
-            "end run",
-            msg,
-            default,
-            title,
-        ])
-        .output()
-        .ok()?;
-    #[cfg(windows)]
-    let out = {
-        use std::os::windows::process::CommandExt;
-        Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "& { param($m,$t,$d) Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.Interaction]::InputBox($m,$t,$d) }",
-                msg,
-                title,
-                default,
-            ])
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-            .output()
-            .ok()?
-    };
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let out = Command::new("zenity").args(["--entry", "--title", title, "--text", msg, "--entry-text", default]).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim_end_matches(['\r', '\n']).to_string();
-    if s.is_empty() { None } else { Some(s) }
-}
-
 fn themes_path() -> Option<PathBuf> {
     presets::user_dir().and_then(|d| d.parent().map(|p| p.join("themes.json")))
 }
@@ -182,6 +130,12 @@ pub struct Picker {
     drag: u8,
 }
 
+/// On-screen keyboard state: 0 = theme name, 1 = hex colour.
+pub struct Osk {
+    kind: u8,
+    text: String,
+}
+
 pub struct ThemeEdit {
     name: String,
     /// dark BG, UI, ACCENT, then light BG, UI, ACCENT
@@ -190,6 +144,7 @@ pub struct ThemeEdit {
     /// user theme being edited (None = new)
     index: Option<usize>,
     picker: Option<Picker>,
+    pub(super) osk: Option<Osk>,
 }
 
 impl State {
@@ -280,35 +235,6 @@ impl<'a> Gui<'a> {
         self.my = r.5;
     }
 
-    fn start_prompt(&mut self, kind: u8, msg: &str, default: &str) {
-        if self.prompt.is_some() {
-            return;
-        }
-        let slot: Arc<parking_lot::Mutex<Option<Option<String>>>> = Arc::new(parking_lot::Mutex::new(None));
-        self.prompt = Some((kind, slot.clone()));
-        let (msg, default) = (msg.to_string(), default.to_string());
-        std::thread::spawn(move || {
-            let r = text_prompt("SatComp", &msg, &default);
-            *slot.lock() = Some(r);
-        });
-    }
-
-    /// Apply a finished native text prompt (theme name or hex colour).
-    pub(super) fn poll_prompt(&mut self) {
-        let Some((kind, slot)) = self.prompt.clone() else { return };
-        let Some(r) = slot.lock().take() else { return };
-        self.prompt = None;
-        let (Some(text), Some(e)) = (r, self.edit.as_mut()) else { return };
-        if kind == 0 {
-            e.name = text.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_')).take(16).collect();
-        } else if let (Some(c), Some(p)) = (parse6(text.trim().trim_start_matches('#')), e.picker.as_mut()) {
-            let (h, s, v) = rgb_to_hsv(c);
-            p.h = if s > 0.0 { h } else { p.h };
-            p.s = s;
-            p.v = v;
-        }
-    }
-
     pub(super) fn begin_edit(&mut self, index: Option<usize>) {
         let (name, d, l) = match index.and_then(|i| self.themes.get(i)) {
             Some(t) => (t.name.clone(), t.dark, t.light),
@@ -321,6 +247,7 @@ impl<'a> Gui<'a> {
             preview_light: self.light,
             index,
             picker: None,
+            osk: None,
         });
         self.about = 0;
     }
@@ -392,6 +319,31 @@ impl<'a> Gui<'a> {
         clicked
     }
 
+    /// Large check mark (save) or X (cancel) button.
+    fn tc_icon(&mut self, x: f32, y: f32, w: f32, h: f32, check: bool, lit: bool) -> bool {
+        let clicked = self.hit(x, y, w, h) && self.press;
+        self.setc(false);
+        if lit {
+            self.cv.fill(x, y, w, h);
+            self.cv.setbg();
+        } else {
+            self.cv.boxr(x, y, w, h);
+        }
+        let (cx, cy) = ((x + w * 0.5).floor(), (y + h * 0.5).floor());
+        for d in 0..4 {
+            let o = d as f32 - 1.5;
+            if check {
+                self.cv.line(cx - 11.0 + o, cy + 1.0, cx - 4.0 + o, cy + 8.0);
+                self.cv.line(cx - 4.0 + o, cy + 8.0, cx + 11.0 + o, cy - 9.0);
+            } else {
+                self.cv.line(cx - 9.0 + o, cy - 9.0, cx + 9.0 + o, cy + 9.0);
+                self.cv.line(cx - 9.0 + o, cy + 9.0, cx + 9.0 + o, cy - 9.0);
+            }
+        }
+        self.setc(false);
+        clicked
+    }
+
     fn tc_swatch(&mut self, x: f32, y: f32, slot: usize, interactive: bool) {
         let (w, h) = (62.0, 38.0);
         let Some(e) = &self.edit else { return };
@@ -421,7 +373,7 @@ impl<'a> Gui<'a> {
 
     /// The comp-settings area of the dummy page: theme name, dark and light swatches, preview switch, save / cancel.
     pub(super) fn theme_cells(&mut self) {
-        let interactive = self.edit.as_ref().map(|e| e.picker.is_none()).unwrap_or(false);
+        let interactive = self.edit.as_ref().map(|e| e.picker.is_none() && e.osk.is_none()).unwrap_or(false);
         let keep = self.real_in;
         if interactive {
             self.unmask_in();
@@ -454,20 +406,104 @@ impl<'a> Gui<'a> {
 
         // name field (two cells wide)
         let shown = if name.is_empty() { "Custom".to_string() } else { name.clone() };
-        if self.tc_box(xs[0], ys[2], 130.0, 38.0, "THEME NAME (CLICK)", &shown, false, false) && interactive {
+        if self.tc_box(xs[0], ys[2], 130.0, 38.0, "THEME NAME", &shown, false, false) && interactive {
             self.press = false;
-            self.start_prompt(0, "Theme name", &name);
+            if let Some(e) = &mut self.edit {
+                e.osk = Some(Osk { kind: 0, text: name.clone() });
+            }
         }
-        if self.tc_box(xs[2], ys[2], 62.0, 38.0, "", "SAVE", true, false) && interactive {
+        if self.tc_icon(xs[2], ys[2], 62.0, 38.0, true, true) && interactive {
             self.press = false;
             self.save_edit();
-        } else if self.edit.is_some() && self.tc_box(xs[3], ys[2], 62.0, 38.0, "", "CANCEL", false, false) && interactive {
+        } else if self.edit.is_some() && self.tc_icon(xs[3], ys[2], 62.0, 38.0, false, false) && interactive {
             self.press = false;
             self.cancel_edit();
         }
         if interactive {
             self.real_in = keep;
             self.mask_in();
+        }
+    }
+
+    /// On-screen keyboard over the compressor plot (REAPER swallows typing in plug-in windows as hotkeys). Capital letters and
+    /// digits only; in hex mode just 0-9 and A-F are enabled.
+    pub(super) fn theme_osk(&mut self) {
+        let Some(e) = &self.edit else { return };
+        let Some(o) = &e.osk else { return };
+        let (kind, mut text) = (o.kind, o.text.clone());
+        let (x, y, w, h) = (152.0, 56.0, 266.0, 128.0);
+        let max = if kind == 0 { 16 } else { 6 };
+        self.setc(false);
+        self.cv.setbg();
+        self.cv.fill(x, y, w, h);
+        self.setc(false);
+        self.cv.boxr(x, y, w, h);
+        self.cv.set_font(1);
+        self.cv.text(x + 8.0, y + 5.0, if kind == 0 { "THEME NAME" } else { "HEX COLOUR" });
+        self.cv.boxr(x + 8.0, y + 16.0, w - 16.0, 14.0);
+        let caret = if blink(self.now) { "_" } else { " " };
+        let shown = if kind == 1 { format!("#{text}{caret}") } else { format!("{text}{caret}") };
+        self.cv.text(x + 12.0, y + 19.0, &shown);
+        let (pitch, kh) = (26.0, 15.0);
+        let x0 = x + ((w - (10.0 * pitch - 2.0)) * 0.5).floor();
+        let prev_dk = self.dk;
+        let mut close = false;
+        let mut accept = false;
+        let rows = ["1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"];
+        let offs = [0.0, 0.0, 0.5, 1.0];
+        for (r, row) in rows.iter().enumerate() {
+            let ky = y + 34.0 + r as f32 * 17.0;
+            for (i, c) in row.chars().enumerate() {
+                let kx = x0 + (offs[r] + i as f32) * pitch;
+                let ok = kind == 0 || c.is_ascii_hexdigit();
+                self.set_dk(if ok { prev_dk } else { 0.35 });
+                let s = c.to_string();
+                if self.btn(kx, ky, pitch - 2.0, kh, &s, 0) && ok && text.chars().count() < max {
+                    text.push(c);
+                }
+            }
+        }
+        self.set_dk(prev_dk);
+        let ky = y + 34.0 + 4.0 * 17.0;
+        if self.btn(x0 + 8.0 * pitch, y + 34.0 + 3.0 * 17.0, 2.0 * pitch - 2.0, kh, "DEL", 0) {
+            text.pop();
+        }
+        self.set_dk(if kind == 0 { prev_dk } else { 0.35 });
+        if self.btn(x0, ky, 4.0 * pitch - 2.0, kh, "SPACE", 0) && kind == 0 && text.chars().count() < max {
+            text.push(' ');
+        }
+        self.set_dk(prev_dk);
+        if self.btn(x0 + 4.0 * pitch, ky, 3.0 * pitch - 2.0, kh, "OK", 1) {
+            accept = true;
+        }
+        if self.btn(x0 + 7.0 * pitch, ky, 3.0 * pitch - 2.0, kh, "CANCEL", 0) {
+            close = true;
+        }
+        if accept {
+            if kind == 0 {
+                if let Some(e) = &mut self.edit {
+                    e.name = text.trim().to_string();
+                    e.osk = None;
+                }
+                return;
+            }
+            if let (Some(c), Some(e)) = (parse6(&text), self.edit.as_mut()) {
+                if let Some(p) = e.picker.as_mut() {
+                    let (h_, s_, v_) = rgb_to_hsv(c);
+                    p.h = if s_ > 0.0 { h_ } else { p.h };
+                    p.s = s_;
+                    p.v = v_;
+                }
+                e.osk = None;
+            }
+            return;
+        }
+        if let Some(e) = &mut self.edit {
+            if close {
+                e.osk = None;
+            } else if let Some(o) = &mut e.osk {
+                o.text = text;
+            }
         }
     }
 
@@ -493,7 +529,7 @@ impl<'a> Gui<'a> {
         let mut close_cancel = false;
         let hit = |ax: f32, ay: f32, aw: f32, ah: f32| mx >= ax && mx < ax + aw && my >= ay && my < ay + ah;
         let mut ask_hex = false;
-        let idle = self.prompt.is_none();
+        let idle = true;
 
         let Some(e) = &mut self.edit else { return };
         let Some(p) = &mut e.picker else { return };
@@ -567,7 +603,9 @@ impl<'a> Gui<'a> {
         let ok = self.btn(rx, sy + 84.0, 50.0, 16.0, "OK", 1);
         let cn = self.btn(rx + 56.0, sy + 84.0, 50.0, 16.0, "CANCEL", 0);
         if ask_hex {
-            self.start_prompt(1, "Hex colour (RRGGBB)", &hexshow);
+            if let Some(e) = &mut self.edit {
+                e.osk = Some(Osk { kind: 1, text: hexshow.clone() });
+            }
         }
         if ok && press {
             close_ok = true;
@@ -607,3 +645,4 @@ mod tests {
         assert!((0..3).all(|i| (b[i] - c[i]).abs() < 1e-5));
     }
 }
+
