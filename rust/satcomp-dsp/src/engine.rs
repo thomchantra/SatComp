@@ -131,6 +131,11 @@ pub struct Engine {
     dc_r: f64,
     dcx: [f64; 2],
     dcy: [f64; 2],
+    /// True until the first saturated sample: a fresh engine (REAPER rebuilds it on every FX enable) must start the
+    /// oversampler and DC blocker in their settled state, else the saturator's constant output (bias) leaks as a step.
+    dc_warm: bool,
+    /// True until the first real `set_params`; `new()` derives from defaults, which would otherwise use up `snap`.
+    first_set: bool,
     dry: [[f64; 64]; 2],
     res: [[f64; 64]; 2],
     bd: [[f64; 64]; 2],
@@ -295,6 +300,8 @@ impl Engine {
             dc_r: 1.0,
             dcx: [0.0; 2],
             dcy: [0.0; 2],
+            dc_warm: true,
+            first_set: true,
             dry: [[0.0; 64]; 2],
             res: [[0.0; 64]; 2],
             bd: [[0.0; 64]; 2],
@@ -417,6 +424,18 @@ impl Engine {
     }
 
     pub fn set_params(&mut self, p: &Params) {
+        if self.first_set {
+            // A fresh engine must start at the host's settings, not glide there from defaults (that glide is audible as a
+            // thump when REAPER rebuilds the engine on every FX enable).
+            self.first_set = false;
+            self.p = *p;
+            self.sat_out_eff = p.sat_out;
+            self.snap = true;
+            let sm = std::mem::replace(&mut self.smoothing, false); // shaper table commits at once, no morph from shape 0
+            self.derive();
+            self.smoothing = sm;
+            return;
+        }
         if *p != self.p {
             if p.sat_out != self.p.sat_out {
                 self.sat_out_eff = p.sat_out;
@@ -745,7 +764,17 @@ impl Engine {
             }
             self.sat_blk = self.sat_blk.max(bp[0].abs().max(bp[1].abs()));
             for c in 0..2 {
-                let sh = self.ov[c].process(&self.taps, &self.lut, self.os, bp[c] * self.pre + self.bias);
+                let xin = bp[c] * self.pre + self.bias;
+                if self.dc_warm {
+                    for _ in 0..256 {
+                        self.ov[c].process(&self.taps, &self.lut, self.os, xin);
+                    }
+                }
+                let sh = self.ov[c].process(&self.taps, &self.lut, self.os, xin);
+                if self.dc_warm {
+                    self.dcx[c] = sh;
+                    self.dcy[c] = 0.0;
+                }
                 let mut y = sh - self.dcx[c] + self.dc_r * self.dcy[c] + DENORM;
                 self.dcx[c] = sh;
                 self.dcy[c] = y;
@@ -757,6 +786,7 @@ impl Engine {
                 }
                 cc[c] = self.res[c][rd] + y;
             }
+            self.dc_warm = false;
         } else {
             self.res[0][wp] = 0.0;
             self.res[1][wp] = 0.0;
@@ -1155,6 +1185,18 @@ mod tests {
         let (instant, morphed) = (jump(false), jump(true));
         assert!(morphed <= instant + 1e-9, "morph {morphed} vs instant {instant}");
         eprintln!("max step: instant {instant:.4}, morphed {morphed:.4}");
+    }
+
+    #[test]
+    fn fresh_engine_with_bias_has_no_startup_thump() {
+        let mut p = Params::default();
+        p.bias = -6.0;
+        p.drive = 22.0;
+        let mut e = Engine::new(SR);
+        e.set_params(&p);
+        let y = run(&mut e, &vec![0.0; 9600], 256);
+        let pk = y.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                assert!(pk < 0.01, "startup thump peak {pk}");
     }
 
     #[test]
