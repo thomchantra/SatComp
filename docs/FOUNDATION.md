@@ -57,6 +57,7 @@ The index is persisted in project state, so only append (Bananas replaced Midnig
 ```
 cargo test                                         # DSP + preset tests
 cargo xtask bundle satcomp --release               # target/bundled/satcomp.vst3 + .clap
+cargo xtask bundle-universal satcomp --release     # macOS arm64 + x86_64 (needs both rustup targets)
 /Applications/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate target/bundled/satcomp.vst3
 cargo build -p satcomp --features standalone --bin satcomp-standalone --release
 target/release/satcomp-standalone --backend dummy  # opens the editor in a plain window
@@ -65,6 +66,13 @@ Screenshotting the standalone: list the window id (CGWindowListCopyWindowInfo, e
 `screencapture -x -o -l <id> out.png`. Capture the window only, never the whole screen.
 Install for REAPER: copy the bundles to `~/Library/Audio/Plug-Ins/VST3/` and `.../CLAP/`.
 `clap-validator` is not installed yet.
+
+## Release (v0.4 freeze)
+- macOS: universal VST3/CLAP built and pluginval-checked locally (ad-hoc signed by xtask, not notarized).
+- Windows: cannot be built here. `.github/workflows/build.yml` builds macOS universal + Windows x64 on push, and on a
+  `v*` tag zips both and attaches them to a GitHub release. **The Windows build and the first CI run are untested**;
+  check them (and load the DLL bundle in a Windows DAW) before announcing it.
+- Docs for users: `README.md`. `LICENSE` is GPL-3.0 (copied from the nih-plug checkout, the standard FSF text).
 
 ## Identity (never change after release)
 VST3 class id `TrtSatCompPlugin`, CLAP id `com.trirat.satcomp`, vendor `thomchantra`, parameter ids in `params.rs`.

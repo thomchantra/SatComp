@@ -3,3 +3,4 @@ __pycache__/
 *.png
 docs/referenceJSFX/
 /Presets/
+!docs/screenshot.png

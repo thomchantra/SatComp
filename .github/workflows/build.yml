@@ -1,0 +1,75 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Linux build deps (baseview / egui)
+        run: sudo apt-get update && sudo apt-get install -y libx11-xcb-dev libxcb-icccm4-dev libxcb-dri2-0-dev libgl1-mesa-dev libx11-dev libxcursor-dev libasound2-dev
+      - name: Tests
+        working-directory: rust
+        run: cargo test --locked
+
+  bundle:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macOS-universal
+            cmd: cargo xtask bundle-universal satcomp --release
+          - os: windows-latest
+            name: Windows-x64
+            cmd: cargo xtask bundle satcomp --release
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Bundle
+        working-directory: rust
+        run: ${{ matrix.cmd }}
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp LICENSE dist/
+          cp -R rust/target/bundled/satcomp.vst3 rust/target/bundled/satcomp.clap dist/
+          cd dist && 7z a -tzip ../SatComp-${{ github.ref_name }}-${{ matrix.name }}.zip . || zip -r ../SatComp-${{ github.ref_name }}-${{ matrix.name }}.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SatComp-${{ matrix.name }}
+          path: SatComp-*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true

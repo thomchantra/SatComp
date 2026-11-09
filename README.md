@@ -1,29 +1,52 @@
 # SatComp
 
-Saturator + compressor + EQ with a black/white/red monospace UI.
+A waveshaping saturator with a compressor and a 2-stage 3-band EQ, in a black-and-white monospace UI. Made with bricking intentions.
 
-**Status:** early. The **Rust VST3/CLAP plug-in (`rust/`) is the production build**: full saturator + compressor + EQ, presets, custom waveshaper, 20 colour schemes, six Drums factory presets. `SatComp.jsfx` is the archival in-house prototype (feature-frozen at v0.3, kept for reference and A/B; new features land in the Rust build only).
+![SatComp](docs/screenshot.png)
 
-## Install (JSFX, archival)
-Copy `SatComp.jsfx` into REAPER's `Effects/` folder (Options → Show REAPER resource path).
+VST3 and CLAP for macOS (Apple silicon and Intel) and Windows. Current version: **0.4**.
 
-## Build (VST3 / CLAP)
-Requires [Rust](https://rustup.rs).
+## Features
+- **Saturator:** 15 shapers including a **Custom** one you draw yourself (pencil icon, up to 10 points), drive, bias, HP/LP split, tone, sat mix, output gain, 1x/2x/4x oversampling.
+- **Compressor:** threshold, ratio, attack, release, knee and knee shape, peak/RMS detector, low cut, lookahead, feed-forward/feedback blend, GR distortion, makeup and mix.
+- **EQ:** two stages (pre and post compressor), three bands each plus tilt, with a live spectrum.
+- **Metering and tools:** output meter, gain-reduction meter, GAIN MATCH, DELTA monitor, loudness-matched BYPASS.
+- **Presets:** save and load your own, step through them, six Drums factory presets included. A name wrapped in asterisks (`*NAME*`) means the preset has been modified.
+- **20 colour schemes:** left-click the logo for the next one, right-click for the list.
+- Resizable window. Double-click any slider to reset it.
 
-```bash
-cd rust
-cargo xtask bundle satcomp --release
-```
+Click the title for an About page with the signal flow and the changelog.
 
-Bundles land in `rust/target/bundled/`. Copy to:
+## Install
+Download the zip for your system from the [Releases](../../releases) page and copy the bundles:
 
 | | macOS | Windows |
 |---|---|---|
 | VST3 | `~/Library/Audio/Plug-Ins/VST3/` | `C:\Program Files\Common Files\VST3\` |
 | CLAP | `~/Library/Audio/Plug-Ins/CLAP/` | `C:\Program Files\Common Files\CLAP\` |
 
-## Docs
-`docs/PARAMETERS.md` (parameter reference), `docs/HANDOFF.md` (design decisions), `docs/TEST_CHECKLIST.md`.
+Then rescan plug-ins in your DAW.
 
-## License
-GPL-3.0-or-later.
+**macOS:** the build is not notarized. If Gatekeeper blocks it, run `xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/satcomp.vst3` (and the same for the CLAP bundle).
+
+User presets are saved to `~/Library/Application Support/SatComp/Presets` (macOS) or `%APPDATA%\SatComp\Presets` (Windows).
+
+## Build
+Requires [Rust](https://rustup.rs).
+
+```bash
+cd rust
+cargo test
+cargo xtask bundle satcomp --release            # this machine's architecture
+cargo xtask bundle-universal satcomp --release  # macOS: arm64 + x86_64
+```
+
+Bundles land in `rust/target/bundled/`. GitHub Actions builds the macOS universal and Windows bundles on every push (see `.github/workflows/build.yml`) and attaches them to a release when a `v*` tag is pushed.
+
+## Repository
+- `rust/`: the production plug-in (`satcomp-dsp` engine, `satcomp-plugin` nih-plug shell and egui UI, factory presets in `satcomp-plugin/presets/`).
+- `SatComp.jsfx`: the original REAPER JSFX prototype. Archival, frozen at v0.3.
+- `docs/`: `FOUNDATION.md` (workflow and gotchas), `PARAMETERS.md` (parameter reference), `HANDOFF.md` (JSFX-era design decisions), `TEST_CHECKLIST.md`.
+
+## Credits and license
+GPL-3.0-or-later, see `LICENSE`. Built with [nih-plug](https://github.com/robbert-vdh/nih-plug) and [egui](https://github.com/emilk/egui). Typeface: [Fira Code](https://github.com/tonsky/FiraCode) (SIL OFL 1.1, bundled in `Fira_Code_v6.2/`).
