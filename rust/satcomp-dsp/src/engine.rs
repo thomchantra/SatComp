@@ -170,6 +170,23 @@ pub struct Engine {
     ms_env: f64,
     gavg: f64,
 
+    // ---- sidechain
+    /// Set by the shell per block: an aux input bus exists. Sidechain only takes over the detector when true.
+    pub sc_avail: bool,
+    /// Solo the (gain/HP/LP-filtered) sidechain signal to the output. UI monitor, not a stored parameter.
+    pub sc_solo: bool,
+    sc_act: bool,
+    sc_g: f64,
+    sc_g_t: f64,
+    use_sc_hp: bool,
+    use_sc_lp: bool,
+    sc_hpc: Coef,
+    sc_lpc: Coef,
+    sc_hps: [[f64; 2]; 2],
+    sc_lps: [[f64; 2]; 2],
+    scd: [[f64; 64]; 2],
+    sc_s: f64,
+
     // ---- out
     mk: f64,
     mk_t: f64,
@@ -232,6 +249,9 @@ pub struct Engine {
     pub gr_pk: f64,
     pub vz_blk: f64,
     pub vz_lv: f64,
+    /// Main-signal level at the compressor input (decaying peak), for the sidechain viewport.
+    pub mn_blk: f64,
+    pub mn_lv: f64,
     pub sat_blk: f64,
     pub sat_vz: f64,
     pub fms: f64,
@@ -337,6 +357,19 @@ impl Engine {
             prev_match_on: false,
             meas: false,
             macc: 0.0,
+            sc_avail: false,
+            sc_solo: false,
+            sc_act: false,
+            sc_g: 1.0,
+            sc_g_t: 1.0,
+            use_sc_hp: false,
+            use_sc_lp: false,
+            sc_hpc: biquad::IDENTITY,
+            sc_lpc: biquad::IDENTITY,
+            sc_hps: [[0.0; 2]; 2],
+            sc_lps: [[0.0; 2]; 2],
+            scd: [[0.0; 64]; 2],
+            sc_s: 0.0,
             mt: 0.0,
             match_trim: 0.0,
             match_req: false,
@@ -362,6 +395,8 @@ impl Engine {
             gr_pk: 0.0,
             vz_blk: 0.0,
             vz_lv: 0.0,
+            mn_blk: 0.0,
+            mn_lv: 0.0,
             sat_blk: 0.0,
             sat_vz: 0.0,
             fms: 1e-9,
@@ -483,6 +518,15 @@ impl Engine {
             self.dhc = biquad::hp(p.det_hp, 0.70710678, sr);
         }
         self.fb = p.ff_fb * 0.01;
+        self.sc_g_t = (p.sc_gain * LN10_20).exp();
+        self.use_sc_hp = p.sc_hp > 20.5;
+        if self.use_sc_hp {
+            self.sc_hpc = biquad::hp(p.sc_hp, 0.70710678, sr);
+        }
+        self.use_sc_lp = p.sc_lp < 19900.0;
+        if self.use_sc_lp {
+            self.sc_lpc = biquad::lp(p.sc_lp, 0.70710678, sr);
+        }
         self.gdist = p.gr_dist * 0.01;
         self.mk_t = (p.makeup * LN10_20).exp();
         self.mix_t = p.mix * 0.01;
@@ -602,16 +646,29 @@ impl Engine {
         let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
         self.vz_lv = self.vz_blk.max(self.vz_lv * vz_d);
         self.vz_blk = 0.0;
+        self.mn_lv = self.mn_blk.max(self.mn_lv * vz_d);
+        self.mn_blk = 0.0;
         self.sat_vz = self.sat_blk.max(self.sat_vz * vz_d);
         self.sat_blk = 0.0;
     }
 
     /// Process a stereo buffer in place (one host block).
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.process_sc(left, right, None);
+    }
+
+    /// As `process`, with an optional sidechain input (same length). `None` = no sidechain bus: the detector keys off
+    /// the main signal even if sidechain is switched on.
+    pub fn process_sc(&mut self, left: &mut [f32], right: &mut [f32], sc: Option<(&[f32], &[f32])>) {
         let n = left.len().min(right.len());
+        self.sc_avail = sc.is_some();
         self.begin_block(n);
         for i in 0..n {
-            let (l, r) = self.tick(left[i] as f64, right[i] as f64);
+            let (a, b) = match sc {
+                Some((l, r)) => (l.get(i).copied().unwrap_or(0.0) as f64, r.get(i).copied().unwrap_or(0.0) as f64),
+                None => (0.0, 0.0),
+            };
+            let (l, r) = self.tick_sc(left[i] as f64, right[i] as f64, a, b);
             left[i] = l as f32;
             right[i] = r as f32;
         }
@@ -619,6 +676,12 @@ impl Engine {
 
     #[inline]
     pub fn tick(&mut self, in_l: f64, in_r: f64) -> (f64, f64) {
+        self.tick_sc(in_l, in_r, 0.0, 0.0)
+    }
+
+    /// One sample with a sidechain sample pair (ignored unless sidechain is on and `sc_avail`).
+    #[inline]
+    pub fn tick_sc(&mut self, in_l: f64, in_r: f64, sc_l: f64, sc_r: f64) -> (f64, f64) {
         let inp = [in_l, in_r];
         self.lut_cnt += 1;
         if self.lut_cnt >= crate::shapers::FADE_EVERY {
@@ -729,10 +792,30 @@ impl Engine {
             cc
         };
 
+        // ------------------------------------------------ SIDECHAIN (gain > HP > LP), aligned with `cc` (delayed by the sat latency)
+        self.sc_act = self.p.sc_on && self.sc_avail;
+        self.sc_g += (self.sc_g_t - self.sc_g) * self.og_c;
+        let mut scv = [0.0f64; 2];
+        if self.sc_act {
+            let s_in = [sc_l, sc_r];
+            for c in 0..2 {
+                let mut v = s_in[c] * self.sc_g;
+                if self.use_sc_hp {
+                    v = bq(&mut self.sc_hps[c], &self.sc_hpc, v);
+                }
+                if self.use_sc_lp {
+                    v = bq(&mut self.sc_lps[c], &self.sc_lpc, v);
+                }
+                self.scd[c][wp] = v;
+                scv[c] = self.scd[c][rd];
+            }
+        }
+        self.mn_blk = self.mn_blk.max(cc[0].abs().max(cc[1].abs()));
+
         // ------------------------------------------------ COMP
         let mut lv = [0.0f64; 2];
         for c in 0..2 {
-            let mut xd = cc[c] + self.fb * (self.prev[c] - cc[c]);
+            let mut xd = if self.sc_act { scv[c] } else { cc[c] + self.fb * (self.prev[c] - cc[c]) };
             if self.use_dhp {
                 xd = bq(&mut self.dhs[c], &self.dhc, xd);
             }
@@ -824,6 +907,13 @@ impl Engine {
         if self.d_s > 0.0001 {
             for c in 0..2 {
                 out[c] += ((cd[c] - y[c]) - out[c]) * self.d_s;
+            }
+        }
+        // sidechain solo: what the detector hears (post gain/HP/LP), replaces the output
+        self.sc_s += ((if self.sc_solo && self.sc_act { 1.0 } else { 0.0 }) - self.sc_s) * self.byp_c;
+        if self.sc_s > 0.0001 {
+            for c in 0..2 {
+                out[c] += (scv[c] - out[c]) * self.sc_s;
             }
         }
         // meters
@@ -1075,5 +1165,78 @@ mod tests {
         let x: Vec<f64> = noise(48000 * 5, 9).iter().map(|v| v * 0.3).collect();
         let _ = run(&mut e, &x, 512);
         assert!((e.match_trim + 6.0).abs() < 0.3, "{}", e.match_trim);
+    }
+
+    fn sc_params() -> Params {
+        let mut p = neutral();
+        p.ratio = 20.0;
+        p.thresh = -30.0;
+        p.attack = 0.1;
+        p.sc_on = true;
+        p
+    }
+
+    fn run_sc(e: &mut Engine, x: &[f64], sc: &[f64]) -> Vec<f64> {
+        let a: Vec<f32> = x.iter().map(|v| *v as f32).collect();
+        let b: Vec<f32> = sc.iter().map(|v| *v as f32).collect();
+        let mut out = Vec::new();
+        for (ca, cb) in a.chunks(256).zip(b.chunks(256)) {
+            let (mut l, mut r) = (ca.to_vec(), ca.to_vec());
+            e.process_sc(&mut l, &mut r, Some((cb, cb)));
+            out.extend(l.iter().map(|v| *v as f64));
+        }
+        out
+    }
+
+    #[test]
+    fn sidechain_loud_key_ducks_quiet_main() {
+        let mut e = Engine::new(SR);
+        e.set_params(&sc_params());
+        let x = sine(24000, 440.0, 0.03); // -30 dB main, would not trigger on its own
+        let sc = sine(24000, 440.0, 0.9);
+        let y = run_sc(&mut e, &x, &sc);
+        assert!(rms(&y[12000..]) < rms(&x[12000..]) * 0.5, "main should be ducked by the loud key");
+    }
+
+    #[test]
+    fn sidechain_silent_key_leaves_loud_main_alone() {
+        let mut e = Engine::new(SR);
+        e.set_params(&sc_params());
+        let x = sine(24000, 440.0, 0.9);
+        let y = run_sc(&mut e, &x, &vec![0.0; 24000]);
+        assert!((rms(&y[12000..]) - rms(&x[12000..])).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sidechain_without_aux_bus_falls_back_to_internal_detector() {
+        let mut e = Engine::new(SR);
+        e.set_params(&sc_params());
+        let x = sine(24000, 440.0, 0.9);
+        let y = run(&mut e, &x, 256); // process() = no bus
+        assert!(rms(&y[12000..]) < rms(&x[12000..]) * 0.5);
+    }
+
+    #[test]
+    fn sidechain_hp_ignores_a_low_key() {
+        let mut p = sc_params();
+        p.sc_hp = 2000.0;
+        let mut e = Engine::new(SR);
+        e.set_params(&p);
+        let x = sine(24000, 440.0, 0.03);
+        let y = run_sc(&mut e, &x, &sine(24000, 50.0, 0.9)); // 50 Hz key is filtered away
+        assert!((rms(&y[12000..]) - rms(&x[12000..])).abs() < rms(&x[12000..]) * 0.02);
+    }
+
+    #[test]
+    fn sidechain_solo_outputs_the_filtered_key() {
+        let mut p = sc_params();
+        p.sc_gain = -6.0;
+        let mut e = Engine::new(SR);
+        e.set_params(&p);
+        e.sc_solo = true;
+        let key = sine(24000, 1000.0, 0.5);
+        let y = run_sc(&mut e, &sine(24000, 440.0, 0.1), &key);
+        let want = rms(&key[12000..]) * 0.5012; // -6 dB
+        assert!((rms(&y[12000..]) - want).abs() < want * 0.03);
     }
 }

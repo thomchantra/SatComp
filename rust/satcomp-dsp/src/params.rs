@@ -63,6 +63,11 @@ pub struct Params {
     pub eq_pre_bypass: bool,    // 60
     pub eq_post_bypass: bool,   // 61
     pub eq_module_bypass: bool, // 62
+    // SIDECHAIN (detector key from the aux input)
+    pub sc_on: bool,   // 63
+    pub sc_gain: f64,  // 64  -24..24 dB
+    pub sc_hp: f64,    // 65  20..2000 Hz (<=20.5 = off)
+    pub sc_lp: f64,    // 66  1000..20000 Hz (>=19900 = off)
 }
 
 impl Default for Params {
@@ -99,6 +104,10 @@ impl Default for Params {
             eq_pre_bypass: false,
             eq_post_bypass: false,
             eq_module_bypass: false,
+            sc_on: false,
+            sc_gain: 0.0,
+            sc_hp: 20.0,
+            sc_lp: 20000.0,
         }
     }
 }
