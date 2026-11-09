@@ -1775,11 +1775,13 @@ impl<'a> Gui<'a> {
     fn open_preset_menu(&mut self, x: f32, y: f32) {
         self.user = presets::scan_user();
         let mut items = vec![
+            MItem { label: "Initialize preset".into(), kind: 0, id: 1 },
             MItem { label: "Load preset...".into(), kind: 0, id: 0 },
             MItem { label: String::new(), kind: 2, id: -1 },
             MItem { label: "FACTORY".into(), kind: 1, id: -1 },
         ];
-        for (i, p) in self.factory.iter().enumerate() {
+        // factory[0] is the built-in INIT: it is the "Initialize preset" entry above, so not listed twice
+        for (i, p) in self.factory.iter().enumerate().skip(1) {
             items.push(MItem { label: p.name.clone(), kind: 0, id: 1000 + i as i32 });
         }
         if !self.user.is_empty() {
@@ -1790,6 +1792,7 @@ impl<'a> Gui<'a> {
             }
         }
         let checked = match self.preset_index() {
+            Some(0) => 1,
             Some(i) if i < self.factory.len() => 1000 + i as i32,
             Some(i) => 2000 + (i - self.factory.len()) as i32,
             None => -1,
@@ -1800,6 +1803,7 @@ impl<'a> Gui<'a> {
     fn preset_action(&mut self, id: i32) {
         match id {
             0 => self.pending = 1,
+            1 => self.apply_preset(&Preset::init()),
             1000..=1999 => {
                 if let Some(p) = self.preset_at((id - 1000) as usize) {
                     self.apply_preset(&p);
