@@ -8,7 +8,7 @@ use crate::Shared;
 use nih_plug::prelude::*;
 use satcomp_dsp::biquad::{eq_coef, mag_db};
 use satcomp_dsp::eq::{decode_band, decode_tilt, kind_of, ui_idx};
-use satcomp_dsp::shapers::{ShaperLut, SHAPER_NAMES};
+use satcomp_dsp::shapers::{Curve, ShaperLut, CUSTOM, MAX_PTS, MIN_GAP, SHAPER_NAMES};
 use satcomp_dsp::GainComputer;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
@@ -1572,6 +1572,9 @@ impl<'a> Gui<'a> {
             let v = p.params.get(id).copied().unwrap_or(df).clamp(mn, mx);
             self.click_set(n, v);
         }
+        // absent curve = linear (deterministic: loading a preset never keeps the previous preset's curve)
+        let c = Curve::from_points(&p.curve);
+        *self.env.params.custom_curve.lock() = c.pts().to_vec();
         self.set_preset_name(&p.name);
     }
 
@@ -1581,7 +1584,12 @@ impl<'a> Gui<'a> {
             .filter(|e| !presets::EXCLUDED.contains(&e.1))
             .map(|e| (e.1.to_string(), self.sget(e.0)))
             .collect();
-        Preset::new(name, params)
+        let mut p = Preset::new(name, params);
+        let c = self.env.params.curve_snapshot();
+        if c != Curve::linear() {
+            p.curve = c.pts().to_vec();
+        }
+        p
     }
 
     fn preset_count(&self) -> usize {

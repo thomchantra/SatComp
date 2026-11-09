@@ -20,11 +20,14 @@ pub struct Preset {
     pub version: u32,
     pub name: String,
     pub params: BTreeMap<String, f32>,
+    /// Custom waveshaper curve points (absent in older presets = linear). Backward compatible: version stays 1.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curve: Vec<(f32, f32)>,
 }
 
 impl Preset {
     pub fn new(name: &str, params: BTreeMap<String, f32>) -> Self {
-        Self { format: "satcomp-preset".into(), version: 1, name: name.into(), params }
+        Self { format: "satcomp-preset".into(), version: 1, name: name.into(), params, curve: Vec::new() }
     }
 
     /// All defaults.
@@ -145,6 +148,17 @@ mod tests {
         let q = Preset::from_json(&p.to_json()).unwrap();
         assert_eq!(q.params, p.params);
         assert!(Preset::from_json("{\"format\":\"nope\"}").is_none());
+    }
+
+    #[test]
+    fn curve_roundtrips_and_old_presets_load_without_it() {
+        let mut p = Preset::init();
+        assert!(!p.to_json().contains("curve")); // not written when unused
+        p.curve = vec![(-1.0, -1.0), (0.0, 0.3), (1.0, 1.0)];
+        let q = Preset::from_json(&p.to_json()).unwrap();
+        assert_eq!(q.curve, p.curve);
+        let old = r#"{"format":"satcomp-preset","version":1,"name":"x","params":{}}"#;
+        assert!(Preset::from_json(old).unwrap().curve.is_empty());
     }
 
     #[test]

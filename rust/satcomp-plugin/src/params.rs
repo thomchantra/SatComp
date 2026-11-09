@@ -2,13 +2,14 @@
 
 use nih_plug::prelude::*;
 use nih_plug_egui::EguiState;
+use satcomp_dsp::shapers::Curve;
 use satcomp_dsp::{EqBandParams, EqStageParams};
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 /// (slider number, id, min, max, default, step) for every parameter; slider numbers follow SatComp.jsfx.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
-    (1, "shape", 0.0, 13.0, 0.0),
+    (1, "shape", 0.0, 14.0, 0.0),
     (2, "drive", 0.0, 100.0, 25.0),
     (3, "bias", -100.0, 100.0, 0.0),
     (4, "sat_hp", 20.0, 2000.0, 20.0),
@@ -79,6 +80,9 @@ pub struct SatCompParams {
     /// Name of the last loaded/saved preset (display only).
     #[persist = "preset-name"]
     pub preset_name: Arc<parking_lot::Mutex<String>>,
+    /// User-drawn waveshaper curve (points on [-1,1]^2, shaper 14 "Custom"); saved with the project and presets.
+    #[persist = "custom-curve"]
+    pub custom_curve: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,
     /// Out-stage gain-match trim (dB) written by the 3 s measurement; saved with the project.
     #[persist = "match-trim"]
     pub match_trim: Arc<AtomicF32>,
@@ -208,8 +212,9 @@ impl Default for SatCompParams {
             editor_state: EguiState::from_size(700, 420),
             palette: Arc::new(AtomicI32::new(0)),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
+            custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             match_trim: Arc::new(AtomicF32::new(0.0)),
-            shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 13 }),
+            shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 14 }),
             drive: FloatParam::new("Drive", 25.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
             bias: FloatParam::new("Bias", 0.0, FloatRange::Linear { min: -100.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
             sat_hp: FloatParam::new("Sat HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
@@ -273,6 +278,11 @@ impl Default for SatCompParams {
 }
 
 impl SatCompParams {
+    /// Sanitised copy of the persisted custom curve (the UI holds this lock only for a point edit).
+    pub fn curve_snapshot(&self) -> Curve {
+        Curve::from_points(&self.custom_curve.lock())
+    }
+
     /// Snapshot for the DSP engine.
     pub fn to_dsp(&self) -> satcomp_dsp::Params {
         let stage = |bands: [(&IntParam, &FloatParam, &FloatParam, &FloatParam); 3], tilt: &FloatParam, pivot: &FloatParam, og: &FloatParam| EqStageParams {
@@ -280,7 +290,7 @@ impl SatCompParams {
             tilt: tilt.value() as f64, pivot: pivot.value() as f64, out_gain: og.value() as f64,
         };
         satcomp_dsp::Params {
-            shape: self.shape.value(), drive: self.drive.value() as f64, bias: self.bias.value() as f64,
+            shape: self.shape.value(), curve: self.curve_snapshot(), drive: self.drive.value() as f64, bias: self.bias.value() as f64,
             sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64, os: self.os.value(),
             thresh: self.thresh.value() as f64, ratio: self.ratio.value() as f64, attack: self.attack.value() as f64,
             release: self.release.value() as f64, speed: self.speed.value() as f64, knee: self.knee.value() as f64,
