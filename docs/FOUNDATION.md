@@ -27,8 +27,8 @@ Known intentional divergences (Rust vs the archival JSFX): internal smoothing on
 scale exist only in the plug-in; the **Custom waveshaper** (shaper 14, pencil draw view, `Curve` in `satcomp-dsp/src/shapers.rs`) is Rust-only, not in the JSFX; the sat level-match result is written by the UI thread (audio thread cannot set params).
 
 ## Colour schemes
-`docs/colorscheme.md` is the source; `PALETTES` in `gui/canvas.rs` is generated from it in file order (19 schemes).
-The index is persisted in project state, so only append (Bananas replaced Midnight at index 9 on 2026-11-09, pre-release).
+`docs/colorscheme.md` is the source; `PALETTES` in `gui/canvas.rs` is generated from it in file order (20 schemes).
+The index is persisted in project state, so only append (Bananas replaced Midnight at index 9 on 2026-11-09, pre-release; Midnight was re-added at the end, index 19).
 
 ## Git convention
 - **Commit as you go, in small layers** so `git diff`/`git log -p` reads cleanly: one concern per commit, typically
