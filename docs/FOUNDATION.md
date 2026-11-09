@@ -78,6 +78,10 @@ Install for REAPER: copy the bundles to `~/Library/Audio/Plug-Ins/VST3/` and `..
 - Windows: cannot be built here. `.github/workflows/build.yml` builds macOS universal + Windows x64 on push, and on a
   `v*` tag zips both and attaches them to a GitHub release. **The Windows build and the first CI run are untested**;
   check them (and load the DLL bundle in a Windows DAW) before announcing it.
+- **Release convention (from 0.5.1):** write `docs/releases/<tag>.md` first (fixed / new / notes / compare link), update the in-plugin
+  `CHANGELOG`, README, this file and `docs/screenshot.png`, bump both crate versions, push `main`, then push the annotated tag.
+  The release job uses that file as the release body; `.github/workflows/release-notes.yml` re-applies the files to existing
+  releases when they change (or via manual dispatch). Verify the release page (assets and description) afterwards.
 - Docs for users: `README.md`. `LICENSE` is GPL-3.0 (copied from the nih-plug checkout, the standard FSF text).
 
 ## Identity (never change after release)
