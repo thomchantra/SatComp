@@ -3,15 +3,16 @@
 
 use super::*;
 
-const SRC: [&str; 3] = ["OUT+RED", "OUT", "RED"];
+const SRC: [&str; 3] = ["OUT+GR", "OUT", "GR"];
 const WAVE: [&str; 2] = ["HALF", "FULL"];
-const WIN: [&str; 4] = ["0.5s", "1s", "2s", "4s"];
-const WIN_S: [f32; 4] = [0.5, 1.0, 2.0, 4.0];
-const ZOOM: [&str; 4] = ["x1", "x2", "x4", "x8"];
-const ZOOM_F: [f32; 4] = [1.0, 2.0, 4.0, 8.0];
+/// time window steps (seconds) and their labels
+const WIN_S: [f32; 10] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
+const WIN_L: [&str; 10] = ["250ms", "0.5s", "0.75s", "1s", "1.5s", "2s", "3s", "4s", "6s", "8s"];
+/// headroom ceiling steps: 0 dB (the top edge is full scale) down to -14 dB (about 20 % of full scale)
+const CEIL_N: usize = 15;
 
-/// Packed settings: bit 0 on, bits 1-2 source, bit 3 full wave, bits 4-5 window, bits 6-7 zoom.
-pub const SCOPE_DEFAULT: i32 = 2 << 4;
+// Packed settings (params.scope, default 5 << 4 = 2 s window, 0 dB ceiling): bit 0 on, bits 1-2 source, bit 3 full wave,
+// bits 4-7 window step, bits 8-11 ceiling in -dB.
 
 impl State {
     pub fn scope_on(&self) -> bool {
@@ -59,7 +60,25 @@ impl<'a> Gui<'a> {
 
     pub(super) fn draw_scope(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let (src, full) = (self.sc_get(1, 3).min(2), self.sc_get(3, 1) == 1);
-        let (win, zoom) = (self.sc_get(4, 3), ZOOM_F[self.sc_get(6, 3)]);
+        let (win, ceil) = (self.sc_get(4, 15).min(WIN_S.len() - 1), self.sc_get(8, 15).min(CEIL_N - 1));
+        // viewport drag (relative): x steps through the window, y moves the ceiling (down = lower ceiling = zoomed in)
+        if self.hit(x, y, w, h) && self.press && self.act == 0 {
+            self.act = 144;
+            self.vt1 = 0;
+            self.vt2 = 0;
+            self.scope_drag = (self.mx, self.my, win, ceil);
+            self.press = false;
+        }
+        let dragging = self.act == 144;
+        if dragging && self.down {
+            let (sx, sy, w0, c0) = self.scope_drag;
+            let nw = (w0 as f32 + (self.mx - sx) / w * (WIN_S.len() - 1) as f32).round().clamp(0.0, (WIN_S.len() - 1) as f32);
+            let nc = (c0 as f32 + (self.my - sy) / h * (CEIL_N - 1) as f32).round().clamp(0.0, (CEIL_N - 1) as f32);
+            self.sc_set(4, 15, nw as usize);
+            self.sc_set(8, 15, nc as usize);
+        }
+        let (win, ceil) = (self.sc_get(4, 15).min(WIN_S.len() - 1), self.sc_get(8, 15).min(CEIL_N - 1));
+        let zoom = 10f32.powf(ceil as f32 / 20.0); // 1 / ceiling amplitude
         self.setc(false);
         self.cv.boxr(x, y, w, h);
         let ring = self.env.shared.scope.clone();
@@ -121,19 +140,25 @@ impl<'a> Gui<'a> {
         if full {
             self.cv.fill(x + 1.0, base, 1.0, 1.0); // centre tick
         }
+        if dragging {
+            let t = format!("WIN {}  CEIL -{}dB", WIN_L[win], ceil);
+            let tw = self.cv.text_w(&t);
+            self.cv.setbg();
+            self.cv.fill(x + 4.0, y + 4.0, tw + 8.0, 13.0);
+            self.setc(false);
+            self.cv.boxr(x + 4.0, y + 4.0, tw + 8.0, 13.0);
+            self.cv.set_font(1);
+            self.cv.text(x + 8.0, y + 8.0, &t);
+        }
     }
 
-    /// Settings under the scope: source, half / full wave, time window, vertical zoom. Click or wheel cycles a value.
+    /// Settings under the scope: source and wave type cycle on click; window and ceiling are drag sliders (stepped).
     pub(super) fn scope_row(&mut self, x: f32, y: f32) {
         let h = 17.0;
-        let cells: [(&str, &[&str], u32, i32, f32); 4] = [
-            ("SRC", &SRC, 1, 3, 78.0),
-            ("WAVE", &WAVE, 3, 1, 68.0),
-            ("WIN", &WIN, 4, 3, 58.0),
-            ("ZOOM", &ZOOM, 6, 3, 266.0 - 78.0 - 68.0 - 58.0 + 3.0),
-        ];
+        let ceil_w = 266.0 - 74.0 - 64.0 - 62.0 + 3.0;
         let mut cx = x;
-        for (lbl, names, shift, bits, w) in cells {
+        // SRC and WAVE: click / wheel cycles
+        for (lbl, names, shift, bits, w) in [("SRC", &SRC[..], 1u32, 3i32, 74.0f32), ("WAVE", &WAVE[..], 3, 1, 64.0)] {
             let n = names.len();
             let cur = self.sc_get(shift, bits).min(n - 1);
             if self.hit(cx, y, w, h) {
@@ -150,6 +175,37 @@ impl<'a> Gui<'a> {
             self.cv.set_font(1);
             self.cv.text(cx + 4.0, y + 5.0, lbl);
             self.cv.textr(cx, y + 5.0, w - 4.0, names[cur]);
+            cx += w - 1.0;
+        }
+        // WIN and CEIL: horizontal drag sliders over their cell, stepped
+        for (k, lbl, shift, n, w) in [(0usize, "WIN", 4u32, WIN_S.len(), 62.0f32), (1, "CEIL", 8, CEIL_N, ceil_w)] {
+            let act = 142 + k as i32;
+            let cur = self.sc_get(shift, 15).min(n - 1);
+            if self.hit(cx, y, w, h) {
+                if self.press && self.act == 0 {
+                    self.act = act;
+                    self.vt1 = 0;
+                    self.vt2 = 0;
+                    self.press = false;
+                } else if self.wheel != 0 {
+                    let nx = (cur as i32 + if self.wheel > 0 { -1 } else { 1 }).clamp(0, n as i32 - 1) as usize;
+                    self.sc_set(shift, 15, nx);
+                }
+            }
+            if self.act == act && self.down {
+                let f = ((self.mx - cx - 2.0) / (w - 4.0)).clamp(0.0, 1.0);
+                self.sc_set(shift, 15, (f * (n - 1) as f32 + 0.5).floor() as usize);
+            }
+            let cur = self.sc_get(shift, 15).min(n - 1);
+            self.setc(self.act == act);
+            self.cv.boxr(cx, y, w, h);
+            self.cv.set_font(1);
+            self.cv.text(cx + 4.0, y + 5.0, lbl);
+            let val = if k == 0 { WIN_L[cur].to_string() } else { format!("-{cur}dB") };
+            self.cv.textr(cx, y + 5.0, w - 4.0, &val);
+            let t = cur as f32 / (n - 1) as f32;
+            self.cv.fill(cx + 2.0, y + h - 3.0, ((t * (w - 4.0)).floor()).max(1.0), 1.0);
+            self.setc(false);
             cx += w - 1.0;
         }
     }

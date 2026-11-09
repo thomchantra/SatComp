@@ -95,7 +95,7 @@ pub struct SatCompParams {
     #[persist = "custom-theme"]
     pub custom_theme: Arc<parking_lot::Mutex<String>>,
     /// Packed scope view settings (see gui/ui/scope.rs); UI-only, saved with the project.
-    #[persist = "scope-cfg"]
+    #[persist = "scope-v2"]
     pub scope: Arc<AtomicI32>,
     /// Name of the last loaded/saved preset (display only).
     #[persist = "preset-name"]
@@ -244,7 +244,7 @@ impl Default for SatCompParams {
             palette_v2: Arc::new(AtomicI32::new(-1)),
             light: Arc::new(AtomicBool::new(false)),
             font: Arc::new(AtomicI32::new(0)),
-            scope: Arc::new(AtomicI32::new(2 << 4)),
+            scope: Arc::new(AtomicI32::new(5 << 4)),
             custom_theme: Arc::new(parking_lot::Mutex::new(String::new())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
