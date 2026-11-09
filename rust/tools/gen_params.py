@@ -46,6 +46,10 @@ add(59, "lookahead", "Lookahead", "f", 0, 10, 0, 0.1, " ms")
 add(60, "eq_pre_bypass", "EQ Pre Bypass", "bool", 0, 1, 0)
 add(61, "eq_post_bypass", "EQ Post Bypass", "bool", 0, 1, 0)
 add(62, "eq_module_bypass", "EQ Module Bypass", "bool", 0, 1, 0)
+add(63, "sc_on", "Sidechain", "bool", 0, 1, 0)
+add(64, "sc_gain", "SC Gain", "f", -24, 24, 0, 0.1, " dB")
+add(65, "sc_hp", "SC HP", "f", 20, 2000, 20, 1, " Hz")
+add(66, "sc_lp", "SC LP", "f", 1000, 20000, 20000, 1, " Hz")
 
 def f(x):
     s = repr(float(x))
@@ -106,6 +110,7 @@ def stage_expr(sp):
 o.append(f"            eq: [{stage_expr('pre')}, {stage_expr('post')}],")
 o.append("            lookahead_ms: self.lookahead.value() as f64, eq_pre_bypass: self.eq_pre_bypass.value(),")
 o.append("            eq_post_bypass: self.eq_post_bypass.value(), eq_module_bypass: self.eq_module_bypass.value(),")
+o.append("            sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64,")
 o.append("        }\n    }\n")
 o.append("    /// Parameter by JSFX slider number (UI addressing).\n    pub fn ptr(&self, n: usize) -> Option<ParamPtr> {\n        Some(match n {")
 for n, fl, *_ in P:

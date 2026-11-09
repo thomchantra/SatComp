@@ -68,6 +68,10 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (60, "eq_pre_bypass", 0.0, 1.0, 0.0),
     (61, "eq_post_bypass", 0.0, 1.0, 0.0),
     (62, "eq_module_bypass", 0.0, 1.0, 0.0),
+    (63, "sc_on", 0.0, 1.0, 0.0),
+    (64, "sc_gain", -24.0, 24.0, 0.0),
+    (65, "sc_hp", 20.0, 2000.0, 20.0),
+    (66, "sc_lp", 1000.0, 20000.0, 20000.0),
 ];
 
 #[derive(Params)]
@@ -204,6 +208,14 @@ pub struct SatCompParams {
     pub eq_post_bypass: BoolParam,
     #[id = "eq_module_bypass"]
     pub eq_module_bypass: BoolParam,
+    #[id = "sc_on"]
+    pub sc_on: BoolParam,
+    #[id = "sc_gain"]
+    pub sc_gain: FloatParam,
+    #[id = "sc_hp"]
+    pub sc_hp: FloatParam,
+    #[id = "sc_lp"]
+    pub sc_lp: FloatParam,
 }
 
 impl Default for SatCompParams {
@@ -273,6 +285,10 @@ impl Default for SatCompParams {
             eq_pre_bypass: BoolParam::new("EQ Pre Bypass", false),
             eq_post_bypass: BoolParam::new("EQ Post Bypass", false),
             eq_module_bypass: BoolParam::new("EQ Module Bypass", false),
+            sc_on: BoolParam::new("Sidechain", false),
+            sc_gain: FloatParam::new("SC Gain", 0.0, FloatRange::Linear { min: -24.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
+            sc_hp: FloatParam::new("SC HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
+            sc_lp: FloatParam::new("SC LP", 20000.0, FloatRange::Linear { min: 1000.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
         }
     }
 }
@@ -301,6 +317,7 @@ impl SatCompParams {
             eq: [stage([(&self.pre_b1_type, &self.pre_b1_freq, &self.pre_b1_gain, &self.pre_b1_q), (&self.pre_b2_type, &self.pre_b2_freq, &self.pre_b2_gain, &self.pre_b2_q), (&self.pre_b3_type, &self.pre_b3_freq, &self.pre_b3_gain, &self.pre_b3_q)], &self.pre_tilt, &self.pre_pivot, &self.pre_out_gain), stage([(&self.post_b1_type, &self.post_b1_freq, &self.post_b1_gain, &self.post_b1_q), (&self.post_b2_type, &self.post_b2_freq, &self.post_b2_gain, &self.post_b2_q), (&self.post_b3_type, &self.post_b3_freq, &self.post_b3_gain, &self.post_b3_q)], &self.post_tilt, &self.post_pivot, &self.post_out_gain)],
             lookahead_ms: self.lookahead.value() as f64, eq_pre_bypass: self.eq_pre_bypass.value(),
             eq_post_bypass: self.eq_post_bypass.value(), eq_module_bypass: self.eq_module_bypass.value(),
+            sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64,
         }
     }
 
@@ -366,6 +383,10 @@ impl SatCompParams {
             60 => self.eq_pre_bypass.as_ptr(),
             61 => self.eq_post_bypass.as_ptr(),
             62 => self.eq_module_bypass.as_ptr(),
+            63 => self.sc_on.as_ptr(),
+            64 => self.sc_gain.as_ptr(),
+            65 => self.sc_hp.as_ptr(),
+            66 => self.sc_lp.as_ptr(),
             _ => return None,
         })
     }

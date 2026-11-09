@@ -12,7 +12,7 @@ static FACTORY_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/presets");
 
 pub const EXT: &str = "satcomp";
 /// Never stored in a preset: Bypass is a performance switch, Gain Match is a level-dependent measurement.
-pub const EXCLUDED: [&str; 2] = ["bypass", "gain_match"];
+pub const EXCLUDED: [&str; 3] = ["bypass", "gain_match", "sc_on"];
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Preset {

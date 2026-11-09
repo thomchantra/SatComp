@@ -37,6 +37,11 @@ pub struct Shared {
     pub delta_on: AtomicBool,
     pub eq_vis_ms: AtomicU64,
     pub eq_vs: AtomicUsize,
+    /// UI -> audio: solo the sidechain signal (monitor only, never stored).
+    pub sc_solo: AtomicBool,
+    /// audio -> UI: the host gave us a sidechain bus (so the SC switch can take effect) and main level at the comp input.
+    pub sc_bus: AtomicBool,
+    pub mn_lv: AtomicF32,
 }
 
 impl Shared {
@@ -65,6 +70,9 @@ impl Shared {
             delta_on: AtomicBool::new(false),
             eq_vis_ms: AtomicU64::new(0),
             eq_vs: AtomicUsize::new(0),
+            sc_solo: AtomicBool::new(false),
+            sc_bus: AtomicBool::new(false),
+            mn_lv: AtomicF32::new(0.0),
         }
     }
     pub fn now_ms(&self) -> u64 {
@@ -95,11 +103,21 @@ impl Plugin for SatComp {
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: NonZeroU32::new(2),
-        main_output_channels: NonZeroU32::new(2),
-        ..AudioIOLayout::const_default()
-    }];
+    // First layout = stereo + stereo sidechain; hosts without sidechain support fall back to the second.
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
+        AudioIOLayout {
+            main_input_channels: NonZeroU32::new(2),
+            main_output_channels: NonZeroU32::new(2),
+            aux_input_ports: &[new_nonzero_u32(2)],
+            names: PortNames { aux_inputs: &["Sidechain"], ..PortNames::const_default() },
+            ..AudioIOLayout::const_default()
+        },
+        AudioIOLayout {
+            main_input_channels: NonZeroU32::new(2),
+            main_output_channels: NonZeroU32::new(2),
+            ..AudioIOLayout::const_default()
+        },
+    ];
 
     type SysExMessage = ();
     type BackgroundTask = ();
@@ -142,7 +160,7 @@ impl Plugin for SatComp {
     fn process(
         &mut self,
         buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
+        aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let sh = &self.shared;
@@ -162,9 +180,16 @@ impl Plugin for SatComp {
         self.engine.eq_tap_on = sh.now_ms().saturating_sub(sh.eq_vis_ms.load(Ordering::Relaxed)) < 300;
         self.engine.eq_vs = sh.eq_vs.load(Ordering::Relaxed);
 
+        self.engine.sc_solo = sh.sc_solo.load(Ordering::Relaxed);
         let ch = buffer.as_slice();
+        let sc_in = aux.inputs.first_mut().map(|b| b.as_slice_immutable());
+        let sc_pair = match sc_in {
+            Some([a, b]) => Some((&a[..], &b[..])),
+            _ => None,
+        };
+        sh.sc_bus.store(sc_pair.is_some(), Ordering::Relaxed);
         if let [l, r] = ch {
-            self.engine.process(l, r);
+            self.engine.process_sc(l, r, sc_pair);
         }
 
         let e = &mut self.engine;
@@ -179,6 +204,7 @@ impl Plugin for SatComp {
         e.gr_pk = 0.0;
         sh.fms.store(e.fms as f32, Ordering::Relaxed);
         sh.vz_lv.store(e.vz_lv as f32, Ordering::Relaxed);
+        sh.mn_lv.store(e.mn_lv as f32, Ordering::Relaxed);
         sh.sat_vz.store(e.sat_vz as f32, Ordering::Relaxed);
         sh.diff_disp.store(e.diff_disp as f32, Ordering::Relaxed);
         sh.sat_db.store(e.sat_db as f32, Ordering::Relaxed);
