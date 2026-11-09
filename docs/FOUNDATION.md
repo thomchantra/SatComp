@@ -25,7 +25,16 @@ New ideas start in the JSFX; once the owner signs one off it is ported, never th
 
 Known intentional divergences (Rust vs JSFX): internal smoothing on Drive / Bias / Makeup / Mix / Sat Mix
 (`Engine.smoothing`, set false for null tests); Gain Match is on/off (Auto is retired); presets and the window
-scale exist only in the plug-in; the sat level-match result is written by the UI thread (audio thread cannot set params).
+scale exist only in the plug-in; the **Custom waveshaper** (shaper 14, pencil draw view, `Curve` in `satcomp-dsp/src/shapers.rs`) is Rust-only, not in the JSFX; the sat level-match result is written by the UI thread (audio thread cannot set params).
+
+## Git convention
+- **Commit as you go, in small layers** so `git diff`/`git log -p` reads cleanly: one concern per commit, typically
+  DSP -> params/presets -> UI -> docs/version. Each commit should build and pass `cargo test`; if a layer can't
+  (e.g. DSP crate changes before the plug-in is adapted) say so in the message.
+- Attempts that did not fix the problem still get their own labelled commit ("attempt, NOT fixed") so they are easy to revert.
+- Messages: `area: what and why`, area = `dsp` / `plugin` / `gui` / `docs`. Commits end with the `Co-Authored-By` line.
+- **Never rewrite or otherwise edit existing git state without asking the owner first**: no amend, rebase, reset,
+  force-push, history edits, tag moves, config or remote changes. Adding new commits is fine without asking.
 
 ## Repo map
 
@@ -91,9 +100,20 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 - **Windows builds must come from a Windows machine** (GitHub Actions `windows-latest`); no cross-compile. Not set up yet.
 - GPL is fine for this project; `nih_plug_egui` is ISC, Fira Code is OFL (keep the licence with any distribution).
 
+## Custom waveshaper (v0.4)
+- Shaper 14 = a user curve: <=10 points (x=-1 and x=+1 fixed in x, y editable, up to 8 interior), monotone cubic
+  (Fritsch-Carlson) so it never overshoots, flat beyond +-1 (= hard clip). Baked into the same 4097-point LUT as the
+  other shapers, so drive/bias/oversampling behave identically.
+- Stored as persisted `custom_curve` (not an automatable parameter) and as optional `curve` in preset files
+  (absent = linear, so loading a preset always replaces the curve). Edit view: pencil icon in the sat plot; click empty =
+  add + drag, drag = move, double-click = remove; view is drive-independent (unity input).
+- Gotcha: parameter writes land in the host a frame or more later, so UI code must not read a parameter right after
+  `click_set` and expect the new value (the draw view's auto-exit waits until it has seen shape 14).
+- Not covered by tests: the mouse interaction (verified by screenshot only until tried in REAPER).
+
 ## Open / next
 - Null test against JSFX renders (REAPER offline render of sweep / noise / drum loop at fixed settings, compare with
   `smoothing = false`).
 - Owner supplies hand-tuned presets for `rust/satcomp-plugin/presets/`.
-- Resize grip and file dialogs need an owner test in REAPER. `clap-validator`, GitHub repo + CI (mac + Windows), signing/notarization.
+- **Resize grip is still broken** (drag causes a stutter/scaling loop; two fix attempts, last = `80cd756`). Use the size dropdown (right-click grip). Revisit: commit-on-release with a ghost outline is the fallback design. File dialogs still need an owner test in REAPER. `clap-validator`, GitHub repo + CI (mac + Windows), signing/notarization.
 - Not done: unsaved-changes marker, preset rename/delete, AU via clap-wrapper, `desc:`/version in the title.
