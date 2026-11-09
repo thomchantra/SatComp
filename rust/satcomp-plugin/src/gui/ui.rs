@@ -129,6 +129,11 @@ pub struct State {
     fwin: Vec<f32>,
     // sat plot
     lut: ShaperLut,
+    /// custom-curve draw mode (pencil) and the point being dragged
+    curve_edit: bool,
+    /// shape was observed as Custom since the draw view opened (host writes land a frame or more later)
+    edit_seen: bool,
+    cpt: usize,
     dk: f32,
     // window resize grip
     resizing: bool,
@@ -278,6 +283,9 @@ impl State {
             spec_t: 0.0,
             fwin,
             lut: ShaperLut::new(0),
+            curve_edit: false,
+            edit_seen: false,
+            cpt: 0,
             dk: 1.0,
             resizing: false,
             resize_off: (0.0, 0.0),
@@ -654,13 +662,13 @@ impl<'a> Gui<'a> {
         let hv = self.hit(x, y, w, h);
         let mut sel = (self.sget(n) + 0.5).floor() as i32;
         if hv && self.wheel != 0 {
-            self.click_set(n, (sel + if self.wheel > 0 { -1 } else { 1 }).clamp(0, 13) as f32);
+            self.click_set(n, (sel + if self.wheel > 0 { -1 } else { 1 }).clamp(0, CUSTOM) as f32);
         }
         if hv && self.press && self.act == 0 {
             if self.mx < x + aw {
-                self.click_set(n, if sel <= 0 { 13.0 } else { (sel - 1) as f32 });
+                self.click_set(n, if sel <= 0 { CUSTOM as f32 } else { (sel - 1) as f32 });
             } else if self.mx >= x + w - aw {
-                self.click_set(n, if sel >= 13 { 0.0 } else { (sel + 1) as f32 });
+                self.click_set(n, if sel >= CUSTOM { 0.0 } else { (sel + 1) as f32 });
             } else {
                 let items = SHAPER_NAMES.iter().map(|s| s.to_string()).collect();
                 self.open_menu(MenuKind::Shape, x, y + h, items, sel as usize);
@@ -675,7 +683,7 @@ impl<'a> Gui<'a> {
         self.cv.tri((x + aw * 0.5 + 2.0, cy - 3.0), (x + aw * 0.5 + 2.0, cy + 3.0), (x + aw * 0.5 - 2.0, cy));
         self.cv.tri((x + w - aw * 0.5 - 2.0, cy - 3.0), (x + w - aw * 0.5 - 2.0, cy + 3.0), (x + w - aw * 0.5 + 2.0, cy));
         self.cv.set_font(2);
-        let name = SHAPER_NAMES[sel.clamp(0, 13) as usize].to_uppercase();
+        let name = SHAPER_NAMES[sel.clamp(0, CUSTOM) as usize].to_uppercase();
         self.cv.textc(x + aw, y + ((h - 8.0) * 0.5).floor(), w - 2.0 * aw, &name);
     }
 
@@ -895,10 +903,25 @@ impl<'a> Gui<'a> {
         let sat_on = dsp.drive > 0.0 || dsp.bias != 0.0;
         let pre = (dsp.drive * 0.01 * 36.0 * 0.11512925).exp() as f32;
         let bias = (dsp.bias * 0.01) as f32;
-        if self.lut.sel != dsp.shape {
-            self.lut.build(dsp.shape);
+        self.lut.sync(dsp.shape, &dsp.curve);
+        // pencil (top right): toggles the custom-curve draw view; entering selects the Custom shaper so edits are audible
+        let pen = self.hit(x + w - 14.0, y + 2.0, 12.0, 12.0);
+        if pen && self.press && self.act == 0 {
+            self.curve_edit = !self.curve_edit;
+            self.edit_seen = false;
+            if self.curve_edit {
+                self.click_set(1, CUSTOM as f32);
+            }
+            self.press = false;
         }
-        let hv = self.hit(x, y, w, h);
+        if self.curve_edit {
+            if (self.sget(1) + 0.5).floor() as i32 == CUSTOM {
+                self.edit_seen = true;
+            } else if self.edit_seen {
+                self.curve_edit = false; // another shaper was chosen
+            }
+        }
+        let hv = self.hit(x, y, w, h) && !self.curve_edit;
         let tb = self.hit(x + w - 84.0, y + h - 14.0, 82.0, 12.0);
         if hv && self.press && self.act == 0 {
             if tb {
@@ -918,6 +941,11 @@ impl<'a> Gui<'a> {
         }
         for i in 0..(h / 2.0).floor() as i32 {
             self.cv.fill(x + (w / 2.0).floor(), y + i as f32 * 2.0, 1.0, 1.0);
+        }
+        self.pencil_glyph(x + w - 14.0, y + 2.0, self.curve_edit, pen);
+        if self.curve_edit {
+            self.draw_curve_edit(x, y, w, h);
+            return;
         }
         let pk = sh.sat_vz.load(Ordering::Relaxed).min(1.0);
         let n = 64;
@@ -965,6 +993,121 @@ impl<'a> Gui<'a> {
         };
         self.cv.textr(x, y + h - 14.0, w - 3.0, &s);
         self.setc(false);
+    }
+
+    /// 12x12 pencil icon; lit while the draw view is open, bright on hover.
+    fn pencil_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
+        self.set_dk(if on || hover { 1.0 } else { 0.6 });
+        self.setc(on);
+        let l = |s: &Self, a: f32, b: f32, c: f32, d: f32| s.cv.line(x + a, y + b, x + c, y + d);
+        l(self, 8.0, 1.0, 10.0, 3.0); // eraser cap
+        l(self, 8.0, 1.0, 1.0, 8.0); // body
+        l(self, 10.0, 3.0, 3.0, 10.0);
+        l(self, 1.0, 8.0, 0.0, 11.0); // tip
+        l(self, 3.0, 10.0, 0.0, 11.0);
+        self.set_dk(1.0);
+        self.setc(false);
+    }
+
+    /// Draw view of the custom curve (unity input, independent of drive/bias).
+    /// Left click empty space = add a point (and drag it), drag = move, double click = remove.
+    /// The two end points are fixed in x and cannot be removed.
+    fn draw_curve_edit(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let mut c = self.env.params.curve_snapshot();
+        let before = c;
+        // domain [-1,1]^2 is inset so end points and the pencil never collide (symmetric margins keep the centre cross true)
+        let (ex, ey, ew, eh) = (x + 9.0, y + 14.0, w - 18.0, h - 28.0);
+        let (px, py) = (|vx: f32| ex + (vx + 1.0) * 0.5 * (ew - 1.0), |vy: f32| ey + (1.0 - (vy + 1.0) * 0.5) * (eh - 1.0));
+        let to_v = |mx: f32, my: f32| (((mx - ex) / (ew - 1.0)) * 2.0 - 1.0, 1.0 - ((my - ey) / (eh - 1.0)) * 2.0);
+        let pick = |s: &Self, c: &Curve| -> Option<usize> {
+            let mut best: Option<(usize, f32)> = None;
+            for (i, &(vx, vy)) in c.pts().iter().enumerate() {
+                let d = ((s.mx - px(vx)).powi(2) + (s.my - py(vy)).powi(2)).sqrt();
+                if d <= 6.0 && best.map_or(true, |b| d < b.1) {
+                    best = Some((i, d));
+                }
+            }
+            best.map(|b| b.0)
+        };
+        let in_box = self.hit(x, y, w, h) && !self.hit(x + w - 14.0, y + 2.0, 12.0, 12.0);
+        if in_box && self.press && self.act == 0 {
+            if let Some(i) = pick(self, &c) {
+                let interior = i > 0 && i + 1 < c.n;
+                if self.dbl(200 + i as i32) && interior {
+                    for k in i..c.n - 1 {
+                        c.p[k] = c.p[k + 1];
+                    }
+                    c.n -= 1;
+                    self.last_clk_n = 0;
+                } else {
+                    self.act = 160;
+                    self.cpt = i;
+                }
+            } else if c.n < MAX_PTS {
+                let (vx, vy) = to_v(self.mx, self.my);
+                let at = (1..c.n).find(|&k| c.p[k].0 > vx).unwrap_or(c.n - 1);
+                let room = vx - c.p[at - 1].0 >= MIN_GAP && c.p[at].0 - vx >= MIN_GAP;
+                if room {
+                    for k in (at..c.n).rev() {
+                        c.p[k + 1] = c.p[k];
+                    }
+                    c.p[at] = (vx, vy.clamp(-1.0, 1.0));
+                    c.n += 1;
+                    self.act = 160;
+                    self.cpt = at;
+                    self.last_clk_n = 0; // a creating click never counts towards a double click
+                }
+            }
+            self.vt1 = 0;
+            self.vt2 = 0;
+            self.press = false;
+        }
+        if self.act == 160 && self.down && self.cpt < c.n {
+            let (vx, vy) = to_v(self.mx, self.my);
+            let i = self.cpt;
+            if i > 0 && i + 1 < c.n {
+                c.p[i].0 = vx.clamp(c.p[i - 1].0 + MIN_GAP, c.p[i + 1].0 - MIN_GAP);
+            }
+            c.p[i].1 = vy.clamp(-1.0, 1.0);
+        }
+        if c != before {
+            *self.env.params.custom_curve.lock() = c.pts().to_vec();
+        }
+        // identity reference (dotted), the curve, then the points
+        self.set_dk(0.5);
+        self.setc(false);
+        for i in 0..(ew / 3.0).floor() as i32 {
+            let vx = -1.0 + 2.0 * i as f32 / (ew / 3.0).floor();
+            self.cv.fill(px(vx), py(vx), 1.0, 1.0); // identity
+            self.cv.fill(px(vx), py(1.0), 1.0, 1.0); // domain frame (+-1)
+            self.cv.fill(px(vx), py(-1.0), 1.0, 1.0);
+            self.cv.fill(px(1.0), py(vx), 1.0, 1.0);
+            self.cv.fill(px(-1.0), py(vx), 1.0, 1.0);
+        }
+        self.set_dk(1.0);
+        let n = 96;
+        let (mut lx, mut ly) = (px(-1.0), py(c.eval(-1.0) as f32));
+        for i in 1..=n {
+            let vx = -1.0 + 2.0 * i as f32 / n as f32;
+            let (qx, qy) = (px(vx), py(c.eval(vx as f64) as f32));
+            self.cv.line(lx, ly, qx, qy);
+            lx = qx;
+            ly = qy;
+        }
+        let hot = if self.act == 160 { Some(self.cpt) } else { pick(self, &c) };
+        for (i, &(vx, vy)) in c.pts().iter().enumerate() {
+            let (qx, qy) = (px(vx).round(), py(vy).round());
+            self.setc(hot == Some(i));
+            if i == 0 || i + 1 == c.n {
+                self.cv.boxr(qx - 2.0, qy - 2.0, 5.0, 5.0); // y-only end points
+            } else {
+                self.cv.fill(qx - 2.0, qy - 2.0, 5.0, 5.0);
+            }
+        }
+        self.setc(false);
+        self.cv.set_font(1);
+        self.cv.text(x + 3.0, y + 3.0, "DRAW");
+        self.cv.textr(x, y + h - 11.0, w - 3.0, &format!("{}/{} PTS", c.n, MAX_PTS));
     }
 
     // ------------------------------------------------------------------ comp plot
