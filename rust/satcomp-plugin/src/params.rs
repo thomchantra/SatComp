@@ -13,7 +13,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (2, "drive", 0.0, 100.0, 25.0),
     (3, "bias", -100.0, 100.0, 0.0),
     (4, "sat_hp", 20.0, 2000.0, 20.0),
-    (5, "sat_lp", 1000.0, 20000.0, 20000.0),
+    (5, "sat_lp", 200.0, 20000.0, 20000.0),
     (6, "tone", 1000.0, 20000.0, 20000.0),
     (7, "os", 0.0, 2.0, 0.0),
     (8, "thresh", -40.0, 0.0, -18.0),
@@ -71,7 +71,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (63, "sc_on", 0.0, 1.0, 0.0),
     (64, "sc_gain", -24.0, 24.0, 0.0),
     (65, "sc_hp", 20.0, 2000.0, 20.0),
-    (66, "sc_lp", 1000.0, 20000.0, 20000.0),
+    (66, "sc_lp", 200.0, 20000.0, 20000.0),
 ];
 
 #[derive(Params)]
@@ -230,7 +230,7 @@ impl Default for SatCompParams {
             drive: FloatParam::new("Drive", 25.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
             bias: FloatParam::new("Bias", 0.0, FloatRange::Linear { min: -100.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
             sat_hp: FloatParam::new("Sat HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
-            sat_lp: FloatParam::new("Sat LP", 20000.0, FloatRange::Linear { min: 1000.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            sat_lp: FloatParam::new("Sat LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             tone: FloatParam::new("Tone", 20000.0, FloatRange::Linear { min: 1000.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             os: IntParam::new("Oversampling", 0, IntRange::Linear { min: 0, max: 2 }),
             thresh: FloatParam::new("Thresh", -18.0, FloatRange::Linear { min: -40.0, max: 0.0 }).with_unit(" dB").with_step_size(0.1),
@@ -288,7 +288,7 @@ impl Default for SatCompParams {
             sc_on: BoolParam::new("Sidechain", false),
             sc_gain: FloatParam::new("SC Gain", 0.0, FloatRange::Linear { min: -24.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             sc_hp: FloatParam::new("SC HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
-            sc_lp: FloatParam::new("SC LP", 20000.0, FloatRange::Linear { min: 1000.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            sc_lp: FloatParam::new("SC LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
         }
     }
 }

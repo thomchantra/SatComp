@@ -34,7 +34,7 @@ pub struct Params {
     pub drive: f64,       // 2   0..100 %
     pub bias: f64,        // 3   -100..100 %
     pub sat_hp: f64,      // 4   20..2000 Hz (<=20.5 = off)
-    pub sat_lp: f64,      // 5   1000..20000 Hz (>=19900 = off)
+    pub sat_lp: f64,      // 5   200..20000 Hz (>=19900 = off)
     pub tone: f64,        // 6   1000..20000 Hz (>=19900 = off)
     pub os: i32,          // 7   0 off, 1 x2, 2 x4
     // COMP
@@ -67,7 +67,7 @@ pub struct Params {
     pub sc_on: bool,   // 63
     pub sc_gain: f64,  // 64  -24..24 dB
     pub sc_hp: f64,    // 65  20..2000 Hz (<=20.5 = off)
-    pub sc_lp: f64,    // 66  1000..20000 Hz (>=19900 = off)
+    pub sc_lp: f64,    // 66  200..20000 Hz (>=19900 = off)
 }
 
 impl Default for Params {

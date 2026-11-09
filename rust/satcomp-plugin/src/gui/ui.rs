@@ -575,6 +575,8 @@ impl<'a> Gui<'a> {
             5 | 6 | 66 => {
                 if v >= 19900.0 {
                     "OFF".into()
+                } else if n != 6 && v < 1000.0 {
+                    format!("{:.0}Hz", v)
                 } else {
                     format!("{:.1}k", v * 0.001)
                 }

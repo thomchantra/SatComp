@@ -111,7 +111,7 @@ plug-in; hosts without sidechain support get the plain stereo layout.
 | **Sidechain** *(63, `SIDECHAIN` button)* | off/on, off | On = the detector keys off the aux input instead of the main signal. **Not stored in presets** (routing is per track, like Bypass); is saved with the project and automatable. If on but the host provides no aux bus the detector silently falls back to the main signal and the button turns **red**. |
 | **SC Gain** *(64)* | −24…+24 dB, 0 | Key level before the filters (ahead of the threshold decision). |
 | **SC HP** *(65)* | 20…2000 Hz, OFF | 2nd-order Butterworth high-pass on the key. |
-| **SC LP** *(66)* | 1k…20k Hz, OFF | 2nd-order Butterworth low-pass on the key. |
+| **SC LP** *(66)* | 200…20k Hz, OFF | 2nd-order Butterworth low-pass on the key. |
 | **SOLO** *(UI only, not a parameter)* | off | Replaces the output with the key as the detector hears it (after gain/HP/LP, before Low Cut and the peak/RMS blend). Clears itself when Sidechain is switched off. |
 
 Key path: aux in > SC Gain > SC HP > SC LP > (solo tap) > detector (Low Cut, peak/RMS blend, gain computer). The key is
