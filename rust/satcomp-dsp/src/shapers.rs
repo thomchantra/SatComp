@@ -42,35 +42,38 @@ impl Curve {
     /// Sanitising constructor (persisted/preset data is untrusted): sorts, clamps, enforces end points
     /// and the gap, truncates to MAX_PTS. Falls back to linear if fewer than 2 points.
     pub fn from_points(pts: &[(f32, f32)]) -> Self {
-        let mut v: Vec<(f32, f32)> = pts
-            .iter()
-            .filter(|(x, y)| x.is_finite() && y.is_finite())
-            .map(|&(x, y)| (x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0)))
-            .collect();
-        if v.len() < 2 {
+        // No heap allocation: this runs on the audio thread every block (a malloc there can stall behind the UI).
+        const CAP: usize = 32;
+        let mut v = [(0.0f32, 0.0f32); CAP];
+        let mut n = 0;
+        for &(x, y) in pts {
+            if n < CAP && x.is_finite() && y.is_finite() {
+                v[n] = (x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0));
+                n += 1;
+            }
+        }
+        if n < 2 {
             return Self::linear();
         }
-        v.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let (first, last) = (v[0].1, v[v.len() - 1].1);
-        // interior points only, strictly inside the gap-padded range
-        let mut inner: Vec<(f32, f32)> = Vec::new();
+        let v = &mut v[..n];
+        v.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        let mut c = Self::linear();
+        c.p[0] = (-1.0, v[0].1);
+        // interior points only, kept inside the gap-padded range
+        let mut cnt = 1;
         let mut lo = -1.0 + MIN_GAP;
-        for &(x, y) in &v[1..v.len() - 1] {
-            if inner.len() + 2 >= MAX_PTS {
+        for &(x, y) in &v[1..n - 1] {
+            if cnt + 1 >= MAX_PTS {
                 break;
             }
             if x >= lo && x <= 1.0 - MIN_GAP {
-                inner.push((x, y));
+                c.p[cnt] = (x, y);
+                cnt += 1;
                 lo = x + MIN_GAP;
             }
         }
-        let mut c = Self::linear();
-        c.p[0] = (-1.0, first);
-        for (i, q) in inner.iter().enumerate() {
-            c.p[i + 1] = *q;
-        }
-        c.n = inner.len() + 2;
-        c.p[c.n - 1] = (1.0, last);
+        c.p[cnt] = (1.0, v[n - 1].1);
+        c.n = cnt + 1;
         c
     }
 
@@ -188,31 +191,63 @@ pub struct ShaperLut {
     pub sel: i32,
     /// Curve the table was last baked from (only meaningful while `sel == CUSTOM`).
     pub curve: Curve,
+    /// Audio use: morph to a newly built table over `FADE_STEPS` x `FADE_EVERY` samples instead of
+    /// swapping it (an instant swap is a step in the output = click). The UI plot leaves this off.
+    pub fade: bool,
+    tgt: Vec<f64>,
+    steps: u32,
 }
+
+/// Table morph: `FADE_STEPS` updates, one every `FADE_EVERY` samples (~10 ms at 48 kHz).
+pub const FADE_STEPS: u32 = 16;
+pub const FADE_EVERY: u32 = 32;
 
 impl ShaperLut {
     pub fn new(sel: i32) -> Self {
-        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, curve: Curve::linear() };
+        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, curve: Curve::linear(), fade: false, tgt: vec![0.0; LUT_LEN], steps: 0 };
         l.build(sel);
         l
     }
 
     pub fn build(&mut self, sel: i32) {
-        for (i, v) in self.table.iter_mut().enumerate() {
+        for (i, v) in self.tgt.iter_mut().enumerate() {
             *v = shaper(sel, i as f64 / 256.0 - 8.0);
         }
         self.periodic = is_periodic(sel);
+        self.commit(sel);
+    }
+
+    /// New target is in `tgt`: snap to it, or start the morph when fading and a table already exists.
+    fn commit(&mut self, sel: i32) {
+        if self.fade && self.sel != -1 {
+            self.steps = FADE_STEPS;
+        } else {
+            self.table.copy_from_slice(&self.tgt);
+            self.steps = 0;
+        }
         self.sel = sel;
+    }
+
+    /// Advance the morph by one step (call every `FADE_EVERY` samples; cheap no-op when idle).
+    pub fn step(&mut self) {
+        if self.steps == 0 {
+            return;
+        }
+        let k = 1.0 / self.steps as f64;
+        for (v, t) in self.table.iter_mut().zip(&self.tgt) {
+            *v += (t - *v) * k;
+        }
+        self.steps -= 1;
     }
 
     /// Bake the custom curve into the table (flat outside +-1, like a hard clip).
     pub fn build_custom(&mut self, curve: &Curve) {
-        for (i, v) in self.table.iter_mut().enumerate() {
+        for (i, v) in self.tgt.iter_mut().enumerate() {
             *v = curve.eval(i as f64 / 256.0 - 8.0);
         }
         self.periodic = false;
-        self.sel = CUSTOM;
         self.curve = *curve;
+        self.commit(CUSTOM);
     }
 
     /// Make the table match `sel` (and `curve` when custom); no-op when already current.
@@ -298,6 +333,26 @@ mod tests {
         let c = Curve::from_points(&[(0.5, 2.0), (f32::NAN, 0.0), (-3.0, -2.0), (0.5, 0.1)]);
         assert_eq!((c.p[0].0, c.p[0].1), (-1.0, -1.0)); // clamped end y
         assert!(c.pts().windows(2).all(|w| w[1].0 - w[0].0 >= MIN_GAP - 1e-6));
+    }
+
+    #[test]
+    fn fade_morphs_without_a_step_and_lands_on_target() {
+        let mut l = ShaperLut::new(1);
+        l.fade = true;
+        let before = l.eval(0.5);
+        let c = Curve::from_points(&[(-1.0, -1.0), (1.0, 0.2)]);
+        let target = c.eval(0.5);
+        l.sync(CUSTOM, &c);
+        assert_eq!(l.eval(0.5), before); // nothing jumps at the swap
+        let mut last = before;
+        for _ in 0..FADE_STEPS {
+            l.step();
+            let v = l.eval(0.5);
+            assert!((v - last).abs() < (before - target).abs() * 0.5, "step too big: {last} -> {v}");
+            last = v;
+        }
+        assert!((l.eval(0.5) - target).abs() < 1e-3);
+        l.step(); // idle step is harmless
     }
 
     #[test]

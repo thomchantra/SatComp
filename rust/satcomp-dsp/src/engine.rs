@@ -107,6 +107,7 @@ pub struct Engine {
 
     // ---- sat
     lut: ShaperLut,
+    lut_cnt: u32,
     taps: Taps,
     ov: [Oversampler; 2],
     pre: f64,
@@ -247,6 +248,7 @@ impl Engine {
             smoothing: true,
             snap: true,
             lut: ShaperLut::new(0),
+            lut_cnt: 0,
             taps: Taps::new(),
             ov: [Oversampler::default(), Oversampler::default()],
             pre: 1.0,
@@ -431,6 +433,7 @@ impl Engine {
         self.dirty = false;
 
         // ---- SAT
+        self.lut.fade = self.smoothing;
         self.lut.sync(p.shape, &p.curve);
         self.pre_t = (p.drive * 0.01 * 36.0 * LN10_20).exp();
         self.bias_t = p.bias * 0.01;
@@ -617,6 +620,11 @@ impl Engine {
     #[inline]
     pub fn tick(&mut self, in_l: f64, in_r: f64) -> (f64, f64) {
         let inp = [in_l, in_r];
+        self.lut_cnt += 1;
+        if self.lut_cnt >= crate::shapers::FADE_EVERY {
+            self.lut_cnt = 0;
+            self.lut.step();
+        }
         self.ims += ((in_l * in_l + in_r * in_r) * 0.5 + DENORM - self.ims) * self.rmsg_c;
         if self.smoothing {
             let c = self.sm_c;
@@ -1005,6 +1013,29 @@ mod tests {
                 assert!(y.iter().all(|v| v.is_finite()), "shape {shape} os {os}");
             }
         }
+    }
+
+    /// Switching shaper mid-signal must not produce a step: compare the largest sample-to-sample jump
+    /// across the switch with the morph on (default) and off (instant table swap).
+    #[test]
+    fn shaper_switch_morphs_instead_of_clicking() {
+        let jump = |fade: bool| {
+            let mut p = neutral();
+            p.drive = 25.0;
+            p.shape = 1; // Soft
+            let mut e = Engine::new(SR);
+            e.smoothing = fade; // fade follows smoothing
+            e.set_params(&p);
+            let x = sine(24000, 2.0, 0.5); // near-DC: only a table swap can make a step
+            let mut y = run(&mut e, &x[..6000], 256);
+            p.shape = 4; // Hard: reads ~0.1 higher than Soft at the sine peak (signal there is flat)
+            e.set_params(&p);
+            y.extend(run(&mut e, &x[6000..], 256));
+            y[5900..7500].windows(2).fold(0.0f64, |m, w| m.max((w[1] - w[0]).abs()))
+        };
+        let (instant, morphed) = (jump(false), jump(true));
+        assert!(morphed <= instant + 1e-9, "morph {morphed} vs instant {instant}");
+        eprintln!("max step: instant {instant:.4}, morphed {morphed:.4}");
     }
 
     #[test]
