@@ -72,9 +72,12 @@ pub enum Dlg {
     Saved(String),
 }
 
+mod scope;
 mod theme;
 
 pub struct State {
+    /// packed scope settings (see scope.rs)
+    scope_cfg: i32,
     pub themes: Vec<UserTheme>,
     pub edit: Option<ThemeEdit>,
     pub dummy_params: Arc<SatCompParams>,
@@ -277,6 +280,7 @@ impl State {
             pal,
             light,
             face,
+            scope_cfg: params.scope.load(Ordering::Relaxed),
             themes: theme::load_themes(),
             edit: None,
             dummy_params: Arc::new(SatCompParams::default()),
@@ -406,7 +410,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
-    ("v0.5.1", &["Fixed a loud thump when the plug-in is enabled or the window regains focus.", "New Appearance tab under About: colour mode, a scheme list with swatches, six fonts and a custom theme editor with a colour picker."]),
+    ("v0.5.1", &["Fixed a loud thump when the plug-in is enabled or the window regains focus.", "New Appearance tab under About: colour mode, a scheme list with swatches, six fonts and a custom theme editor with a colour picker.", "New waveform scope (transient meter): click the icon in the compressor plot corner for a half or full wave view with the gain reduction stacked in the accent colour.", "The oversampling OFF button now reads x1."]),
     ("v0.5", &["Added a sidechain input with key gain, HP, LP, a solo monitor and KEY MIX.", "Every colour scheme now has a light mode: double-click the icon or use the scheme menu.", "LP filters now reach down to 200 Hz."]),
     ("v0.4.1", &["Fixed the PK readout and peak reset after reopening the window."]),
     ("v0.4", &["Rebuilt as VST3 and CLAP with presets and window resize.", "Added a custom waveshaper, 20 colour schemes and this page."]),
@@ -2640,7 +2644,7 @@ impl<'a> Gui<'a> {
         self.setc(false);
         let os_i = (self.sget(7) + 0.5).floor() as i32;
         for i in 0..3 {
-            let l = ["OFF", "x2", "x4"][i as usize];
+            let l = ["x1", "x2", "x4"][i as usize];
             if self.btn(152.0 + i as f32 * 40.0, 34.0, 40.0, 16.0, l, (os_i == i) as u8) {
                 self.click_set(7, i as f32);
             }
@@ -2675,14 +2679,23 @@ impl<'a> Gui<'a> {
             self.set_dk(if byp { 0.5 } else { 1.0 });
             self.draw_plot(10.0, 56.0, 130.0, 128.0);
             self.set_dk(if byp || (self.eq_page && eq_mod_byp) { 0.5 } else { 1.0 });
+            if !self.eq_page {
+                self.scope_icon(false);
+            }
             if self.eq_page {
                 self.draw_eq(152.0, 56.0, 266.0, 128.0);
+            } else if self.scope_on() {
+                self.draw_scope(152.0, 56.0, 266.0, 112.0);
+                self.scope_row(152.0, 167.0);
             } else if self.sget(63) > 0.5 {
                 // sidechain: shorter plot + a control row for the key (SC gain, HP, LP, solo)
                 self.draw_ccurve(152.0, 56.0, 266.0, 112.0);
                 self.sc_row(152.0, 167.0);
             } else {
                 self.draw_ccurve(152.0, 56.0, 266.0, 128.0);
+            }
+            if !self.eq_page {
+                self.scope_icon(true);
             }
         }
         self.set_dk(1.0);

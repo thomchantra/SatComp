@@ -40,6 +40,47 @@ impl Default for TapRing {
     }
 }
 
+/// Lock-free ring of scope buckets for the UI's waveform view: per 2 ms bucket the output peak and the same peak with the
+/// compressor's gain reduction added back (so `pre - out` is what the compressor removed). f32 bits in atomics.
+pub struct ScopeRing {
+    out: Vec<AtomicU32>,
+    pre: Vec<AtomicU32>,
+    w: AtomicUsize,
+}
+
+impl ScopeRing {
+    pub const LEN: usize = 8192;
+    /// seconds per bucket
+    pub const BUCKET_S: f64 = 0.002;
+    pub fn new() -> Self {
+        Self {
+            out: (0..Self::LEN).map(|_| AtomicU32::new(0)).collect(),
+            pre: (0..Self::LEN).map(|_| AtomicU32::new(0)).collect(),
+            w: AtomicUsize::new(0),
+        }
+    }
+    fn push(&self, o: f32, p: f32) {
+        let w = self.w.load(Ordering::Relaxed);
+        self.out[w & (Self::LEN - 1)].store(o.to_bits(), Ordering::Relaxed);
+        self.pre[w & (Self::LEN - 1)].store(p.to_bits(), Ordering::Relaxed);
+        self.w.store(w.wrapping_add(1), Ordering::Release);
+    }
+    /// number of buckets written so far (bucket `head - 1` is the newest)
+    pub fn head(&self) -> usize {
+        self.w.load(Ordering::Acquire)
+    }
+    pub fn get(&self, i: usize) -> (f32, f32) {
+        let k = i & (Self::LEN - 1);
+        (f32::from_bits(self.out[k].load(Ordering::Relaxed)), f32::from_bits(self.pre[k].load(Ordering::Relaxed)))
+    }
+}
+
+impl Default for ScopeRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const LN10_20: f64 = 0.11512925; // dB -> ln(gain)
 const DB_POW: f64 = 4.3429448; // 10/ln(10)
 const DB_AMP: f64 = 8.6858896; // 20/ln(10)
@@ -249,6 +290,12 @@ pub struct Engine {
     pub eq_tap_on: bool,
     pub eq_vs: usize,
     pub tap: Arc<TapRing>,
+    /// output / pre-compression peaks per 2 ms for the UI scope
+    pub scope: Arc<ScopeRing>,
+    sc_o: f64,
+    sc_p: f64,
+    sc_n: u32,
+    sc_len: u32,
 
     // ---- meters (consumed/reset by the UI side)
     pub opk: [f64; 2],
@@ -402,6 +449,11 @@ impl Engine {
             eq_tap_on: false,
             eq_vs: 0,
             tap: Arc::new(TapRing::new()),
+            scope: Arc::new(ScopeRing::new()),
+            sc_o: 0.0,
+            sc_p: 0.0,
+            sc_n: 0,
+            sc_len: 96,
             opk: [0.0; 2],
             clip_f: false,
             gr_blk: 0.0,
@@ -571,6 +623,7 @@ impl Engine {
         self.smix_t = p.sat_mix * 0.01;
         self.byp = p.bypass;
         self.byp_c = one_pole(sr, 0.01);
+        self.sc_len = ((sr * ScopeRing::BUCKET_S).round() as u32).max(1);
         self.bg_c = one_pole(sr, 0.2);
         self.fms_c = one_pole(sr, 0.3);
         self.sm_c = one_pole(sr, 0.02);
@@ -967,7 +1020,19 @@ impl Engine {
             self.clip_f = true;
         }
         self.fms += ((out[0] * out[0] + out[1] * out[1]) * 0.5 + DENORM - self.fms) * self.fms_c;
-        self.gr_blk = self.gr_blk.max(g[0].max(g[1]));
+        let gm = g[0].max(g[1]);
+        self.gr_blk = self.gr_blk.max(gm);
+        // scope bucket: output peak, and the same with the gain reduction added back
+        let ao = out[0].abs().max(out[1].abs());
+        self.sc_o = self.sc_o.max(ao);
+        self.sc_p = self.sc_p.max(ao * (gm * LN10_20).exp());
+        self.sc_n += 1;
+        if self.sc_n >= self.sc_len {
+            self.scope.push(self.sc_o as f32, self.sc_p as f32);
+            self.sc_o = 0.0;
+            self.sc_p = 0.0;
+            self.sc_n = 0;
+        }
         (out[0], out[1])
     }
 }
@@ -1197,6 +1262,23 @@ mod tests {
         let y = run(&mut e, &vec![0.0; 9600], 256);
         let pk = y.iter().fold(0.0f64, |m, v| m.max(v.abs()));
                 assert!(pk < 0.01, "startup thump peak {pk}");
+    }
+
+    #[test]
+    fn scope_buckets_show_output_and_reduction() {
+        let mut p = Params::default();
+        p.drive = 0.0;
+        p.bias = 0.0;
+        p.thresh = -30.0;
+        p.ratio = 8.0;
+        let mut e = Engine::new(SR);
+        e.set_params(&p);
+        let x = sine(48000, 200.0, 0.5);
+        let _ = run(&mut e, &x, 256);
+        let n = e.scope.head();
+        assert!((n as f64 - 48000.0 / (SR * ScopeRing::BUCKET_S)).abs() < 3.0, "buckets {n}");
+        let (o, pre) = e.scope.get(n - 20);
+        assert!(o > 0.01 && pre > o * 1.5, "out {o} pre {pre}");
     }
 
     #[test]

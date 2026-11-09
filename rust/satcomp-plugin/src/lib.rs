@@ -4,7 +4,7 @@ mod presets;
 
 use nih_plug::prelude::*;
 use params::SatCompParams;
-use satcomp_dsp::{Engine, TapRing};
+use satcomp_dsp::{Engine, ScopeRing, TapRing};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -13,6 +13,7 @@ use std::time::Instant;
 /// State shared between the audio thread and the editor (all lock-free).
 pub struct Shared {
     pub tap: Arc<TapRing>,
+    pub scope: Arc<ScopeRing>,
     pub epoch: Instant,
     pub sample_rate: AtomicF32,
     // audio -> UI. Peaks accumulate with fetch_max and are consumed with swap(0).
@@ -48,6 +49,7 @@ impl Shared {
     fn new() -> Self {
         Self {
             tap: Arc::new(TapRing::new()),
+            scope: Arc::new(ScopeRing::new()),
             epoch: Instant::now(),
             sample_rate: AtomicF32::new(48000.0),
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
@@ -92,6 +94,7 @@ impl Default for SatComp {
         let shared = Arc::new(Shared::new());
         let mut engine = Engine::new(48000.0);
         engine.tap = shared.tap.clone();
+        engine.scope = shared.scope.clone();
         Self { params: Arc::new(SatCompParams::default()), shared, engine, last_latency: u32::MAX }
     }
 }
@@ -140,6 +143,7 @@ impl Plugin for SatComp {
         self.shared.sample_rate.store(sr as f32, Ordering::Relaxed);
         let mut engine = Engine::new(sr);
         engine.tap = self.shared.tap.clone();
+        engine.scope = self.shared.scope.clone();
         engine.match_trim = self.params.match_trim.load(Ordering::Relaxed) as f64;
         engine.set_params(&self.params.to_dsp());
         self.engine = engine;
@@ -152,6 +156,7 @@ impl Plugin for SatComp {
         let sr = self.engine.sample_rate();
         let mut engine = Engine::new(sr);
         engine.tap = self.shared.tap.clone();
+        engine.scope = self.shared.scope.clone();
         engine.match_trim = self.params.match_trim.load(Ordering::Relaxed) as f64;
         engine.set_params(&self.params.to_dsp());
         self.engine = engine;

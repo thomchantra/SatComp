@@ -9,7 +9,7 @@ pub mod halfband;
 pub mod params;
 pub mod shapers;
 
-pub use engine::{Engine, GainComputer, TapRing};
+pub use engine::{Engine, GainComputer, ScopeRing, TapRing};
 pub use params::{EqBandParams, EqStageParams, Params};
 
 /// dB (amplitude) to linear gain, same constant as the JSFX (`exp(db*0.11512925)`).
