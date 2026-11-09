@@ -129,7 +129,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 
 ## Header, About page, preset marker (v0.4)
 - Version: the header and About page read `CARGO_PKG_VERSION` (`version_short()` in `gui/ui.rs`), so bumping the crate
-  version is the only edit. Both crates are 0.5.0.
+  version is the only edit. Both crates are 0.5.1.
 - Clicking the title toggles the About page (`State.about`: 0 closed, 1 about, 2 changelog). It replaces the tab row, viz
   row and cells; the header, meter and right column stay live. Copy lives in `ABOUT_TEXT` / `CHANGELOG` (source text:
   `docs/abouttextcopy.md`). Changelog entries: newest first, one short sentence per bullet, no em dashes. About and Changelog text live in a row-based scroll box (`scroll_rows`: wheel = 3 rows, draggable thumb on the right, rows culled whole since the canvas has no clipping); scroll position resets on tab change.

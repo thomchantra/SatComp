@@ -2294,7 +2294,7 @@ dependencies = [
 
 [[package]]
 name = "satcomp"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "include_dir",
  "nih_plug",
@@ -2308,7 +2308,7 @@ dependencies = [
 
 [[package]]
 name = "satcomp-dsp"
-version = "0.5.0"
+version = "0.5.1"
 
 [[package]]
 name = "scopeguard"
