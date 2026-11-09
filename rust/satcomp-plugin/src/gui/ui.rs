@@ -367,6 +367,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
+    ("v0.5", &["Added a sidechain input with key gain, HP, LP and a solo monitor.", "Replaced the oversampling label with a SIDECHAIN button."]),
     ("v0.4.1", &["Fixed the PK readout and peak reset after reopening the window."]),
     ("v0.4", &["Rebuilt as VST3 and CLAP with presets and window resize.", "Added a custom waveshaper, 20 colour schemes and this page."]),
     ("v0.3", &["Added two 3-band EQ stages with tilt and a spectrum view.", "Added lookahead and a GAIN MATCH button."]),

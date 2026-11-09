@@ -34,7 +34,7 @@ Install: copy/symlink `SatComp.jsfx` into `Effects/`, insert as `JS: SatComp`. *
 
 ## v0.3 additions (all untested)
 28. **Load**: file compiles, window opens, header shows logo + `SATCOMP 0.3`; old project loads with EQ neutral (no filtering, EQ button square outline). Clicking the logo toggles palette; palette persists.
-29. **Tab row**: OVERSAMPLING OFF/x2/x4 buttons set OS; DELTA | BYPASS behave as before; GR meter opens at 3 dB range; header meter spans the column.
+29. **Tab row**: OFF/x2/x4 buttons (no label since v0.5) set OS; DELTA | BYPASS behave as before; GR meter opens at 3 dB range; header meter spans the column.
 30. **GAIN MATCH**: click -> blinks ~3 s -> red LOCK; click again -> off; click mid-measure cancels. IN>OUT readout sane; Auto gone.
 31. **Link**: stereo-unlinked behaviour (hard-panned hit does not duck the other side); cell at comp bottom-left is empty.
 32. **Comp viewport**: drag dot = Thresh (cell follows), drag square = Ratio (to the top = INF); double-click resets; label shows LVL/OUT/GR and moves with the signal.

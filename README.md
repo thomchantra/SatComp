@@ -4,10 +4,11 @@ A waveshaping saturator with a compressor and a 2-stage 3-band EQ, in a black-an
 
 ![SatComp](docs/screenshot.png)
 
-VST3 and CLAP for macOS (Apple silicon and Intel) and Windows. Current version: **0.4.1**.
+VST3 and CLAP for macOS (Apple silicon and Intel) and Windows. Current version: **0.5.0**.
 
 ## Features
 - **Saturator:** 15 shapers including a **Custom** one you draw yourself (pencil icon, up to 10 points), drive, bias, HP/LP split, tone, sat mix, output gain, 1x/2x/4x oversampling.
+- **Sidechain:** external key from a second stereo input, with gain, HP and LP on the key and a SOLO to listen to it.
 - **Compressor:** threshold, ratio, attack, release, knee and knee shape, peak/RMS detector, low cut, lookahead, feed-forward/feedback blend, GR distortion, makeup and mix.
 - **EQ:** two stages (pre and post compressor), three bands each plus tilt, with a live spectrum.
 - **Metering and tools:** output meter, gain-reduction meter, GAIN MATCH, DELTA monitor, loudness-matched BYPASS.

@@ -99,8 +99,29 @@ GR meter (right of the plot): shows max(L,R) GR, with peak-hold line (1 s hold, 
 - **Readouts (v0.3):** the comp viewport metrics (`LVL +00.0  OUT +00.0  GR 00.0dB`) and the OUT info lines (GR, TRIM/LOCK, PK, RMS, BYP: label left, value right-aligned, zero padded, placeholders `-----`) are **snapshotted ~8x/s** (`rd_*`, 0.12 s) so they are readable; meters, bars and the sat-plot SAT figure use the same snapshot cadence for numbers only. IN>OUT, MAKEUP, MIX and OUT GAIN cells are not zero padded. OUT column order: MAKEUP, MIX, OUT GAIN (bottom, inverted).
 - **SAT block layout (v0.3):** DRIVE/BIAS, then `HP|LP` stacked in one cell + TONE, then SAT MIX + **OUT GAIN** (= Sat Out, slider 27, same parameter as dragging the plot). The three gain-stage cells (sat OUT GAIN, EQ OUT GAIN, output OUT GAIN) are drawn **inverted** (lit block) so they read as master levels. (black on white / white on black); red accents are unchanged. The choice is stored with the project/preset (`@serialize`), not as an automatable parameter.
 - Hidden params (automatable, no on-screen widget): *Match Trim* (slider 24), *Link* (17, reserved) and all EQ sliders (29–58).
-- **Header (v0.3):** logo (palette), `SATCOMP 0.3`, full-width output meter; tab row: shape selector, `OVERSAMPLING [OFF|x2|x4]`, `EQ` page toggle, `DELTA | BYPASS`. The GR meter opens on its 3 dB range. Preset bar / save icon are deferred to the VST port.
+- **Header (v0.3):** logo (palette), `SATCOMP 0.3`, full-width output meter; tab row: shape selector, `[OFF|x2|x4]` (the OVERSAMPLING label was retired in v0.5), `SIDECHAIN` (v0.5), `EQ` page toggle, `DELTA | BYPASS`. The GR meter opens on its 3 dB range. Preset bar / save icon are deferred to the VST port.
 - **Comp viewport (v0.3):** drag the **dot** at the threshold knee (x and y both map to Thresh), drag the **square** at the right edge (y → Ratio; hard-knee formula, so with a wide knee the handle can sit slightly off the cursor). Double-click a handle = default. The label shows live `LVL` (detector level), `OUT` (static-curve output at that level) and `GR`.
+
+## SIDECHAIN (v0.5, Rust only)
+External key for the compressor detector. A second stereo input bus ("Sidechain", nih-plug aux input) is offered by the
+plug-in; hosts without sidechain support get the plain stereo layout.
+
+| Param | Range, default | Notes |
+|---|---|---|
+| **Sidechain** *(63, `SIDECHAIN` button)* | off/on, off | On = the detector keys off the aux input instead of the main signal. **Not stored in presets** (routing is per track, like Bypass); is saved with the project and automatable. If on but the host provides no aux bus the detector silently falls back to the main signal and the button turns **red**. |
+| **SC Gain** *(64)* | −24…+24 dB, 0 | Key level before the filters (ahead of the threshold decision). |
+| **SC HP** *(65)* | 20…2000 Hz, OFF | 2nd-order Butterworth high-pass on the key. |
+| **SC LP** *(66)* | 1k…20k Hz, OFF | 2nd-order Butterworth low-pass on the key. |
+| **SOLO** *(UI only, not a parameter)* | off | Replaces the output with the key as the detector hears it (after gain/HP/LP, before Low Cut and the peak/RMS blend). Clears itself when Sidechain is switched off. |
+
+Key path: aux in > SC Gain > SC HP > SC LP > (solo tap) > detector (Low Cut, peak/RMS blend, gain computer). The key is
+delayed by the oversampling latency so it lines up with the post-sat main signal; with Lookahead the detector sees it
+early like it does the main signal. **FF>FB has no effect while the sidechain drives the detector** (there is nothing to
+feed back). The gain is still applied to the main signal and Mix/Delta/Bypass work as before (Delta = comp input minus output).
+**UI:** with Sidechain on and the EQ page closed, the comp plot is shortened and a row `SC | HP | LP | SOLO` sits under it.
+The plot x axis is then the **key** level; triangles on the left/right edges show the main level into the compressor and
+after the gain reduction; the readout reads `SC / IN / GR`. The About page flow diagram adds `SIDECHAIN > SC GAIN/LP/HP`
+into COMP. The tab row no longer carries the OVERSAMPLING label (OFF / x2 / x4 stay).
 
 ## Parameter ↔ slider map
 
@@ -123,6 +144,7 @@ GR meter (right of the plot): shows max(L,R) GR, with peak-hold line (1 s hold, 
 | 28 | *(unused)* | 29–43 | EQ Pre (see EQ) |
 | | | 44–58 | EQ Post (see EQ) |
 | 59 | Lookahead | 60–62 | EQ Pre / Post / Module bypass |
+| 63 | Sidechain *(v0.5)* | 64–66 | SC Gain / SC HP / SC LP *(v0.5)* |
 
 New sliders were appended (25–27, 29–58) so existing sessions/automation keep their mapping. Old sessions should sound identical (Sat Mix 100 %, Bypass off, Sat Out 0 dB, Auto off); if REAPER restores missing sliders as 0, re-set Sat Mix to 100 % once.
 

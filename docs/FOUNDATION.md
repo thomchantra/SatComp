@@ -124,7 +124,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 
 ## Header, About page, preset marker (v0.4)
 - Version: the header and About page read `CARGO_PKG_VERSION` (`version_short()` in `gui/ui.rs`), so bumping the crate
-  version is the only edit. Both crates are 0.4.0.
+  version is the only edit. Both crates are 0.5.0.
 - Clicking the title toggles the About page (`State.about`: 0 closed, 1 about, 2 changelog). It replaces the tab row, viz
   row and cells; the header, meter and right column stay live. Copy lives in `ABOUT_TEXT` / `CHANGELOG` (source text:
   `docs/abouttextcopy.md`). Changelog entries: newest first, two short sentences at most, no em dashes.
@@ -135,8 +135,15 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 - VST3 vendor string is `thomchantra` (`lib.rs` `VENDOR`). REAPER caches the vendor from the first scan, so an older
   "(Trirat)" label needs Preferences > Plug-ins > VST > Clear cache / re-scan.
 
+## Sidechain (v0.5)
+- Spec in `PARAMETERS.md` (SIDECHAIN). Params 63-66 (`sc_on` is excluded from presets); layouts = stereo + aux "Sidechain",
+  then plain stereo (`lib.rs`). Engine: `process_sc(l, r, Option<(&[f32], &[f32])>)`; `None` = no bus = internal detector.
+  `tick_sc` / `sc_solo` / `mn_lv` in `satcomp-dsp/src/engine.rs`; tests `sidechain_*`.
+- Solo (`Shared.sc_solo`) and the red-button hint (`Shared.sc_bus`, optimistic true until the first block) are UI atomics.
+- **Unverified in a host:** how REAPER shows/routes the aux pins, pluginval with the aux layout, Windows. Nothing ran in REAPER yet.
+
 ## Open / next
-- **Next session, idea 1: sidechain.** Add a second stereo input (nih-plug aux input) that feeds the detector, whole band,
+- ~~Next session, idea 1: sidechain.~~ Done in 0.5 (see above); original brief: Add a second stereo input (nih-plug aux input) that feeds the detector, whole band,
   with HP/LP filters to taper it. Needs: audio layout change (main 2in/2out + aux 2in), an engine detector source switch,
   params (sidechain on, SC HP, SC LP) appended to `gen_params.py`, a UI home for them, and a listen/monitor option.
 - **Next session, idea 2: SatXComp**, a 3-band multiband compressor with the saturator. Likely a separate repo that forks
