@@ -52,6 +52,7 @@ pub fn create(params: Arc<SatCompParams>, shared: Arc<Shared>) -> Option<Box<dyn
             };
             st.set_input(mx, my, down, rdown, scroll, shift, now);
             st.ptr_pt = pos.map(|p| (p.x, p.y)).unwrap_or((0.0, 0.0));
+            st.win_pt = (screen.width(), screen.height());
 
             let painter = ctx.layer_painter(LayerId::background());
             let cv = Canvas::new(&painter, ppp, ox, oy, s, st.pal);

@@ -134,6 +134,8 @@ pub struct State {
     resizing: bool,
     resize_off: (f32, f32),
     pub ptr_pt: (f32, f32),
+    /// egui screen size in points (what the host window has actually become so far)
+    pub win_pt: (f32, f32),
     // presets
     factory: Vec<Preset>,
     user: Vec<(String, std::path::PathBuf)>,
@@ -280,6 +282,7 @@ impl State {
             resizing: false,
             resize_off: (0.0, 0.0),
             ptr_pt: (0.0, 0.0),
+            win_pt: (560.0, 336.0),
             factory: presets::factory(),
             user: presets::scan_user(),
             pending: 0,
@@ -1404,8 +1407,8 @@ impl<'a> Gui<'a> {
         let hv = self.hit(gx, gy, gw, gh);
         if hv && self.press && self.act == 0 {
             self.resizing = true;
-            let s = self.cv.s;
-            self.resize_off = (560.0 * s - self.ptr_pt.0, 336.0 * s - self.ptr_pt.1);
+            // distance from the pointer to the window's bottom-right corner, in window points
+            self.resize_off = (self.win_pt.0 - self.ptr_pt.0, self.win_pt.1 - self.ptr_pt.1);
             self.press = false;
         }
         if hv && self.rpress {
@@ -1415,11 +1418,16 @@ impl<'a> Gui<'a> {
         }
         if self.resizing {
             if self.down {
-                let s = self.cv.s;
-                let w = (self.ptr_pt.0 + self.resize_off.0) / s;
-                let h = (self.ptr_pt.1 + self.resize_off.1) / s;
-                let k = ((w / 560.0).min(h / 336.0) * self.cur_scale() * 4.0).round() / 4.0;
-                self.request_scale(k);
+                // Absolute target (pointer + fixed corner offset), independent of the lagging render
+                // scale. Only issue a new request once the host window has caught up with the last one,
+                // otherwise stale pointer/size pairs make the target overshoot and the window loops.
+                let (cw, _) = self.env.params.editor_state.size();
+                let caught_up = (self.win_pt.0 - cw as f32).abs() < 1.5;
+                if caught_up {
+                    let w = (self.ptr_pt.0 + self.resize_off.0) / 560.0;
+                    let h = (self.ptr_pt.1 + self.resize_off.1) / 336.0;
+                    self.request_scale((w.min(h) * 4.0).round() / 4.0);
+                }
             } else {
                 self.resizing = false;
             }
