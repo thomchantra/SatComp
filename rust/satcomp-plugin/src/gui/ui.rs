@@ -157,6 +157,11 @@ pub struct State {
     pending: u8,
     /// result slot of a file dialog running on a worker thread (never block the UI/host thread in a modal)
     dlg: Option<Arc<parking_lot::Mutex<Dlg>>>,
+    /// About page: 0 closed, 1 about, 2 changelog
+    about: u8,
+    /// preset the edit marker compares against (cached by name), and the post-load settle time
+    base: Option<(String, Preset)>,
+    hold_until: f64,
 }
 
 impl State {
@@ -306,6 +311,9 @@ impl State {
             user: presets::scan_user(),
             pending: 0,
             dlg: None,
+            about: 0,
+            base: None,
+            hold_until: 0.0,
         }
     }
 }
@@ -333,6 +341,25 @@ impl<'a> DerefMut for Gui<'a> {
     fn deref_mut(&mut self) -> &mut State {
         self.s
     }
+}
+
+/// About page copy (docs/abouttextcopy.md). Each inner slice is one paragraph, each string one source line.
+const ABOUT_TEXT: &[&[&str]] = &[
+    &["A waveshaping saturator with compressor and 2-stage 3-band EQ", "Made with bricking intentions (:"],
+    &["Use saturator module to give compressor more spice to squash.", "Left-click top-right pencil icon to enter custom draw mode."],
+    &["Refine tone with pre/post-compressor 3-band EQ, then dial in the desired gain in the output module."],
+    &["Double-click slider to reset parameter to its default value", "Left/Right-click top-left icon for more color ways"],
+];
+
+/// Changelog, newest first. Keep each entry to two short sentences or fewer.
+const CHANGELOG: &[(&str, &[&str])] = &[(
+    "v0.4",
+    &["Added a custom waveshaper with a pencil draw mode.", "Added 10 colour schemes and this about page."],
+)];
+
+/// "0.4" from the crate version "0.4.0" (shown in the header and About page)
+fn version_short() -> String {
+    env!("CARGO_PKG_VERSION").split('.').take(2).collect::<Vec<_>>().join(".")
 }
 
 fn blink(t: f64) -> bool {
@@ -1363,10 +1390,9 @@ impl<'a> Gui<'a> {
         let t = self.n2t(nq, self.sget(nq));
         self.setc(self.act == nq as i32);
         self.cv.set_font(1);
-        self.cv.text(x + 3.0, y + 21.0, "Q");
-        self.cv.set_font(2);
+        self.cv.text(x + 3.0, y + 22.0, "Q");
         let s = self.fmt(nq, self.sget(nq));
-        self.cv.textc(x + 8.0, y + 19.0, w - 8.0, &s);
+        self.cv.textc(x + 8.0, y + 22.0, w - 8.0, &s);
         self.cv.fill(x + 2.0, y + h - 4.0, ((t * (w - 4.0)).floor()).max(1.0), 2.0);
         self.setc(false);
     }
@@ -1733,6 +1759,37 @@ impl<'a> Gui<'a> {
         let c = Curve::from_points(&p.curve);
         *self.env.params.custom_curve.lock() = c.pts().to_vec();
         self.set_preset_name(&p.name);
+        self.base = None;
+        self.hold_until = self.now + 0.6;
+    }
+
+    /// True when the live parameters differ from the loaded preset (drives the *NAME* marker).
+    fn is_modified(&mut self) -> bool {
+        if self.now < self.hold_until {
+            return false; // host parameter writes land a few frames late after a load
+        }
+        let cur = self.preset_name();
+        let key = if cur.is_empty() { "INIT".to_string() } else { cur };
+        if self.base.as_ref().map(|b| b.0 != key).unwrap_or(true) {
+            let p = if key == "INIT" && self.factory.iter().all(|f| f.name != "INIT") {
+                Some(Preset::init())
+            } else {
+                self.preset_index().and_then(|i| self.preset_at(i))
+            };
+            self.base = p.map(|p| (key, p));
+        }
+        let Some((_, b)) = &self.base else { return false };
+        for &(n, id, mn, mx, df) in TABLE {
+            if presets::EXCLUDED.contains(&id) {
+                continue;
+            }
+            let want = b.params.get(id).copied().unwrap_or(df).clamp(mn, mx);
+            let have = self.sget(n);
+            if (want - have).abs() > 2e-4 * want.abs().max(have.abs()) + 1e-4 {
+                return true;
+            }
+        }
+        Curve::from_points(&b.curve) != self.env.params.curve_snapshot()
     }
 
     fn capture(&self, name: &str) -> Preset {
@@ -1883,6 +1940,7 @@ impl<'a> Gui<'a> {
             Dlg::Loaded(p) => self.apply_preset(&p),
             Dlg::Saved(name) => {
                 self.set_preset_name(&name);
+                self.base = None;
                 self.user = presets::scan_user();
             }
             Dlg::Cancelled => {}
@@ -1912,9 +1970,13 @@ impl<'a> Gui<'a> {
         self.setc(false);
         self.cv.boxr(178.0, y, 142.0, h);
         self.cv.set_font(2);
+        let modified = self.is_modified();
         let mut t = shown;
-        while self.cv.text_w(&t) > 136.0 && t.chars().count() > 3 {
+        while self.cv.text_w(&t) > if modified { 124.0 } else { 136.0 } && t.chars().count() > 3 {
             t.pop();
+        }
+        if modified {
+            t = format!("*{t}*");
         }
         self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 142.0, &t);
         // prev / next
@@ -1938,6 +2000,170 @@ impl<'a> Gui<'a> {
             let items = SIZES.iter().map(|v| format!("{:.0}%", v * 100.0)).collect();
             self.open_menu(MenuKind::Size, 376.0, y + h, items, cur);
         }
+    }
+
+    // ------------------------------------------------------------------ about page
+    /// Greedy word wrap at the current font.
+    fn wrap(&self, s: &str, w: f32) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        for word in s.split(' ') {
+            let t = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+            if !cur.is_empty() && self.cv.text_w(&t) > w {
+                out.push(std::mem::take(&mut cur));
+                cur = word.to_string();
+            } else {
+                cur = t;
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
+    /// Replaces the left two thirds of the window (tab row, viz row, cells) while the About page is open.
+    fn draw_about(&mut self, byp: bool) {
+        for (x, w, l, id) in [(10.0, 172.0, "ABOUT", 1u8), (182.0, 172.0, "CHANGELOG", 2u8)] {
+            if self.btn(x, 34.0, w, 16.0, l, (self.about == id) as u8) {
+                self.about = id;
+            }
+        }
+        if self.btn(356.0, 34.0, 62.0, 16.0, "X CLOSE", 0) {
+            self.about = 0;
+        }
+        self.setc(false);
+        self.cv.set_font(1);
+        if self.about == 2 {
+            self.cv.boxr(10.0, 56.0, 408.0, 266.0);
+            let mut y = 64.0;
+            for (ver, lines) in CHANGELOG {
+                self.cv.text(18.0, y, ver);
+                self.cv.fill(18.0, y + 13.0, 392.0, 1.0);
+                y += 22.0;
+                for l in *lines {
+                    for (i, t) in self.wrap(l, 380.0).iter().enumerate() {
+                        self.cv.text(if i == 0 { 18.0 } else { 28.0 }, y, &if i == 0 { format!("- {t}") } else { t.clone() });
+                        y += 11.0;
+                    }
+                }
+                y += 10.0;
+            }
+            return;
+        }
+        self.draw_flow(10.0, 56.0, 408.0, 114.0, byp);
+        self.setc(false);
+        self.cv.boxr(10.0, 176.0, 408.0, 146.0);
+        let mut y = 183.0;
+        for para in ABOUT_TEXT {
+            for l in *para {
+                for t in self.wrap(l, 396.0) {
+                    self.cv.text(16.0, y, &t);
+                    y += 11.0;
+                }
+            }
+            y += 5.0;
+        }
+        self.cv.text(16.0, 322.0 - 17.0, "Font: Fira Code (SIL OFL 1.1)");
+        self.cv.textr(10.0, 322.0 - 17.0, 408.0 - 6.0, "thomchantra");
+    }
+
+    /// Signal-flow diagram: SAT > PRE EQ > COMP > MIX (dry path) > POST EQ > OUT. Dots move along the path; their size
+    /// follows the live output level (pre-compressor segments add the gain reduction back, so they read hotter).
+    fn draw_flow(&mut self, x: f32, y: f32, w: f32, h: f32, byp: bool) {
+        let prev = self.dk;
+        let sh = self.env.shared;
+        self.setc(false);
+        self.cv.boxr(x, y, w, h);
+        self.cv.set_font(1);
+        self.cv.text(x + 6.0, y + 5.0, "SIGNAL FLOW");
+        let lvf = |v: f32| ((8.6858896 * v.max(1e-7).ln() + 48.0) / 48.0).clamp(0.0, 1.0);
+        let lo = lvf(self.ovl.max(self.ovr));
+        let gr = self.gr_disp;
+        let lp = (lo + gr / 48.0).min(1.0);
+        let sig = lo > 0.01;
+        let eq_mod = self.sget(62) > 0.5;
+        let (a0, a1) = self.eq_active();
+        let pre_on = a0 && !eq_mod && self.sget(60) < 0.5;
+        let post_on = a1 && !eq_mod && self.sget(61) < 0.5;
+        let sat_on = sh.sat_vz.load(Ordering::Relaxed) > 0.02;
+        let names = ["IN", "SAT", "PRE EQ", "COMP", "MIX", "POST EQ", "OUT"];
+        let bw = [26.0, 34.0, 52.0, 40.0, 32.0, 58.0, 32.0];
+        let lit = [false, sat_on, pre_on, gr > 0.1, false, post_on, false];
+        let eq_off = [false, false, eq_mod || self.sget(60) > 0.5, false, false, eq_mod || self.sget(61) > 0.5, false];
+        let gap = (w - 24.0 - bw.iter().sum::<f32>()) / 6.0;
+        let (cy, bh) = (y + 50.0, 22.0);
+        let mut bx = [0.0f32; 7];
+        let mut cx = x + 12.0;
+        for i in 0..7 {
+            bx[i] = cx;
+            cx += bw[i] + gap;
+        }
+        // flow lines, arrows and dots
+        let phase = ((self.now * 26.0) as f32) % 6.0;
+        let dot = |c: &Canvas, px: f32, py: f32, lv: f32| {
+            if sig && lv > 0.02 {
+                let s = (1.0 + lv * 2.99).floor();
+                c.fill((px - s * 0.5).floor(), (py - s * 0.5).floor() + 0.5, s, s);
+            }
+        };
+        self.setc(false);
+        for i in 0..6 {
+            let (g0, g1) = (bx[i] + bw[i], bx[i + 1]);
+            self.cv.fill(g0, cy, g1 - g0 - 3.0, 1.0);
+            self.cv.tri((g1 - 4.0, cy - 3.0), (g1 - 4.0, cy + 4.0), (g1, cy + 0.5));
+            let lv = if i < 3 { lp } else { lo };
+            let mut px = g0 + phase;
+            while px < g1 - 4.0 {
+                dot(&self.cv, px, cy, lv);
+                px += 6.0;
+            }
+        }
+        // dry path around COMP: from the PRE EQ output down, across, and up into MIX
+        let (xa, xb, yd) = (bx[3] - gap * 0.5, bx[4] - gap * 0.5, cy + 36.0);
+        self.cv.fill(xa, cy, 1.0, yd - cy);
+        self.cv.fill(xa, yd, xb - xa, 1.0);
+        self.cv.fill(xb, cy, 1.0, yd - cy + 1.0);
+        let dry = (1.0 - self.sget(21) * 0.01).clamp(0.0, 1.0);
+        let lvd = if dry > 0.001 { (lp + 8.6858896 * dry.ln() / 48.0).max(0.0) } else { 0.0 };
+        let (l1, l2) = (yd - cy, xb - xa);
+        let mut sd = phase;
+        while sd < 2.0 * l1 + l2 {
+            let (px, py) = if sd < l1 {
+                (xa, cy + sd)
+            } else if sd < l1 + l2 {
+                (xa + sd - l1, yd)
+            } else {
+                (xb, yd - (sd - l1 - l2))
+            };
+            dot(&self.cv, px, py, lvd);
+            sd += 6.0;
+        }
+        self.cv.textc(xa, yd + 4.0, xb - xa, "DRY");
+        // blocks
+        for i in 0..7 {
+            self.set_dk(if eq_off[i] { prev * 0.5 } else { prev });
+            let (bxl, byt) = (bx[i], cy - bh * 0.5 + 0.5);
+            if lit[i] {
+                self.setc(false);
+                self.cv.fill(bxl, byt, bw[i], bh);
+                self.cv.setbg();
+            } else {
+                self.setc(false);
+                self.cv.fill(bxl + 1.0, byt + 1.0, bw[i] - 2.0, bh - 2.0); // clear the line under the box
+                self.cv.setbg();
+                self.cv.fill(bxl + 1.0, byt + 1.0, bw[i] - 2.0, bh - 2.0);
+                self.setc(false);
+                self.cv.boxr(bxl, byt, bw[i], bh);
+            }
+            self.cv.textc(bxl, byt + 7.0, bw[i], names[i]);
+            self.setc(false);
+        }
+        self.set_dk(prev);
+        let s = format!("GR {:.1}", gr);
+        self.cv.textc(bx[3] - 10.0, cy - bh * 0.5 - 14.0, bw[3] + 20.0, &s);
+        self.cv.text(x + 6.0, y + h - 15.0, if sig { "DOT SIZE = LEVEL" } else { "PLAY AUDIO TO SEE THE FLOW" });
+        let _ = byp;
     }
 
     // ------------------------------------------------------------------ main frame
@@ -1995,13 +2221,24 @@ impl<'a> Gui<'a> {
         self.set_dk(1.0);
         self.logo(10.0, 5.0);
         self.setc(false);
-        self.cv.set_font(3);
-        self.cv.text(38.0, 10.0, "SATCOMP 0.3");
+        self.cv.set_font(2);
+        let title = format!("SATCOMP {}", version_short());
+        let tw = self.cv.text_w(&title);
+        if self.hit(36.0, 5.0, tw + 4.0, 21.0) && self.press && self.act == 0 {
+            self.about = if self.about == 0 { 1 } else { 0 };
+            self.press = false;
+        }
+        self.cv.text(38.0, 12.0, &title);
         self.preset_bar();
         self.out_meter(430.0, 8.0, 120.0, 16.0);
 
         // ---------- tab row
+        let ab = self.about > 0;
         self.set_dk(if byp { 0.5 } else { 1.0 });
+        if ab {
+            self.draw_about(byp);
+        }
+        if !ab {
         self.selector(1, 10.0, 34.0, 130.0, 16.0);
         self.setc(false);
         self.cv.boxr(152.0, 34.0, 96.0, 16.0);
@@ -2020,6 +2257,7 @@ impl<'a> Gui<'a> {
         }
         let (a0, a1) = self.eq_active();
         self.sqind(366.0, 38.0, 8.0, a0 || a1, self.eq_page, eq_mod_byp);
+        }
         self.set_dk(1.0);
         let delta = sh.delta_on.load(Ordering::Relaxed);
         if self.btn(430.0, 34.0, 60.0, 16.0, "DELTA", if delta { 2 } else { 0 }) {
@@ -2030,19 +2268,22 @@ impl<'a> Gui<'a> {
         }
 
         // ---------- viz row
-        self.set_dk(if byp { 0.5 } else { 1.0 });
-        self.draw_plot(10.0, 56.0, 130.0, 128.0);
-        self.set_dk(if byp || (self.eq_page && eq_mod_byp) { 0.5 } else { 1.0 });
-        if self.eq_page {
-            self.draw_eq(152.0, 56.0, 266.0, 128.0);
-        } else {
-            self.draw_ccurve(152.0, 56.0, 266.0, 128.0);
+        if !ab {
+            self.set_dk(if byp { 0.5 } else { 1.0 });
+            self.draw_plot(10.0, 56.0, 130.0, 128.0);
+            self.set_dk(if byp || (self.eq_page && eq_mod_byp) { 0.5 } else { 1.0 });
+            if self.eq_page {
+                self.draw_eq(152.0, 56.0, 266.0, 128.0);
+            } else {
+                self.draw_ccurve(152.0, 56.0, 266.0, 128.0);
+            }
         }
         self.set_dk(1.0);
         self.draw_meter(430.0, 56.0, 28.0, 266.0);
         self.set_dk(if byp { 0.5 } else { 1.0 });
 
         // ---------- SAT cells
+        if !ab {
         self.cell(2, 10.0, 196.0, 62.0, 38.0, "DRIVE");
         self.cell(3, 78.0, 196.0, 62.0, 38.0, "BIAS");
         self.cell2(4, 5, 10.0, 240.0, 62.0, 38.0, "HP", "LP");
@@ -2068,6 +2309,7 @@ impl<'a> Gui<'a> {
             self.cell(12, 220.0, 284.0, 62.0, 38.0, "SPEED");
             self.cell(18, 288.0, 284.0, 62.0, 38.0, "FF>FB");
             self.cell(19, 356.0, 284.0, 62.0, 38.0, "GR DIST");
+        }
         }
 
         // ---------- OUT column
