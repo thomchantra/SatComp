@@ -4,7 +4,7 @@ use nih_plug::prelude::*;
 use nih_plug_egui::EguiState;
 use satcomp_dsp::shapers::Curve;
 use satcomp_dsp::{EqBandParams, EqStageParams};
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// (slider number, id, min, max, default, step) for every parameter; slider numbers follow SatComp.jsfx.
@@ -82,6 +82,12 @@ pub struct SatCompParams {
     /// Colour scheme index (0 Black, 1 White, 2.. see palette table); UI-only, saved with the project.
     #[persist = "palette"]
     pub palette: Arc<AtomicI32>,
+    /// Colour scheme index in the v0.5 palette table (-1 = not set yet: migrate from the legacy `palette`); UI-only.
+    #[persist = "palette-v2"]
+    pub palette_v2: Arc<AtomicI32>,
+    /// Light mode (the inverted palette of the scheme); UI-only, saved with the project.
+    #[persist = "light-mode"]
+    pub light: Arc<AtomicBool>,
     /// Name of the last loaded/saved preset (display only).
     #[persist = "preset-name"]
     pub preset_name: Arc<parking_lot::Mutex<String>>,
@@ -226,6 +232,8 @@ impl Default for SatCompParams {
         Self {
             editor_state: EguiState::from_size(700, 420),
             palette: Arc::new(AtomicI32::new(0)),
+            palette_v2: Arc::new(AtomicI32::new(-1)),
+            light: Arc::new(AtomicBool::new(false)),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             match_trim: Arc::new(AtomicF32::new(0.0)),

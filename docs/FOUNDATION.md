@@ -27,8 +27,14 @@ Known intentional divergences (Rust vs the archival JSFX): internal smoothing on
 scale exist only in the plug-in; the **Custom waveshaper** (shaper 14, pencil draw view, `Curve` in `satcomp-dsp/src/shapers.rs`) is Rust-only, not in the JSFX; the sat level-match result is written by the UI thread (audio thread cannot set params).
 
 ## Colour schemes
-`docs/colorscheme.md` is the source; `PALETTES` in `gui/canvas.rs` is generated from it in file order (20 schemes).
-The index is persisted in project state, so only append (Bananas replaced Midnight at index 9 on 2026-11-09, pre-release; Midnight was then restored by the owner at index 9, Bananas moved to 10).
+`docs/colorthemesV2.svg` (+ `.png`) is the design source (dark swatches on the left, light on the right, 20 rows); `docs/colorscheme.md`
+is its text export and `PALETTES` in `gui/canvas.rs` is `(name, dark, light)` generated from it (script not kept: parse the 51x51 swatch
+rects by y row, x=50/111/172 = dark BG/UI/accent, x=463/524/585 = light). Row names came from the owner's layer list; the second
+"Magenta" row (purple #240132) is called **Midnight** here (its pre-0.5 name) to keep names unique. **Check with the owner.**
+Persisted as `palette-v2` (index into this table, default -1) + `light-mode` (bool). The legacy `palette` index (pre-0.5 table order) is
+migrated once in `ui::initial_palette` (old White = Mono light; old Bananas/Apricot/Berry/Matcha were light-BG schemes). Only append new schemes.
+Light mode: double-click the header icon (single click = next scheme, applied after a 0.3 s double-click window) or `MODE:` at the top of the
+scheme menu (right-click the icon). Not verified in REAPER (clicks go through the host's mouse events).
 
 ## Git convention
 - **Commit as you go, in small layers** so `git diff`/`git log -p` reads cleanly: one concern per commit, typically

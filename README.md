@@ -13,7 +13,7 @@ VST3 and CLAP for macOS (Apple silicon and Intel) and Windows. Current version: 
 - **EQ:** two stages (pre and post compressor), three bands each plus tilt, with a live spectrum.
 - **Metering and tools:** output meter, gain-reduction meter, GAIN MATCH, DELTA monitor, loudness-matched BYPASS.
 - **Presets:** save and load your own, step through them, six Drums factory presets included. A name wrapped in asterisks (`*NAME*`) means the preset has been modified.
-- **20 colour schemes:** left-click the logo for the next one, right-click for the list.
+- **20 colour schemes, each with a light mode:** click the icon for the next scheme, double-click it for light/dark, right-click for the list.
 - Resizable window. Double-click any slider to reset it.
 
 Click the title for an About page with the signal flow and the changelog.

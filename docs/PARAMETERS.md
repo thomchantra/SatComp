@@ -112,12 +112,12 @@ plug-in; hosts without sidechain support get the plain stereo layout.
 | **SC Gain** *(64)* | −24…+24 dB, 0 | Key level before the filters (ahead of the threshold decision). |
 | **SC HP** *(65)* | 20…2000 Hz, OFF | 2nd-order Butterworth high-pass on the key. |
 | **SC LP** *(66)* | 200…20k Hz, OFF | 2nd-order Butterworth low-pass on the key. |
+| **Key Mix** *(67, cell `KEY MIX`)* | 0–100 %, 100 | Stands in for FF>FB while Sidechain is on (same cell). Detector level = (1−m)·main + m·key, blended as **levels** (each source has its own low-cut and peak/RMS state), so 0 % = the normal internal detector, 100 % = key only, in between ducks from both. FF>FB is not applied while Sidechain is on, whatever its value. Stored in presets. |
 | **SOLO** *(UI only, not a parameter)* | off | Replaces the output with the key as the detector hears it (after gain/HP/LP, before Low Cut and the peak/RMS blend). Clears itself when Sidechain is switched off. |
 
 Key path: aux in > SC Gain > SC HP > SC LP > (solo tap) > detector (Low Cut, peak/RMS blend, gain computer). The key is
 delayed by the oversampling latency so it lines up with the post-sat main signal; with Lookahead the detector sees it
-early like it does the main signal. **FF>FB has no effect while the sidechain drives the detector** (there is nothing to
-feed back). The gain is still applied to the main signal and Mix/Delta/Bypass work as before (Delta = comp input minus output).
+early like it does the main signal. **FF>FB is replaced by KEY MIX while the sidechain is on** (an external key has nothing to feed back). The gain is still applied to the main signal and Mix/Delta/Bypass work as before (Delta = comp input minus output).
 **UI:** with Sidechain on and the EQ page closed, the comp plot is shortened and a row `SC | HP | LP | SOLO` sits under it.
 The plot x axis is then the **key** level; triangles on the left/right edges show the main level into the compressor and
 after the gain reduction; the readout reads `SC / IN / GR`. The About page flow diagram adds `SIDECHAIN > SC GAIN/LP/HP`
@@ -144,7 +144,7 @@ into COMP. The tab row no longer carries the OVERSAMPLING label (OFF / x2 / x4 s
 | 28 | *(unused)* | 29–43 | EQ Pre (see EQ) |
 | | | 44–58 | EQ Post (see EQ) |
 | 59 | Lookahead | 60–62 | EQ Pre / Post / Module bypass |
-| 63 | Sidechain *(v0.5)* | 64–66 | SC Gain / SC HP / SC LP *(v0.5)* |
+| 63 | Sidechain *(v0.5)* | 64–67 | SC Gain / SC HP / SC LP / Key Mix *(v0.5)* |
 
 New sliders were appended (25–27, 29–58) so existing sessions/automation keep their mapping. Old sessions should sound identical (Sat Mix 100 %, Bypass off, Sat Out 0 dB, Auto off); if REAPER restores missing sliders as 0, re-set Sat Mix to 100 % once.
 

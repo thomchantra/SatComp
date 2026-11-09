@@ -68,6 +68,9 @@ pub struct State {
     meta: [Meta; 68],
     touched: [bool; 68],
     pub pal: usize,
+    pub light: bool,
+    /// time of a logo click waiting out the double-click window (then it cycles the colour scheme)
+    logo_pend: f64,
     // interaction
     act: i32,
     act_t: f32,
@@ -196,7 +199,7 @@ impl State {
         }
     }
 
-    pub fn new(pal: usize) -> Self {
+    pub fn new(pal: usize, light: bool) -> Self {
         let mut meta = [Meta::default(); 68];
         for &(n, _, mn, mx, df) in TABLE {
             meta[n] = Meta { min: mn, max: mx, def: df, mode: 0, snap: 0, step: 1.0 };
@@ -250,6 +253,8 @@ impl State {
             meta,
             touched: [false; 68],
             pal,
+            light,
+            logo_pend: -1.0,
             act: 0,
             act_t: 0.0,
             last_my: 0.0,
@@ -368,7 +373,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
-    ("v0.5", &["Added a sidechain input with key gain, HP, LP and a solo monitor.", "Replaced the oversampling label with a SIDECHAIN button."]),
+    ("v0.5", &["Added a sidechain input with key gain, HP, LP, a solo monitor and KEY MIX.", "Every colour scheme now has a light mode: double-click the icon or use the scheme menu. LP filters reach down to 200 Hz."]),
     ("v0.4.1", &["Fixed the PK readout and peak reset after reopening the window."]),
     ("v0.4", &["Rebuilt as VST3 and CLAP with presets and window resize.", "Added a custom waveshaper, 20 colour schemes and this page."]),
     ("v0.3", &["Added two 3-band EQ stages with tilt and a spectrum view.", "Added lookahead and a GAIN MATCH button."]),
@@ -377,6 +382,25 @@ const CHANGELOG: &[(&str, &[&str])] = &[
 ];
 
 /// Crate version for the header: "0.4" for 0.4.0, "0.4.1" for a patch release.
+/// Palette index and light flag to start with. Projects saved before 0.5 only have the legacy `palette` index (the old
+/// table order), which is mapped to (new index, light) once and then stored in `palette-v2`.
+pub fn initial_palette(p: &crate::params::SatCompParams) -> (usize, bool) {
+    // old index -> (new index, light): old White is Mono's light mode, old Bananas/Apricot/Berry/Matcha were light-BG schemes
+    const MIGRATE: [(usize, bool); 20] = [
+        (0, false), (0, true), (2, false), (3, false), (4, false), (5, false), (6, false), (8, false), (9, false), (10, false),
+        (7, true), (11, false), (12, false), (13, false), (14, false), (15, false), (16, true), (17, true), (18, false), (19, true),
+    ];
+    let v2 = p.palette_v2.load(Ordering::Relaxed);
+    if v2 >= 0 {
+        return ((v2 as usize).min(PALETTES.len() - 1), p.light.load(Ordering::Relaxed));
+    }
+    let old = p.palette.load(Ordering::Relaxed).clamp(0, 19) as usize;
+    let (i, l) = MIGRATE[old];
+    p.palette_v2.store(i as i32, Ordering::Relaxed);
+    p.light.store(l, Ordering::Relaxed);
+    (i, l)
+}
+
 fn version_short() -> String {
     let v = env!("CARGO_PKG_VERSION");
     v.strip_suffix(".0").unwrap_or(v).to_string()
@@ -785,15 +809,31 @@ impl<'a> Gui<'a> {
 
     /// header logo: left click = next colour scheme, right click = scheme dropdown
     fn logo(&mut self, x: f32, y: f32) {
-        let hv = self.hit(x, y, 21.0, 21.0);
+        let hv = self.hit(x - 3.0, y - 3.0, 27.0, 27.0);
         if hv && self.press && self.act == 0 {
-            self.set_pal((self.pal + 1) % PALETTES.len());
+            // single click = next scheme (after the double-click window), double click = light/dark
+            if self.logo_pend >= 0.0 && self.now - self.logo_pend < 0.3 {
+                self.logo_pend = -1.0;
+                self.set_light(!self.light);
+            } else {
+                self.logo_pend = self.now;
+            }
             self.press = false;
         }
-        if hv && self.rpress {
-            let items = PALETTES.iter().map(|p| p.0.to_string()).collect();
-            self.open_menu(MenuKind::Palette, x, y + 22.0, items, self.pal);
+        if self.logo_pend >= 0.0 && self.now - self.logo_pend >= 0.3 {
+            self.logo_pend = -1.0;
+            self.set_pal((self.pal + 1) % PALETTES.len());
         }
+        if hv && self.rpress {
+            self.logo_pend = -1.0;
+            let mut items = vec![MItem { label: format!("MODE: {}", if self.light { "LIGHT" } else { "DARK" }), kind: 0, id: 1000 }];
+            items.push(MItem { label: String::new(), kind: 2, id: -1 });
+            items.extend(PALETTES.iter().enumerate().map(|(i, p)| MItem { label: p.0.to_string(), kind: 0, id: i as i32 }));
+            self.menu = Some(Menu { kind: MenuKind::Palette, x, y: y + 22.0, items, checked: self.pal as i32, scroll: 0 });
+        }
+        // plug-in icon in a square box: fill = BG, stroke = UI (so light mode inverts it with the scheme)
+        self.setc(false);
+        self.cv.boxr(x - 3.0, y - 3.0, 27.0, 27.0);
         self.setc(false);
         self.cv.boxr(x + 6.0, y + 6.0, 9.0, 9.0);
         let l = |c: &Canvas, a: f32, b: f32, cc: f32, d: f32| c.line(x + a, y + b, x + cc, y + d);
@@ -807,8 +847,19 @@ impl<'a> Gui<'a> {
 
     fn set_pal(&mut self, p: usize) {
         self.pal = p.min(PALETTES.len() - 1);
-        self.env.params.palette.store(self.pal as i32, Ordering::Relaxed);
-        let a = PALETTES[self.pal].1;
+        self.env.params.palette_v2.store(self.pal as i32, Ordering::Relaxed);
+        self.apply_pal();
+    }
+
+    fn set_light(&mut self, light: bool) {
+        self.light = light;
+        self.env.params.light.store(light, Ordering::Relaxed);
+        self.apply_pal();
+    }
+
+    fn apply_pal(&mut self) {
+        let e = &PALETTES[self.pal];
+        let a = if self.light { e.2 } else { e.1 };
         self.cv.bk = [a[0], a[1], a[2]];
         self.cv.fg = [a[3], a[4], a[5]];
         self.cv.ac = [a[6], a[7], a[8]];
@@ -1746,6 +1797,7 @@ impl<'a> Gui<'a> {
             if let Some((id, kind)) = chosen {
                 match kind {
                     0 => self.click_set(1, id as f32),
+                    1 if id >= 1000 => self.set_light(!self.light),
                     1 => self.set_pal(id as usize),
                     2 => self.request_scale(SIZES[(id as usize).min(SIZES.len() - 1)]),
                     _ => self.preset_action(id),
@@ -2311,16 +2363,16 @@ impl<'a> Gui<'a> {
 
         // ---------- header
         self.set_dk(1.0);
-        self.logo(10.0, 5.0);
+        self.logo(13.0, 5.0);
         self.setc(false);
         self.cv.set_font(2);
         let title = format!("SATCOMP {}", version_short());
         let tw = self.cv.text_w(&title);
-        if self.hit(36.0, 5.0, tw + 4.0, 21.0) && self.press && self.act == 0 {
+        if self.hit(42.0, 5.0, tw + 4.0, 21.0) && self.press && self.act == 0 {
             self.about = if self.about == 0 { 1 } else { 0 };
             self.press = false;
         }
-        self.cv.text(38.0, 12.0, &title);
+        self.cv.text(44.0, 12.0, &title);
         self.preset_bar();
         self.out_meter(430.0, 8.0, 120.0, 16.0);
 
