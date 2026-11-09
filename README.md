@@ -2,7 +2,7 @@
 
 Saturator + compressor + EQ with a black/white/red monospace UI.
 
-**Status:** early. The **Rust VST3/CLAP plug-in (`rust/`) is the production build**: full saturator + compressor + EQ, presets, custom waveshaper, 19 colour schemes. `SatComp.jsfx` is the archival in-house prototype (feature-frozen at v0.3, kept for reference and A/B; new features land in the Rust build only).
+**Status:** early. The **Rust VST3/CLAP plug-in (`rust/`) is the production build**: full saturator + compressor + EQ, presets, custom waveshaper, 20 colour schemes, six Drums factory presets. `SatComp.jsfx` is the archival in-house prototype (feature-frozen at v0.3, kept for reference and A/B; new features land in the Rust build only).
 
 ## Install (JSFX, archival)
 Copy `SatComp.jsfx` into REAPER's `Effects/` folder (Options → Show REAPER resource path).

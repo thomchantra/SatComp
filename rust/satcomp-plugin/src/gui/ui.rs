@@ -352,10 +352,12 @@ const ABOUT_TEXT: &[&[&str]] = &[
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
-const CHANGELOG: &[(&str, &[&str])] = &[(
-    "v0.4",
-    &["Added a custom waveshaper with a pencil draw mode.", "Added 10 colour schemes and this about page."],
-)];
+const CHANGELOG: &[(&str, &[&str])] = &[
+    ("v0.4", &["Rebuilt as VST3 and CLAP with presets and window resize.", "Added a custom waveshaper, 20 colour schemes and this page."]),
+    ("v0.3", &["Added two 3-band EQ stages with tilt and a spectrum view.", "Added lookahead and a GAIN MATCH button."]),
+    ("v0.2", &["Added a grid UI, bypass, meters and a delta monitor.", "Added Sat Mix, Sat Out and 14 saturator shapes."]),
+    ("v0.1", &["First prototype with a saturator and a compressor."]),
+];
 
 /// "0.4" from the crate version "0.4.0" (shown in the header and About page)
 fn version_short() -> String {
