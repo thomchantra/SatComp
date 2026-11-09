@@ -39,8 +39,11 @@ pub const PALETTES: [(&str, [f32; 9], [f32; 9]); 20] = [
     ("Matcha", [0.1529, 0.2627, 0.1255, 0.6588, 0.7804, 0.4745, 0.149, 0.6039, 0.0], [0.6588, 0.7804, 0.4745, 0.1529, 0.2627, 0.1255, 0.149, 0.6039, 0.0]),
 ];
 
-pub fn fira() -> FontFamily {
-    FontFamily::Name("fira".into())
+/// Selectable UI fonts (index persisted as `ui-font`: append, do not reorder). All are SIL OFL 1.1.
+pub const FONT_NAMES: [&str; 6] = ["Fira Code", "JetBrains Mono", "Geist Mono", "Roboto Mono", "Oxygen Mono", "Doto"];
+
+pub fn font_family(i: usize) -> FontFamily {
+    FontFamily::Name(format!("f{i}").into())
 }
 
 pub struct Canvas<'a> {
@@ -58,6 +61,8 @@ pub struct Canvas<'a> {
     pub dk: f32,
     pub col: Color32,
     pub font: u8,
+    /// index into FONT_NAMES
+    pub face: usize,
 }
 
 fn rgb(c: [f32; 3]) -> Color32 {
@@ -65,9 +70,7 @@ fn rgb(c: [f32; 3]) -> Color32 {
 }
 
 impl<'a> Canvas<'a> {
-    pub fn new(p: &'a Painter, ppp: f32, ox: f32, oy: f32, s: f32, pal: usize, light: bool) -> Self {
-        let e = &PALETTES[pal.min(PALETTES.len() - 1)];
-        let a = if light { e.2 } else { e.1 };
+    pub fn new(p: &'a Painter, ppp: f32, ox: f32, oy: f32, s: f32, a: [f32; 9], face: usize) -> Self {
         let mut c = Self {
             p,
             ppp,
@@ -80,6 +83,7 @@ impl<'a> Canvas<'a> {
             dk: 1.0,
             col: Color32::WHITE,
             font: 1,
+            face: face.min(FONT_NAMES.len() - 1),
         };
         c.setc(false);
         c
@@ -98,6 +102,11 @@ impl<'a> Canvas<'a> {
             self.bk[1] + (t[1] - self.bk[1]) * d,
             self.bk[2] + (t[2] - self.bk[2]) * d,
         ]);
+    }
+
+    /// Set the drawing colour from a palette entry (r, g, b in 0..1), ignoring the dim level.
+    pub fn setrgb(&mut self, c: [f32; 3]) {
+        self.col = rgb(c);
     }
 
     /// Text colour on filled (lit) widgets = background colour.
@@ -130,7 +139,7 @@ impl<'a> Canvas<'a> {
             2 => 14.0,
             _ => 18.0,
         } * self.s * FONT_SCALE;
-        FontId::new(sz.max(5.0), fira())
+        FontId::new(sz.max(5.0), font_family(self.face))
     }
 
     pub fn set_font(&mut self, f: u8) {

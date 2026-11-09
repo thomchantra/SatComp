@@ -88,6 +88,12 @@ pub struct SatCompParams {
     /// Light mode (the inverted palette of the scheme); UI-only, saved with the project.
     #[persist = "light-mode"]
     pub light: Arc<AtomicBool>,
+    /// UI font index (see `gui::canvas::FONT_NAMES`); UI-only, saved with the project.
+    #[persist = "ui-font"]
+    pub font: Arc<AtomicI32>,
+    /// Active user colour theme (`name|` + 18 hex digits) so a project keeps its look on a machine without the themes file.
+    #[persist = "custom-theme"]
+    pub custom_theme: Arc<parking_lot::Mutex<String>>,
     /// Name of the last loaded/saved preset (display only).
     #[persist = "preset-name"]
     pub preset_name: Arc<parking_lot::Mutex<String>>,
@@ -234,6 +240,8 @@ impl Default for SatCompParams {
             palette: Arc::new(AtomicI32::new(0)),
             palette_v2: Arc::new(AtomicI32::new(-1)),
             light: Arc::new(AtomicBool::new(false)),
+            font: Arc::new(AtomicI32::new(0)),
+            custom_theme: Arc::new(parking_lot::Mutex::new(String::new())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             match_trim: Arc::new(AtomicF32::new(0.0)),

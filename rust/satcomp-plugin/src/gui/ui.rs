@@ -1,7 +1,8 @@
 //! Port of the JSFX `@gfx` section: widget kit (cell, btn, selector, ...), the sat / comp / EQ viewports,
 //! meters and the main layout. Immediate mode with the same `act` / `press` drag logic as the JSFX.
 
-use super::canvas::{Canvas, PALETTES};
+use super::canvas::{Canvas, FONT_NAMES, PALETTES};
+use theme::{ThemeEdit, UserTheme};
 use crate::params::{SatCompParams, TABLE};
 use crate::presets::{self, Preset};
 use crate::Shared;
@@ -71,11 +72,25 @@ pub enum Dlg {
     Saved(String),
 }
 
+mod theme;
+
 pub struct State {
+    pub themes: Vec<UserTheme>,
+    pub edit: Option<ThemeEdit>,
+    pub dummy_params: Arc<SatCompParams>,
+    pub dummy_shared: Arc<Shared>,
+    /// pending native text prompt: (0 theme name | 1 hex, result slot)
+    prompt: Option<(u8, Arc<parking_lot::Mutex<Option<Option<String>>>>)>,
+    real_in: (bool, bool, bool, i32, f32, f32),
+    del_arm: f64,
     meta: [Meta; 68],
     touched: [bool; 68],
     pub pal: usize,
     pub light: bool,
+    /// UI font index (FONT_NAMES)
+    pub face: usize,
+    /// first visible scheme row in the Appearance list
+    ap_scroll: usize,
     /// first visible row of the About / Changelog text box
     about_scroll: usize,
     /// time of a logo click waiting out the double-click window (then it cycles the colour scheme)
@@ -169,7 +184,7 @@ pub struct State {
     pending: u8,
     /// result slot of a file dialog running on a worker thread (never block the UI/host thread in a modal)
     dlg: Option<Arc<parking_lot::Mutex<Dlg>>>,
-    /// About page: 0 closed, 1 about, 2 changelog
+    /// About page: 0 closed, 1 about, 2 changelog, 3 appearance
     about: u8,
     /// preset the edit marker compares against (cached by name), and the post-load settle time
     base: Option<(String, Preset)>,
@@ -208,7 +223,7 @@ impl State {
         }
     }
 
-    pub fn new(pal: usize, light: bool) -> Self {
+    pub fn new(pal: usize, light: bool, face: usize, params: &SatCompParams) -> Self {
         let mut meta = [Meta::default(); 68];
         for &(n, _, mn, mx, df) in TABLE {
             meta[n] = Meta { min: mn, max: mx, def: df, mode: 0, snap: 0, step: 1.0 };
@@ -258,11 +273,20 @@ impl State {
             sp(base + 14, 0, 0, 0.1);
         }
         let fwin = (0..4096).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / 4096.0).cos()).collect();
-        Self {
+        let mut st = Self {
             meta,
             touched: [false; 68],
             pal,
             light,
+            face,
+            themes: theme::load_themes(),
+            edit: None,
+            dummy_params: Arc::new(SatCompParams::default()),
+            dummy_shared: Arc::new(Shared::new()),
+            prompt: None,
+            real_in: (false, false, false, 0, -1000.0, -1000.0),
+            del_arm: -10.0,
+            ap_scroll: 0,
             about_scroll: 0,
             logo_pend: -1.0,
             act: 0,
@@ -344,7 +368,9 @@ impl State {
             about: 0,
             base: None,
             hold_until: 0.0,
-        }
+        };
+        st.restore_custom(params);
+        st
     }
 }
 
@@ -383,6 +409,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
+    ("v0.5.1", &["Fixed a loud thump when the plug-in is enabled or the window regains focus.", "New Appearance tab under About: colour mode, a scheme list with swatches, six fonts and a custom theme editor with a colour picker."]),
     ("v0.5", &["Added a sidechain input with key gain, HP, LP, a solo monitor and KEY MIX.", "Every colour scheme now has a light mode: double-click the icon or use the scheme menu.", "LP filters now reach down to 200 Hz."]),
     ("v0.4.1", &["Fixed the PK readout and peak reset after reopening the window."]),
     ("v0.4", &["Rebuilt as VST3 and CLAP with presets and window resize.", "Added a custom waveshaper, 20 colour schemes and this page."]),
@@ -402,7 +429,7 @@ pub fn initial_palette(p: &crate::params::SatCompParams) -> (usize, bool) {
     ];
     let v2 = p.palette_v2.load(Ordering::Relaxed);
     if v2 >= 0 {
-        return ((v2 as usize).min(PALETTES.len() - 1), p.light.load(Ordering::Relaxed));
+        return (v2 as usize, p.light.load(Ordering::Relaxed)); // >= 20 = a user theme, resolved in State::restore_custom
     }
     let old = p.palette.load(Ordering::Relaxed).clamp(0, 19) as usize;
     let (i, l) = MIGRATE[old];
@@ -433,6 +460,9 @@ impl<'a> Gui<'a> {
     }
 
     fn sset(&mut self, n: usize, v: f32) {
+        if self.edit.is_some() {
+            return; // theme editor page: dummy widgets never write parameters
+        }
         if let Some(p) = self.env.params.ptr(n) {
             let m = self.meta[n];
             let norm = ((v - m.min) / (m.max - m.min)).clamp(0.0, 1.0);
@@ -447,6 +477,9 @@ impl<'a> Gui<'a> {
     }
 
     fn end_touch(&mut self, n: usize) {
+        if self.edit.is_some() {
+            return;
+        }
         if n < 68 && self.touched[n] {
             if let Some(p) = self.env.params.ptr(n) {
                 unsafe { self.env.setter.raw_context.raw_end_set_parameter(p) };
@@ -832,13 +865,14 @@ impl<'a> Gui<'a> {
         }
         if self.logo_pend >= 0.0 && self.now - self.logo_pend >= 0.3 {
             self.logo_pend = -1.0;
-            self.set_pal((self.pal + 1) % PALETTES.len());
+            let n = self.n_schemes();
+            self.set_pal((self.pal + 1) % n);
         }
         if hv && self.rpress {
             self.logo_pend = -1.0;
             let mut items = vec![MItem { label: format!("MODE: {}", if self.light { "LIGHT" } else { "DARK" }), kind: 0, id: 1000 }];
             items.push(MItem { label: String::new(), kind: 2, id: -1 });
-            items.extend(PALETTES.iter().enumerate().map(|(i, p)| MItem { label: p.0.to_string(), kind: 0, id: i as i32 }));
+            items.extend((0..self.n_schemes()).map(|i| MItem { label: self.scheme_name(i), kind: 0, id: i as i32 }));
             self.menu = Some(Menu { kind: MenuKind::Palette, x, y: y + 22.0, items, checked: self.pal as i32, scroll: 0 });
         }
         // plug-in icon in a square box: fill = BG, stroke = UI (so light mode inverts it with the scheme)
@@ -862,8 +896,13 @@ impl<'a> Gui<'a> {
     }
 
     fn set_pal(&mut self, p: usize) {
-        self.pal = p.min(PALETTES.len() - 1);
+        self.pal = p.min(self.n_schemes() - 1);
         self.env.params.palette_v2.store(self.pal as i32, Ordering::Relaxed);
+        // a user theme is also stored in the project, so it survives a machine without the themes file
+        *self.env.params.custom_theme.lock() = match self.pal.checked_sub(PALETTES.len()) {
+            Some(i) => theme::encode(&self.themes[i]),
+            None => String::new(),
+        };
         self.apply_pal();
     }
 
@@ -874,8 +913,7 @@ impl<'a> Gui<'a> {
     }
 
     fn apply_pal(&mut self) {
-        let e = &PALETTES[self.pal];
-        let a = if self.light { e.2 } else { e.1 };
+        let a = self.scheme_cols(self.pal, self.light);
         self.cv.bk = [a[0], a[1], a[2]];
         self.cv.fg = [a[3], a[4], a[5]];
         self.cv.ac = [a[6], a[7], a[8]];
@@ -2165,10 +2203,13 @@ impl<'a> Gui<'a> {
 
     /// Replaces the left two thirds of the window (tab row, viz row, cells) while the About page is open.
     fn draw_about(&mut self, byp: bool) {
-        for (x, w, l, id) in [(10.0, 172.0, "ABOUT", 1u8), (182.0, 172.0, "CHANGELOG", 2u8)] {
+        for (x, w, l, id) in [(10.0, 114.0, "ABOUT", 1u8), (125.0, 114.0, "APPEARANCE", 3u8), (240.0, 114.0, "CHANGELOG", 2u8)] {
             if self.btn(x, 34.0, w, 16.0, l, (self.about == id) as u8) {
                 self.about = id;
                 self.about_scroll = 0;
+                if id == 3 {
+                    self.ap_scroll = self.pal.saturating_sub(2);
+                }
             }
         }
         if self.btn(356.0, 34.0, 62.0, 16.0, "X CLOSE", 0) {
@@ -2177,6 +2218,10 @@ impl<'a> Gui<'a> {
         }
         self.setc(false);
         self.cv.set_font(1);
+        if self.about == 3 {
+            self.draw_appearance();
+            return;
+        }
         if self.about == 2 {
             self.cv.boxr(10.0, 56.0, 408.0, 266.0);
             let mut rows = Vec::new();
@@ -2207,8 +2252,142 @@ impl<'a> Gui<'a> {
         }
         self.scroll_rows(10.0, 176.0, 408.0, 129.0, &rows);
         self.setc(false);
-        self.cv.text(16.0, 322.0 - 17.0, "Font: Fira Code (SIL OFL 1.1)");
+        self.cv.text(16.0, 322.0 - 17.0, &format!("Font: {} (SIL OFL 1.1)", FONT_NAMES[self.face]));
         self.cv.textr(10.0, 322.0 - 17.0, 408.0 - 6.0, "thomchantra");
+    }
+
+    fn set_face(&mut self, i: usize) {
+        self.face = i.min(FONT_NAMES.len() - 1);
+        self.env.params.font.store(self.face as i32, Ordering::Relaxed);
+        self.cv.face = self.face;
+    }
+
+    /// Appearance tab: colour mode switch, scrollable scheme list with swatches, font choice. Everything applies at once.
+    fn draw_appearance(&mut self) {
+        const ROWS: usize = 5;
+        const RH: f32 = 20.0;
+        self.cv.boxr(10.0, 56.0, 408.0, 266.0);
+        self.setc(false);
+        self.cv.set_font(1);
+        self.cv.text(18.0, 64.0, "COLOR MODE");
+        for (x, l, lt) in [(110.0, "DARK", false), (176.0, "LIGHT", true)] {
+            if self.btn(x, 60.0, 64.0, 16.0, l, (self.light == lt) as u8) {
+                self.set_light(lt);
+            }
+        }
+
+        // ---- scheme list
+        self.setc(false);
+        self.cv.text(18.0, 86.0, "COLOR SCHEME");
+        let user_sel = self.pal >= PALETTES.len();
+        if self.btn(248.0, 82.0, 82.0, 14.0, "NEW THEME", 0) {
+            self.begin_edit(None);
+            return;
+        }
+        let prev_dk = self.dk;
+        if !user_sel {
+            self.set_dk(0.5); // EDIT / DELETE only apply to a user theme
+        }
+        let armed = self.now - self.del_arm < 3.0;
+        let edit_hit = self.btn(332.0, 82.0, 38.0, 14.0, "EDIT", 0);
+        let del_hit = self.btn(372.0, 82.0, 38.0, 14.0, if armed && user_sel { "SURE?" } else { "DEL" }, (armed && user_sel) as u8 * 2);
+        self.set_dk(prev_dk);
+        if user_sel {
+            if edit_hit {
+                self.begin_edit(Some(self.pal - PALETTES.len()));
+                return;
+            }
+            if del_hit {
+                if armed {
+                    self.delete_user(self.pal - PALETTES.len());
+                    self.del_arm = -10.0;
+                } else {
+                    self.del_arm = self.now;
+                }
+            }
+        }
+        let (lx, ly, lw) = (18.0, 98.0, 392.0);
+        let lh = ROWS as f32 * RH + 2.0;
+        let n = self.n_schemes();
+        let max = n.saturating_sub(ROWS);
+        if self.hit(lx, ly, lw, lh) && self.wheel != 0 {
+            self.ap_scroll = (self.ap_scroll as i32 - self.wheel).clamp(0, max as i32) as usize;
+        }
+        let (tx, ty, th) = (lx + lw - 9.0, ly + 3.0, lh - 6.0);
+        let thumb = (th * ROWS as f32 / n as f32).floor().max(14.0).min(th);
+        if self.hit(tx - 3.0, ty, 11.0, th) && self.press && self.act == 0 {
+            self.act = 141;
+            self.press = false;
+        }
+        if self.act == 141 && self.down {
+            let f = ((self.my - ty - thumb * 0.5) / (th - thumb).max(1.0)).clamp(0.0, 1.0);
+            self.ap_scroll = (f * max as f32 + 0.5).floor() as usize;
+        }
+        self.ap_scroll = self.ap_scroll.min(max);
+        self.setc(false);
+        self.cv.boxr(lx, ly, lw, lh);
+        let rw = lw - 2.0 - 11.0;
+        for i in 0..ROWS.min(n) {
+            let idx = self.ap_scroll + i;
+            let y = ly + 1.0 + i as f32 * RH;
+            let sel = idx == self.pal;
+            if self.hit(lx + 1.0, y, rw, RH) && self.press && self.act == 0 {
+                self.set_pal(idx);
+                self.press = false;
+            }
+            if sel {
+                self.setc(false);
+                self.cv.fill(lx + 1.0, y, rw, RH);
+                self.cv.setbg();
+            } else {
+                self.setc(false);
+            }
+            let nm = self.scheme_name(idx);
+            self.cv.text(lx + 9.0, y + 6.0, &nm);
+            let a = self.scheme_cols(idx, self.light);
+            for (k, name) in ["BG", "UI", "ACCENT"].iter().enumerate() {
+                let _ = name;
+                let (cx, cy) = (lx + rw - 3.0 - (3 - k) as f32 * 22.0 + 4.0, y + 3.0);
+                if sel {
+                    self.cv.setbg();
+                } else {
+                    self.setc(false);
+                }
+                self.cv.fill(cx, cy, 20.0, RH - 6.0);
+                self.cv.setrgb([a[k * 3], a[k * 3 + 1], a[k * 3 + 2]]);
+                self.cv.fill(cx + 1.0, cy + 1.0, 18.0, RH - 8.0);
+            }
+        }
+        self.setc(false);
+        self.cv.fill(tx + 3.0, ty, 1.0, th); // track
+        let top = ty + (th - thumb) * self.ap_scroll as f32 / max as f32;
+        self.setc(self.act == 141);
+        self.cv.fill(tx + 1.0, top.floor(), 5.0, thumb);
+        self.setc(false);
+
+        // ---- font
+        self.cv.text(18.0, 208.0, "FONT");
+        for (i, name) in FONT_NAMES.iter().enumerate() {
+            let (x, y, w, h) = (18.0 + (i % 2) as f32 * 200.0, 220.0 + (i / 2) as f32 * 24.0, 192.0, 20.0);
+            let on = self.face == i;
+            if self.hit(x, y, w, h) && self.press && self.act == 0 {
+                self.set_face(i);
+                self.press = false;
+            }
+            self.setc(false);
+            if on {
+                self.cv.fill(x, y, w, h);
+                self.cv.setbg();
+            } else {
+                self.cv.boxr(x, y, w, h);
+            }
+            let keep = self.cv.face;
+            self.cv.face = i; // each name is drawn in its own typeface
+            self.cv.textc(x, y + 6.0, w, name);
+            self.cv.face = keep;
+        }
+        self.setc(false);
+        self.cv.text(18.0, 300.0, "Applies at once, saved with the project. Fonts: SIL OFL 1.1");
     }
 
     /// Text rows (11 units each) in a box whose frame the caller has drawn. Mouse wheel scrolls 3 rows per notch; when the
@@ -2377,6 +2556,18 @@ impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ main frame
     pub fn frame(&mut self) {
         let sh = self.env.shared;
+        // Theme editor: every widget draws as a dummy with the input masked; only the editor cells and the picker get it.
+        let editing = self.edit.is_some();
+        self.real_in = (self.press, self.down, self.rpress, self.wheel, self.mx, self.my);
+        if editing {
+            self.mask_in();
+            self.act = 0;
+            self.logo_pend = -1.0;
+            self.eq_page = false;
+            self.curve_edit = false;
+            self.menu = None;
+            self.about = 0;
+        }
         // readouts refresh ~8x/s
         self.rd_tick = self.now - self.rd_last >= 0.12;
         if self.rd_tick {
@@ -2515,6 +2706,8 @@ impl<'a> Gui<'a> {
             let stage_byp = self.sget(if self.eqv == 0 { 60 } else { 61 }) > 0.5;
             self.set_dk(if byp || eq_mod_byp || stage_byp { 0.5 } else { 1.0 });
             self.draw_eq_cells();
+        } else if editing {
+            self.theme_cells();
         } else {
             self.cell(8, 152.0, 196.0, 62.0, 38.0, "THRESH");
             self.cell(9, 220.0, 196.0, 62.0, 38.0, "RATIO");
@@ -2589,6 +2782,11 @@ impl<'a> Gui<'a> {
         self.menu_draw();
         self.poll_dialog();
         self.run_pending();
+        if editing {
+            self.unmask_in();
+            self.poll_prompt();
+            self.theme_picker();
+        }
     }
 }
 
