@@ -997,7 +997,8 @@ impl<'a> Gui<'a> {
 
     /// 12x12 pencil icon; lit while the draw view is open, bright on hover.
     fn pencil_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
-        self.set_dk(if on || hover { 1.0 } else { 0.6 });
+        let prev = self.dk; // keep the bypass dimming of the surrounding module
+        self.set_dk(prev * if on || hover { 1.0 } else { 0.6 });
         self.setc(on);
         let l = |s: &Self, a: f32, b: f32, c: f32, d: f32| s.cv.line(x + a, y + b, x + c, y + d);
         l(self, 8.0, 1.0, 10.0, 3.0); // eraser cap
@@ -1005,7 +1006,7 @@ impl<'a> Gui<'a> {
         l(self, 10.0, 3.0, 3.0, 10.0);
         l(self, 1.0, 8.0, 0.0, 11.0); // tip
         l(self, 3.0, 10.0, 0.0, 11.0);
-        self.set_dk(1.0);
+        self.set_dk(prev);
         self.setc(false);
     }
 
@@ -1074,7 +1075,8 @@ impl<'a> Gui<'a> {
             *self.env.params.custom_curve.lock() = c.pts().to_vec();
         }
         // identity reference (dotted), the curve, then the points
-        self.set_dk(0.5);
+        let prev = self.dk;
+        self.set_dk(prev * 0.5);
         self.setc(false);
         for i in 0..(ew / 3.0).floor() as i32 {
             let vx = -1.0 + 2.0 * i as f32 / (ew / 3.0).floor();
@@ -1084,7 +1086,7 @@ impl<'a> Gui<'a> {
             self.cv.fill(px(1.0), py(vx), 1.0, 1.0);
             self.cv.fill(px(-1.0), py(vx), 1.0, 1.0);
         }
-        self.set_dk(1.0);
+        self.set_dk(prev);
         let n = 96;
         let (mut lx, mut ly) = (px(-1.0), py(c.eval(-1.0) as f32));
         for i in 1..=n {
