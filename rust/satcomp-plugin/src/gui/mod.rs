@@ -7,7 +7,6 @@ use canvas::{fira, Canvas, H, W};
 use nih_plug::prelude::Editor;
 use nih_plug_egui::egui::{self, FontData, FontDefinitions, LayerId};
 use nih_plug_egui::create_egui_editor;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use ui::{Env, Gui, State};
