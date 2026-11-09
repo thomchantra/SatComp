@@ -8,11 +8,20 @@ const WAVE: [&str; 2] = ["HALF", "FULL"];
 /// time window steps (seconds) and their labels
 const WIN_S: [f32; 10] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
 const WIN_L: [&str; 10] = ["250ms", "0.5s", "0.75s", "1s", "1.5s", "2s", "3s", "4s", "6s", "8s"];
-/// headroom ceiling steps: 0 dB (the top edge is full scale) down to -14 dB (about 20 % of full scale)
-const CEIL_N: usize = 15;
+/// ceiling steps: +2 dB (0 dBFS sits at about 79 % of the height: room to watch inter-sample overshoots) down to -14 dB
+/// (the top edge is 20 % of full scale)
+const CEIL_N: usize = 17;
 
-// Packed settings (params.scope, default 5 << 4 = 2 s window, 0 dB ceiling): bit 0 on, bits 1-2 source, bit 3 full wave,
-// bits 4-7 window step, bits 8-11 ceiling in -dB.
+fn ceil_db(i: usize) -> i32 {
+    2 - i as i32
+}
+
+fn fmt_db(db: i32) -> String {
+    if db > 0 { format!("+{db}dB") } else { format!("{db}dB") }
+}
+
+// Packed settings (params.scope, default (5 << 4) | (2 << 8) = 2 s window, 0 dB ceiling): bit 0 on, bits 1-2 source,
+// bit 3 full wave, bits 4-7 window step, bits 8-12 ceiling step (ceil_db).
 
 impl State {
     pub fn scope_on(&self) -> bool {
@@ -60,7 +69,7 @@ impl<'a> Gui<'a> {
 
     pub(super) fn draw_scope(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let (src, full) = (self.sc_get(1, 3).min(2), self.sc_get(3, 1) == 1);
-        let (win, ceil) = (self.sc_get(4, 15).min(WIN_S.len() - 1), self.sc_get(8, 15).min(CEIL_N - 1));
+        let (win, ceil) = (self.sc_get(4, 15).min(WIN_S.len() - 1), self.sc_get(8, 31).min(CEIL_N - 1));
         // viewport drag (relative): x steps through the window, y moves the ceiling (down = lower ceiling = zoomed in)
         if self.hit(x, y, w, h) && self.press && self.act == 0 {
             self.act = 144;
@@ -75,10 +84,10 @@ impl<'a> Gui<'a> {
             let nw = (w0 as f32 + (self.mx - sx) / w * (WIN_S.len() - 1) as f32).round().clamp(0.0, (WIN_S.len() - 1) as f32);
             let nc = (c0 as f32 + (self.my - sy) / h * (CEIL_N - 1) as f32).round().clamp(0.0, (CEIL_N - 1) as f32);
             self.sc_set(4, 15, nw as usize);
-            self.sc_set(8, 15, nc as usize);
+            self.sc_set(8, 31, nc as usize);
         }
-        let (win, ceil) = (self.sc_get(4, 15).min(WIN_S.len() - 1), self.sc_get(8, 15).min(CEIL_N - 1));
-        let zoom = 10f32.powf(ceil as f32 / 20.0); // 1 / ceiling amplitude
+        let (win, ceil) = (self.sc_get(4, 15).min(WIN_S.len() - 1), self.sc_get(8, 31).min(CEIL_N - 1));
+        let zoom = 10f32.powf(-ceil_db(ceil) as f32 / 20.0); // 1 / ceiling amplitude
         self.setc(false);
         self.cv.boxr(x, y, w, h);
         let ring = self.env.shared.scope.clone();
@@ -140,8 +149,22 @@ impl<'a> Gui<'a> {
         if full {
             self.cv.fill(x + 1.0, base, 1.0, 1.0); // centre tick
         }
+        if zoom < 0.999 {
+            // ceiling above 0 dBFS: a faint UI-colour line marks 0 dBFS (the ceiling of a normal signal); anything above it
+            // is an overshoot
+            let off = (zoom * span).floor();
+            let keep = self.dk;
+            self.set_dk(keep * 0.35);
+            self.setc(false);
+            self.cv.fill(x + 1.0, base - off, w - 2.0, 1.0);
+            if full {
+                self.cv.fill(x + 1.0, base + off, w - 2.0, 1.0);
+            }
+            self.set_dk(keep);
+            self.setc(false);
+        }
         if dragging {
-            let t = format!("WIN {}  CEIL -{}dB", WIN_L[win], ceil);
+            let t = format!("WIN {}  CEIL {}", WIN_L[win], fmt_db(ceil_db(ceil)));
             let tw = self.cv.text_w(&t);
             self.cv.setbg();
             self.cv.fill(x + 4.0, y + 4.0, tw + 8.0, 13.0);
@@ -178,9 +201,9 @@ impl<'a> Gui<'a> {
             cx += w - 1.0;
         }
         // WIN and CEIL: horizontal drag sliders over their cell, stepped
-        for (k, lbl, shift, n, w) in [(0usize, "WIN", 4u32, WIN_S.len(), 62.0f32), (1, "CEIL", 8, CEIL_N, ceil_w)] {
+        for (k, lbl, shift, bits, n, w) in [(0usize, "WIN", 4u32, 15i32, WIN_S.len(), 62.0f32), (1, "CEIL", 8, 31, CEIL_N, ceil_w)] {
             let act = 142 + k as i32;
-            let cur = self.sc_get(shift, 15).min(n - 1);
+            let cur = self.sc_get(shift, bits).min(n - 1);
             if self.hit(cx, y, w, h) {
                 if self.press && self.act == 0 {
                     self.act = act;
@@ -189,19 +212,19 @@ impl<'a> Gui<'a> {
                     self.press = false;
                 } else if self.wheel != 0 {
                     let nx = (cur as i32 + if self.wheel > 0 { -1 } else { 1 }).clamp(0, n as i32 - 1) as usize;
-                    self.sc_set(shift, 15, nx);
+                    self.sc_set(shift, bits, nx);
                 }
             }
             if self.act == act && self.down {
                 let f = ((self.mx - cx - 2.0) / (w - 4.0)).clamp(0.0, 1.0);
-                self.sc_set(shift, 15, (f * (n - 1) as f32 + 0.5).floor() as usize);
+                self.sc_set(shift, bits, (f * (n - 1) as f32 + 0.5).floor() as usize);
             }
-            let cur = self.sc_get(shift, 15).min(n - 1);
+            let cur = self.sc_get(shift, bits).min(n - 1);
             self.setc(self.act == act);
             self.cv.boxr(cx, y, w, h);
             self.cv.set_font(1);
             self.cv.text(cx + 4.0, y + 5.0, lbl);
-            let val = if k == 0 { WIN_L[cur].to_string() } else { format!("-{cur}dB") };
+            let val = if k == 0 { WIN_L[cur].to_string() } else { fmt_db(ceil_db(cur)) };
             self.cv.textr(cx, y + 5.0, w - 4.0, &val);
             let t = cur as f32 / (n - 1) as f32;
             self.cv.fill(cx + 2.0, y + h - 3.0, ((t * (w - 4.0)).floor()).max(1.0), 1.0);
