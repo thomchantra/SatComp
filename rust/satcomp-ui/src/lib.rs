@@ -3,6 +3,7 @@
 pub mod canvas;
 pub mod fft;
 pub mod kit;
+pub mod spectrum;
 
 use canvas::font_family;
 use nih_plug_egui::egui::{self, FontData, FontDefinitions};
