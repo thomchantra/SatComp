@@ -28,7 +28,7 @@ impl TapRing {
         Self { buf: (0..Self::LEN).map(|_| AtomicU32::new(0)).collect(), w: AtomicUsize::new(0) }
     }
     #[inline]
-    fn push(&self, v: f32) {
+    pub fn push(&self, v: f32) {
         let w = self.w.load(Ordering::Relaxed);
         self.buf[w & (Self::LEN - 1)].store(v.to_bits(), Ordering::Relaxed);
         self.w.store(w.wrapping_add(1), Ordering::Release);
