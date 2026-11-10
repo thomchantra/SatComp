@@ -2320,6 +2320,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "satxcomp"
+version = "0.5.2"
+dependencies = [
+ "nih_plug",
+ "nih_plug_egui",
+ "parking_lot",
+ "satcomp-dsp",
+ "satcomp-ui",
+ "satxcomp-dsp",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "satxcomp-dsp"
 version = "0.5.2"
 dependencies = [
