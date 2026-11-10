@@ -418,6 +418,9 @@ pub fn initial_palette(p: &crate::params::SatCompParams) -> (usize, bool) {
 }
 
 fn version_short() -> String {
+    if cfg!(test) {
+        return "TEST".into(); // keeps the UI golden independent of release version bumps
+    }
     let v = env!("CARGO_PKG_VERSION");
     v.strip_suffix(".0").unwrap_or(v).to_string()
 }
