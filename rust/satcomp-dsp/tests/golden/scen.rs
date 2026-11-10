@@ -1,4 +1,4 @@
-//! Golden-render scenarios for the 0.5.3 refactor safety net.
+//! Golden-render scenarios for the 0.5.2 refactor safety net.
 //!
 //! Only the public `Engine` / `Params` API is used, so this exact file compiles against v0.5.1 (the baseline) and against
 //! the refactored tree. `examples/golden.rs` renders every scenario to disk (`render`) and diffs two render folders

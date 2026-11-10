@@ -60,7 +60,7 @@ scheme menu (right-click the icon). Not verified in REAPER (clicks go through th
 | `rust/tools/wavdiff.py` | null-test two WAV renders (peak/RMS of the difference); see Regression nets |
 | `rust/tools/gen_palettes.py` | rewrites `PALETTES` in `satcomp-ui/src/canvas.rs` from `docs/colorscheme.md` |
 
-## Architecture (0.5.3): blocks, then products
+## Architecture (0.5.2): blocks, then products
 
 The engine is built from reusable blocks in `satcomp-dsp`; `Engine` (the SatComp product) only wires them and owns the output
 stage, the two level-match state machines and the meters the UI reads. Blocks are stereo, f64, allocation-free in the audio path.
@@ -86,7 +86,7 @@ UI: `satcomp-ui::kit::Widgets` provides `cell`, `cell2`, `cell_o`, `btn`, `sqind
 preset bar and `presets.rs`, scope, resize grip. They only need the param table, `Shared` and the persisted settings, so they move
 the same way when SatXComp needs them.
 
-## Regression nets (added 0.5.3), run before and after any refactor
+## Regression nets (added 0.5.2), run before and after any refactor
 
 - **Audio golden** (`satcomp-dsp/tests/golden.rs`, scenarios in `tests/golden/scen.rs`, fixture `golden.txt`): 101 scenarios (all shapers x
   oversampling, comp/EQ/sidechain/bypass/delta/match variants, ragged blocks, `tick` API, automation, other sample rates), audio and
@@ -183,7 +183,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 
 ## Header, About page, preset marker (v0.4)
 - Version: the header and About page read `CARGO_PKG_VERSION` (`version_short()` in `gui/ui.rs`), so bumping the crate
-  version is the only edit. All three crates (`satcomp-dsp`, `satcomp-ui`, `satcomp-plugin`) are 0.5.3.
+  version is the only edit. All three crates (`satcomp-dsp`, `satcomp-ui`, `satcomp-plugin`) are 0.5.2.
 - Clicking the title toggles the About page (`State.about`: 0 closed, 1 about, 2 changelog, 3 appearance). It replaces the tab row, viz
   row and cells; the header, meter and right column stay live. Copy lives in `ABOUT_TEXT` / `CHANGELOG` (source text:
   `docs/abouttextcopy.md`). Changelog entries: newest first, one short sentence per bullet, no em dashes. About and Changelog text live in a row-based scroll box (`scroll_rows`: wheel = 3 rows, draggable thumb on the right, rows culled whole since the canvas has no clipping); scroll position resets on tab change.
