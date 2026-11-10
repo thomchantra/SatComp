@@ -28,7 +28,7 @@ scale exist only in the plug-in; the **Custom waveshaper** (shaper 14, pencil dr
 
 ## Colour schemes
 `docs/colorthemesV2.svg` (+ `.png`) is the design source (dark swatches on the left, light on the right, 20 rows); `docs/colorscheme.md`
-is its text export, now **edited by hand by the owner** (e.g. Sonar BG #000000) and the source of truth; `PALETTES` in `gui/canvas.rs` is `(name, dark, light)` generated from it by `tools/gen_palettes.py`. Row names came from the owner's layer list; the second
+is its text export, now **edited by hand by the owner** (e.g. Sonar BG #000000) and the source of truth; `PALETTES` in `satcomp-ui/src/canvas.rs` is `(name, dark, light)` generated from it by `tools/gen_palettes.py`. Row names came from the owner's layer list; the second
 "Magenta" row (purple #240132) is called **Midnight** here (its pre-0.5 name) to keep names unique. **Check with the owner.**
 Persisted as `palette-v2` (index into this table, default -1) + `light-mode` (bool). The legacy `palette` index (pre-0.5 table order) is
 migrated once in `ui::initial_palette` (old White = Mono light; old Bananas/Apricot/Berry/Matcha were light-BG schemes). Only append new schemes.
@@ -51,16 +51,61 @@ scheme menu (right-click the icon). Not verified in REAPER (clicks go through th
 | `SatComp.jsfx` | prototype, v0.3 |
 | `docs/` | this file, HANDOFF, PARAMETERS, TEST_CHECKLIST, colorscheme, SatComp_spec |
 | `proto/` | numpy reference scripts |
-| `rust/satcomp-dsp` | DSP engine + tests. `Engine::begin_block(n)` = JSFX `@block`, `tick` = `@sample` |
-| `rust/satcomp-plugin` | nih-plug shell (`lib.rs`), generated `params.rs`, `presets.rs`, `gui/{canvas,ui,mod}.rs`, `presets/*.json` (factory bank) |
+| `rust/satcomp-dsp` | DSP blocks + the SatComp engine + tests. `Engine::begin_block(n)` = JSFX `@block`, `tick` = `@sample` (see Architecture) |
+| `rust/satcomp-ui` | shared egui toolkit: `canvas` (drawing, 20 palettes, font list), `kit` (`Kit` interaction state + `Widgets` trait), `fft`, `init_ctx` + the embedded fonts in `assets/fonts/` |
+| `rust/satcomp-plugin` | nih-plug shell (`lib.rs`), generated `params.rs`, `presets.rs`, `gui/{ui,mod,golden}.rs` + `gui/ui/{scope,theme}.rs` (the SatComp pages), `presets/*.json` (factory bank) |
 | `rust/vendor/nih_plug_egui` | patched copy (see below) |
 | `rust/xtask` | `cargo xtask bundle satcomp --release` |
 | `rust/tools/gen_params.py` | generates `params.rs` |
+| `rust/tools/gen_palettes.py` | rewrites `PALETTES` in `satcomp-ui/src/canvas.rs` from `docs/colorscheme.md` |
+
+## Architecture (0.5.3): blocks, then products
+
+The engine is built from reusable blocks in `satcomp-dsp`; `Engine` (the SatComp product) only wires them and owns the output
+stage, the two level-match state machines and the meters the UI reads. Blocks are stereo, f64, allocation-free in the audio path.
+
+| Block | File | Does |
+|---|---|---|
+| `Saturator` | `saturator.rs` | HP/LP split, shaper LUT + 1x/2x/4x oversampling, DC block, tone, mix, SAT OUT; reports latency and its output level |
+| `Compressor` | `compressor.rs` | detector (peak/RMS, low cut, FF>FB, external key + KEY MIX), `GainComputer`, ballistics, auto release, GR distortion; the detector listens to one signal and the gain is applied to another (lookahead is the caller's) |
+| `KeyInput` | `keyinput.rs` | external key gain > HP > LP > delay aligned with the saturator latency |
+| `EqSection` | `eq.rs` | one 5-filter stage (`EqBank`) with a smoothed enable crossfade and output gain |
+| `Delay` / `StereoDelay` | `delay.rs` | const-generic power-of-two ring; `advance()` every sample, `put()` optionally, `tap(d)` |
+| helpers | `level.rs` | `one_pole`, `ms_step`, `Matcher` (3 s average), dB constants |
+
+Parameter slices: `Params` stays the flat SatComp parameter set (the UI and plug-in use it); `Params::sat()` / `Params::comp()` give
+the per-block `SatParams` / `CompParams`. A new product builds its own block params directly. `Engine` keeps its public fields
+(meters, match, scope, tap) as a facade and mirrors a few block meters (`sms`, `sat_blk`) per tick.
+SatXComp = a crossover + 3 x (Saturator -> Compressor) + `EqSection`s; SatEQ = EQ bands with `Saturator` in series or parallel
+(dynamic EQ would use `Compressor`'s detector and `GainComputer` without its gain stage). Plan: all three live in this repo.
+
+UI: `satcomp-ui::kit::Widgets` provides `cell`, `cell2`, `cell_o`, `btn`, `sqind`, `sq_tog` and slot addressing; the plug-in's per-frame
+`Gui` implements it (slot -> `ParamPtr`, value text, host context, edit mask) and `State` derefs to `Kit`, so page code reads
+`self.mx` / `self.press` as before. **Not yet shared** (still in `satcomp-plugin/src/gui/`): menus, About/Appearance pages, theme editor,
+preset bar and `presets.rs`, scope, resize grip. They only need the param table, `Shared` and the persisted settings, so they move
+the same way when SatXComp needs them.
+
+## Regression nets (added 0.5.3), run before and after any refactor
+
+- **Audio golden** (`satcomp-dsp/tests/golden.rs`, scenarios in `tests/golden/scen.rs`, fixture `golden.txt`): 101 scenarios (all shapers x
+  oversampling, comp/EQ/sidechain/bypass/delta/match variants, ragged blocks, `tick` API, automation, other sample rates), audio and
+  meter telemetry hashed bit-exactly (tolerance 1e-9 on rms/peak where the platform libm differs). The fixture was recorded from the
+  **v0.5.1 tag**. `cargo run --release -p satcomp-dsp --example golden -- render <dir>` writes the audio (.f32) and telemetry per scenario;
+  `-- diff <dirA> <dirB>` reports max |diff| and differing samples. To compare against a release: `git archive <tag> rust/satcomp-dsp | tar -x -C <tmp>`,
+  copy `tests/golden/scen.rs` and `examples/golden.rs` in (they only use the public `Engine`/`Params` API), render both, diff.
+  Re-record (`-- record`) only when the sound is *meant* to change, and say so in the commit.
+- **UI golden** (`satcomp-plugin/src/gui/golden.rs`, fixture `golden.txt`): runs the real frame function headless against a fake host,
+  scripts 460 frames of mouse input and hashes each frame's draw commands plus the host parameter writes. Meters and the spectrum tap
+  get deterministic fake telemetry. Limits: nih-plug keeps parameter setters crate-private, so values are not echoed back (params stay at
+  defaults) and the scope ring is not fed. The header version is fixed under `cfg(test)`. `UI_GOLDEN_OUT=<file> cargo test --release -p satcomp ui_`
+  writes the hashes instead of comparing (use it to record, or to diff a baseline checkout against the working tree).
+  An intended UI change (text, layout) legitimately changes frames: diff the label lists, check only the expected frames moved, then re-record.
+- Both nets: do the baseline in a separate `CARGO_TARGET_DIR` (Dropbox syncs `rust/target`).
 
 ## Commands (from `rust/`)
 
 ```
-cargo test                                         # DSP + preset tests
+cargo test                                         # DSP unit tests, audio golden, UI golden, preset tests
 cargo run --release -p satcomp-dsp --example bench   # DSP CPU per config (0.5.1: all under 1% of one core at 48 kHz)
 cargo xtask bundle satcomp --release               # target/bundled/satcomp.vst3 + .clap
 cargo xtask bundle-universal satcomp --release     # macOS arm64 + x86_64 (needs both rustup targets)
@@ -79,7 +124,7 @@ Install for REAPER: copy the bundles to `~/Library/Audio/Plug-Ins/VST3/` and `..
   `v*` tag zips both and attaches them to a GitHub release. **The Windows build and the first CI run are untested**;
   check them (and load the DLL bundle in a Windows DAW) before announcing it.
 - **Release convention (from 0.5.1):** write `docs/releases/<tag>.md` first (fixed / new / notes / compare link), update the in-plugin
-  `CHANGELOG`, README, this file and `docs/screenshot.png`, bump both crate versions, push `main`, then push the annotated tag.
+  `CHANGELOG`, README, this file and `docs/screenshot.png`, bump the three crate versions, push `main`, then push the annotated tag.
   The release job uses that file as the release body; `.github/workflows/release-notes.yml` re-applies the files to existing
   releases when they change (or via manual dispatch). Verify the release page (assets and description) afterwards.
 - Docs for users: `README.md`. `LICENSE` is GPL-3.0 (copied from the nih-plug checkout, the standard FSF text).
@@ -110,7 +155,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 - Meters: audio thread `fetch_max`, UI `swap(0)`.
 - **Vendored `nih_plug_egui`** has two patches: `EguiState::set_requested_size` is `pub` (aspect-locked resize), and
   `queue.resize` gets physical pixels (Retina resize bug). Re-apply if the crate is ever updated (`vendor/README.md`).
-- egui draws text lower than REAPER does: `TEXT_LIFT_EM` (0.28) and `FONT_SCALE` (0.86) in `canvas.rs` were measured
+- egui draws text lower than REAPER does: `TEXT_LIFT_EM` (0.28) and `FONT_SCALE` (0.86) in `satcomp-ui/src/canvas.rs` were measured
   from side-by-side screenshots. Re-check them if the font or the JSFX sizes change.
 - Layout is the JSFX grid (560x336 logical units, 25% scale steps); text and lines snap to device pixels.
   Default window 700x420 (125%), min 100%, max 250%, corner grip + scale button.
@@ -119,7 +164,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
   File dialogs (`rfd`) block the UI and are untested inside REAPER (macOS) and on Windows.
 - Dropbox syncs `rust/target/`: move it out (`CARGO_TARGET_DIR`) or mark it ignored.
 - **Windows builds must come from a Windows machine** (GitHub Actions `windows-latest`); no cross-compile. Not set up yet.
-- GPL is fine for this project; `nih_plug_egui` is ISC, the six UI fonts are OFL (keep the licences with any distribution; sources and licences in `Fonts/`, only the embedded TTFs under `satcomp-plugin/assets/fonts/` are built in).
+- GPL is fine for this project; `nih_plug_egui` is ISC, the six UI fonts are OFL (keep the licences with any distribution; sources and licences in `Fonts/`, only the embedded TTFs under `satcomp-ui/assets/fonts/` are built in).
 
 ## Custom waveshaper (v0.4)
 - Shaper 14 = a user curve: <=10 points (x=-1 and x=+1 fixed in x, y editable, up to 8 interior), monotone cubic
@@ -134,7 +179,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 
 ## Header, About page, preset marker (v0.4)
 - Version: the header and About page read `CARGO_PKG_VERSION` (`version_short()` in `gui/ui.rs`), so bumping the crate
-  version is the only edit. Both crates are 0.5.1.
+  version is the only edit. All three crates (`satcomp-dsp`, `satcomp-ui`, `satcomp-plugin`) are 0.5.3.
 - Clicking the title toggles the About page (`State.about`: 0 closed, 1 about, 2 changelog, 3 appearance). It replaces the tab row, viz
   row and cells; the header, meter and right column stay live. Copy lives in `ABOUT_TEXT` / `CHANGELOG` (source text:
   `docs/abouttextcopy.md`). Changelog entries: newest first, one short sentence per bullet, no em dashes. About and Changelog text live in a row-based scroll box (`scroll_rows`: wheel = 3 rows, draggable thumb on the right, rows culled whole since the canvas has no clipping); scroll position resets on tab change.
@@ -172,12 +217,11 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
 ## Open / next
 - **Multi-instance GUI load (deferred from 0.5.1):** with several editors open the GL swaps at 60 fps add up. Test in a real
   session first; likely fix = repaint ~20 fps when idle (no signal, no mouse) and 60 fps otherwise, possibly pause when the
-  window is not visible. Also unmeasured: Windows, AU (clap-wrapper, idea for 0.5.2).
+  window is not visible. Also unmeasured: Windows.
 - ~~Next session, idea 1: sidechain.~~ Done in 0.5 (see above); original brief: Add a second stereo input (nih-plug aux input) that feeds the detector, whole band,
   with HP/LP filters to taper it. Needs: audio layout change (main 2in/2out + aux 2in), an engine detector source switch,
   params (sidechain on, SC HP, SC LP) appended to `gen_params.py`, a UI home for them, and a listen/monitor option.
-- **Next session, idea 2: SatXComp**, a 3-band multiband compressor with the saturator. Likely a separate repo that forks
-  the `satcomp-dsp` crate, the egui canvas/UI toolkit, preset system and CI from here.
+- **SatXComp** (3-band multiband, UI draft `docs/satxcompdraft1.png`) and **SatEQ** (5-band EQ with the waveshaper, series/parallel, later dynamic EQ) are planned as sibling plug-ins **in this repo/workspace** (decided 2026-11-10): new `satxcomp-plugin` / `sateq-plugin` crates on the shared blocks and `satcomp-ui`, own VST3/CLAP ids and preset folders, per-product tag prefixes. See Architecture for what is already shared.
 - Owner heard a click while drawing/switching shapers and when the plug-in window regains focus. Fixed what is
   identifiable (table morph on shape/curve change, no allocation in `Curve::from_points` on the audio thread);
   **the focus-regain click is unconfirmed**: retest, and if it persists look at the UI/host param traffic on focus.
@@ -185,4 +229,4 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
   `smoothing = false`).
 - Owner supplies hand-tuned presets for `rust/satcomp-plugin/presets/`.
 - **Resize grip is still broken** (drag causes a stutter/scaling loop; two fix attempts, last = `80cd756`). Use the size dropdown (right-click grip). Revisit: commit-on-release with a ghost outline is the fallback design. File dialogs still need an owner test in REAPER. `clap-validator`, GitHub repo + CI (mac + Windows), signing/notarization.
-- Not done: preset rename/delete, AU via clap-wrapper.
+- Not done: preset rename/delete. AU (clap-wrapper) is shelved indefinitely (owner decision 2026-11-10, no demand).
