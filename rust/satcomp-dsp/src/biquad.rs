@@ -71,13 +71,40 @@ pub fn high_shelf(f: f64, g: f64, q: f64, sr: f64) -> Coef {
     ]
 }
 
-/// Filter kinds: 0 HPF, 1 LPF, 2 low shelf, 3 high shelf, 4 bell.
+/// RBJ all-pass (unity magnitude, phase turns through 180 degrees at `f`).
+pub fn allpass(f: f64, q: f64, sr: f64) -> Coef {
+    let w = w0(f, sr);
+    let (cs, al) = (w.cos(), w.sin() / (2.0 * q));
+    let a0 = 1.0 + al;
+    [(1.0 - al) / a0, -2.0 * cs / a0, (1.0 + al) / a0, -2.0 * cs / a0, (1.0 - al) / a0]
+}
+
+/// RBJ band-pass, constant 0 dB peak gain.
+pub fn bandpass(f: f64, q: f64, sr: f64) -> Coef {
+    let w = w0(f, sr);
+    let (cs, al) = (w.cos(), w.sin() / (2.0 * q));
+    let a0 = 1.0 + al;
+    [al / a0, 0.0, -al / a0, -2.0 * cs / a0, (1.0 - al) / a0]
+}
+
+/// RBJ notch.
+pub fn notch(f: f64, q: f64, sr: f64) -> Coef {
+    let w = w0(f, sr);
+    let (cs, al) = (w.cos(), w.sin() / (2.0 * q));
+    let a0 = 1.0 + al;
+    [1.0 / a0, -2.0 * cs / a0, 1.0 / a0, -2.0 * cs / a0, (1.0 - al) / a0]
+}
+
+/// Filter kinds: 0 HPF, 1 LPF, 2 low shelf, 3 high shelf, 4 bell, 5 all-pass, 6 band-pass, 7 notch.
 pub fn eq_coef(kind: u8, f: f64, g: f64, q: f64, sr: f64) -> Coef {
     match kind {
         0 => hp(f, q, sr),
         1 => lp(f, q, sr),
         2 => low_shelf(f, g, q, sr),
         3 => high_shelf(f, g, q, sr),
+        5 => allpass(f, q, sr),
+        6 => bandpass(f, q, sr),
+        7 => notch(f, q, sr),
         _ => peaking(f, g, q, sr),
     }
 }
@@ -113,6 +140,21 @@ mod tests {
         assert!((mag_db(&peaking(1000.0, 6.0, 1.0, SR), w(1000.0)) - 6.0).abs() < 0.01);
         assert!((mag_db(&low_shelf(200.0, -6.0, 0.7, SR), w(20.0)) + 6.0).abs() < 0.2);
         assert!((mag_db(&high_shelf(4000.0, 6.0, 0.7, SR), w(20000.0)) - 6.0).abs() < 0.3);
+    }
+
+    #[test]
+    fn allpass_bandpass_notch_shapes() {
+        let w = |f: f64| 2.0 * PI * f / SR;
+        let ap = allpass(1000.0, 0.7, SR);
+        for f in [50.0, 1000.0, 9000.0] {
+            assert!(mag_db(&ap, w(f)).abs() < 0.01);
+        }
+        let bp = bandpass(1000.0, 2.0, SR);
+        assert!(mag_db(&bp, w(1000.0)).abs() < 0.05);
+        assert!(mag_db(&bp, w(100.0)) < -15.0 && mag_db(&bp, w(10000.0)) < -15.0);
+        let nt = notch(1000.0, 2.0, SR);
+        assert!(mag_db(&nt, w(1000.0)) < -40.0);
+        assert!(mag_db(&nt, w(100.0)).abs() < 0.5 && mag_db(&nt, w(10000.0)).abs() < 0.5);
     }
 
     #[test]

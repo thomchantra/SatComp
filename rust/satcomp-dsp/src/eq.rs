@@ -52,31 +52,31 @@ pub fn decode_tilt(st: &EqStageParams) -> (f64, f64) {
 }
 
 /// One EQ stage: 3 bands + tilt low shelf + tilt high shelf (5 filters), with per-block coefficient ramps.
-pub struct EqBank {
-    pub cur: [Coef; 5],
-    pub tgt: [Coef; 5],
-    pub delta: [Coef; 5],
-    pub sl: [[f64; 2]; 5],
-    pub sr: [[f64; 2]; 5],
-    pub active: [bool; 5],
-    pub running: [bool; 5],
+pub struct EqBank<const N: usize = 5> {
+    pub cur: [Coef; N],
+    pub tgt: [Coef; N],
+    pub delta: [Coef; N],
+    pub sl: [[f64; 2]; N],
+    pub sr: [[f64; 2]; N],
+    pub active: [bool; N],
+    pub running: [bool; N],
 }
 
-impl Default for EqBank {
+impl<const N: usize> Default for EqBank<N> {
     fn default() -> Self {
         Self {
-            cur: [[0.0; 5]; 5],
-            tgt: [[0.0; 5]; 5],
-            delta: [[0.0; 5]; 5],
-            sl: [[0.0; 2]; 5],
-            sr: [[0.0; 2]; 5],
-            active: [false; 5],
-            running: [false; 5],
+            cur: [[0.0; 5]; N],
+            tgt: [[0.0; 5]; N],
+            delta: [[0.0; 5]; N],
+            sl: [[0.0; 2]; N],
+            sr: [[0.0; 2]; N],
+            active: [false; N],
+            running: [false; N],
         }
     }
 }
 
-impl EqBank {
+impl<const N: usize> EqBank<N> {
     /// Set filter f's target (identity when inactive); wake a sleeping filter from its target with clean state.
     pub fn target(&mut self, f: usize, coef: Option<Coef>, on: bool) {
         self.tgt[f] = if on { coef.unwrap_or(IDENTITY) } else { IDENTITY };
@@ -89,26 +89,8 @@ impl EqBank {
         self.active[f] = on;
     }
 
-    /// Returns (any filter of the stage active). Mirrors eq_setup() minus the output gain.
-    pub fn setup(&mut self, p: &EqStageParams, sr: f64) -> bool {
-        let mut any = false;
-        for b in 0..3 {
-            let d = decode_band(p, b);
-            let c = if d.on { Some(eq_coef(d.kind, d.freq, d.gain, d.q, sr)) } else { None };
-            self.target(b, c, d.on);
-            any |= d.on;
-        }
-        let (t, pv) = decode_tilt(p);
-        let on = t != 0.0;
-        let ls = if on { Some(eq_coef(2, pv, -t * 0.5, 0.4, sr)) } else { None };
-        let hs = if on { Some(eq_coef(3, pv, t * 0.5, 0.4, sr)) } else { None };
-        self.target(3, ls, on);
-        self.target(4, hs, on);
-        any || on
-    }
-
     pub fn clear(&mut self) {
-        for f in 0..5 {
+        for f in 0..N {
             self.sl[f] = [0.0; 2];
             self.sr[f] = [0.0; 2];
         }
@@ -117,7 +99,7 @@ impl EqBank {
     /// Per block: ramp deltas so a coefficient change glides over one block; retire settled identity filters.
     pub fn prep(&mut self, block_len: usize) {
         let rn = 1.0 / block_len.max(1) as f64;
-        for f in 0..5 {
+        for f in 0..N {
             if !self.running[f] {
                 continue;
             }
@@ -139,7 +121,7 @@ impl EqBank {
 
     #[inline]
     pub fn process(&mut self, xl: &mut f64, xr: &mut f64) {
-        for f in 0..5 {
+        for f in 0..N {
             if self.running[f] {
                 for i in 0..5 {
                     self.cur[f][i] += self.delta[f][i];
@@ -152,9 +134,29 @@ impl EqBank {
     }
 }
 
+impl EqBank<5> {
+    /// Returns (any filter of the stage active). Mirrors eq_setup() minus the output gain.
+    pub fn setup(&mut self, p: &EqStageParams, sr: f64) -> bool {
+        let mut any = false;
+        for b in 0..3 {
+            let d = decode_band(p, b);
+            let c = if d.on { Some(eq_coef(d.kind, d.freq, d.gain, d.q, sr)) } else { None };
+            self.target(b, c, d.on);
+            any |= d.on;
+        }
+        let (t, pv) = decode_tilt(p);
+        let on = t != 0.0;
+        let ls = if on { Some(eq_coef(2, pv, -t * 0.5, 0.4, sr)) } else { None };
+        let hs = if on { Some(eq_coef(3, pv, t * 0.5, 0.4, sr)) } else { None };
+        self.target(3, ls, on);
+        self.target(4, hs, on);
+        any || on
+    }
+}
+
 /// An EQ stage as a signal block: the filter bank, a smoothed output gain and a smoothed enable crossfade.
-pub struct EqSection {
-    bank: EqBank,
+pub struct EqSection<const N: usize = 5> {
+    pub bank: EqBank<N>,
     g: f64,
     g_t: f64,
     /// any band, the tilt or the output gain does something
@@ -167,17 +169,25 @@ pub struct EqSection {
     g_c: f64,
 }
 
-impl Default for EqSection {
+impl<const N: usize> Default for EqSection<N> {
     fn default() -> Self {
         Self { bank: EqBank::default(), g: 1.0, g_t: 1.0, act: false, en: 1.0, prev_en: true, bs: 1.0, run: false, bs_c: 0.0, g_c: 0.0 }
     }
 }
 
-impl EqSection {
-    /// `enabled` = not bypassed. `snap` jumps the smoothed values to their targets (first parameter set).
+impl EqSection<5> {
+    /// SatComp stage: 3 bands + tilt from the stored parameters.
     pub fn derive(&mut self, p: &EqStageParams, enabled: bool, sr: f64, snap: bool) {
         let any = self.bank.setup(p, sr);
-        let g2 = p.out_gain.clamp(-12.0, 12.0);
+        self.derive_gain(any, p.out_gain, enabled, sr, snap);
+    }
+}
+
+impl<const N: usize> EqSection<N> {
+    /// After the caller set the bank's targets (`any` = some filter does something): output gain, enable crossfade and
+    /// smoothing. `enabled` = not bypassed. `snap` jumps the smoothed values to their targets (first parameter set).
+    pub fn derive_gain(&mut self, any: bool, out_gain_db: f64, enabled: bool, sr: f64, snap: bool) {
+        let g2 = out_gain_db.clamp(-12.0, 12.0);
         self.g_t = (g2 * crate::level::LN10_20).exp();
         self.act = any || g2 != 0.0;
         self.en = if enabled { 1.0 } else { 0.0 };
