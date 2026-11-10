@@ -3,7 +3,8 @@ name: build
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    # v* = SatComp (and the whole-suite bundle release); <plugin>-v* = one sibling plug-in on its own release page
+    tags: ["v*", "satxcomp-v*", "sateq-v*"]
   pull_request:
   workflow_dispatch:
 
@@ -22,18 +23,45 @@ jobs:
         working-directory: rust
         run: cargo test --locked
 
+  # which plug-ins this run bundles: a plain v* tag (and branch / PR builds) = every plug-in that exists in the workspace,
+  # a <plugin>-v* tag = just that plug-in
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.p.outputs.plugins }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        shell: bash
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          case "$ref" in
+            satxcomp-v*) list='["satxcomp"]' ;;
+            sateq-v*)    list='["sateq"]' ;;
+            *)
+              list='["satcomp"'
+              [ -d rust/satxcomp-plugin ] && list="$list,\"satxcomp\""
+              [ -d rust/sateq-plugin ] && list="$list,\"sateq\""
+              list="$list]"
+              ;;
+          esac
+          echo "plugins=$list" >> "$GITHUB_OUTPUT"
+          echo "bundling: $list"
+
   bundle:
-    needs: test
+    needs: [test, plan]
     strategy:
       fail-fast: false
       matrix:
+        plugin: ${{ fromJson(needs.plan.outputs.plugins) }}
+        os: [macos-latest, windows-latest]
         include:
           - os: macos-latest
             name: macOS-universal
-            cmd: cargo xtask bundle-universal satcomp --release
+            sub: bundle-universal
           - os: windows-latest
             name: Windows-x64
-            cmd: cargo xtask bundle satcomp --release
+            sub: bundle
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -45,21 +73,25 @@ jobs:
           workspaces: rust
       - name: Bundle
         working-directory: rust
-        run: ${{ matrix.cmd }}
+        run: cargo xtask ${{ matrix.sub }} ${{ matrix.plugin }} --release
       - name: Package
         shell: bash
         run: |
+          # zip name = <Display>-<plug-in version from its Cargo.toml>-<platform>; the plug-in's own version, not the tag
+          plugin="${{ matrix.plugin }}"
+          case "$plugin" in satcomp) disp=SatComp ;; satxcomp) disp=SatXComp ;; sateq) disp=SatEQ ;; esac
+          ver=$(grep -m1 '^version' "rust/${plugin}-plugin/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
           mkdir -p dist
           cp LICENSE dist/
-          cp -R rust/target/bundled/satcomp.vst3 rust/target/bundled/satcomp.clap dist/
-          cd dist && 7z a -tzip ../SatComp-${{ github.ref_name }}-${{ matrix.name }}.zip . || zip -r ../SatComp-${{ github.ref_name }}-${{ matrix.name }}.zip .
+          cp -R "rust/target/bundled/${plugin}.vst3" "rust/target/bundled/${plugin}.clap" dist/
+          cd dist && 7z a -tzip "../${disp}-v${ver}-${{ matrix.name }}.zip" . || zip -r "../${disp}-v${ver}-${{ matrix.name }}.zip" .
       - uses: actions/upload-artifact@v4
         with:
-          name: SatComp-${{ matrix.name }}
-          path: SatComp-*.zip
+          name: ${{ matrix.plugin }}-${{ matrix.name }}
+          path: "*.zip"
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/')
     needs: bundle
     runs-on: ubuntu-latest
     permissions:

@@ -1,6 +1,7 @@
 name: release-notes
 
 # Applies docs/releases/<tag>.md as the description of the matching GitHub release (when that release exists).
+# Tags: vX.Y.Z (SatComp / the whole-suite bundle), satxcomp-vX.Y.Z, sateq-vX.Y.Z.
 on:
   push:
     branches: [main]
@@ -18,7 +19,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for f in docs/releases/v*.md; do
+          for f in docs/releases/*.md; do
             tag=$(basename "$f" .md)
             if gh release view "$tag" >/dev/null 2>&1; then
               gh release edit "$tag" --notes-file "$f"

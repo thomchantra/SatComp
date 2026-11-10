@@ -128,9 +128,16 @@ Install for REAPER: copy the bundles to `~/Library/Audio/Plug-Ins/VST3/` and `..
   `v*` tag zips both and attaches them to a GitHub release. **The Windows build and the first CI run are untested**;
   check them (and load the DLL bundle in a Windows DAW) before announcing it.
 - **Release convention (from 0.5.1):** write `docs/releases/<tag>.md` first (fixed / new / notes / compare link), update the in-plugin
-  `CHANGELOG`, README, this file and `docs/screenshot.png`, bump the three crate versions, push `main`, then push the annotated tag.
+  `CHANGELOG`, README, this file and `docs/screenshot.png`, bump the crate versions, push `main`, then push the annotated tag.
   The release job uses that file as the release body; `.github/workflows/release-notes.yml` re-applies the files to existing
   releases when they change (or via manual dispatch). Verify the release page (assets and description) afterwards.
+- **Several plug-ins, one repo (decided 2026-11-11):** each plug-in has its own version in its `rust/<name>-plugin/Cargo.toml`
+  (SatComp 0.5.x, SatXComp and SatEQ start at 0.1.0). Tags: `vX.Y.Z` = SatComp and the **whole-suite bundle** (builds every plug-in that
+  exists; the release page lists all zips, which are named with each plug-in's own version, e.g. `SatXComp-v0.1.0-macOS-universal.zip`);
+  `satxcomp-vX.Y.Z` / `sateq-vX.Y.Z` = just that plug-in on its own release page, so a sibling fix never forces a SatComp version bump.
+  The first release (`v0.5.2`) is the bundle of all three. Notes for a plug-in tag live in `docs/releases/<that tag>.md`; a bundle's notes
+  carry a table (plug-in, version, changed or unchanged). The `plan` job in `build.yml` maps tag -> plug-ins; matrix = plug-in x (macOS universal, Windows x64).
+  A framework change (`satcomp-dsp`, `satcomp-ui`) only needs a release of the plug-ins whose audio/UI golden moved.
 - Docs for users: `README.md`. `LICENSE` is GPL-3.0 (copied from the nih-plug checkout, the standard FSF text).
 
 ## Identity (never change after release)
