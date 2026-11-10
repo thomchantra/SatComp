@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "satxcomp"
-version = "0.5.2"
+version = "0.1.0"
 dependencies = [
  "nih_plug",
  "nih_plug_egui",
@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "satxcomp-dsp"
-version = "0.5.2"
+version = "0.1.0"
 dependencies = [
  "satcomp-dsp",
 ]
