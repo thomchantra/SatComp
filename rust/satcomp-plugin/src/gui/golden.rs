@@ -70,7 +70,7 @@ impl Rig {
     fn new(zoom: f32) -> Self {
         let ctx = egui::Context::default();
         ctx.set_pixels_per_point(zoom);
-        super::init_ctx(&ctx);
+        satcomp_ui::init_ctx(&ctx);
         let params = Arc::new(SatCompParams::default());
         let shared = Arc::new(Shared::new());
         let (pal, light) = super::ui::initial_palette(&params);

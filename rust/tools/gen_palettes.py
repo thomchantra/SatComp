@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rewrites the PALETTES table in satcomp-plugin/src/gui/canvas.rs from docs/colorscheme.md. Run from rust/."""
+"""Rewrites the PALETTES table in satcomp-ui/src/canvas.rs from docs/colorscheme.md. Run from rust/."""
 import re
 t = open("../docs/colorscheme.md").read()
 th = []
@@ -12,7 +12,7 @@ def fl(h):
         out += [round(int(c[i:i + 2], 16) / 255, 4) for i in (1, 3, 5)]
     return "[" + ", ".join("%.1f" % v if v in (0.0, 1.0) else repr(v) for v in out) + "]"
 rs = f"pub const PALETTES: [(&str, [f32; 9], [f32; 9]); {len(th)}] = [\n" + "".join(f'    ("{n}", {fl(d)}, {fl(l)}),\n' for n, d, l in th) + "];\n"
-f = "satcomp-plugin/src/gui/canvas.rs"
+f = "satcomp-ui/src/canvas.rs"
 c = open(f).read()
 a = c.index("pub const PALETTES"); b = c.index("];\n", a) + 3
 open(f, "w").write(c[:a] + rs + c[b:])

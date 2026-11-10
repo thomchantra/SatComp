@@ -1,0 +1,11 @@
+[package]
+name = "satcomp-ui"
+version = "0.5.1"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Shared egui UI toolkit for the SatComp plug-in family: drawing canvas on the logical grid, colour schemes, the embedded
+# UI fonts, FFT helper. No plug-in specific state lives here.
+[dependencies]
+nih_plug_egui = { path = "../vendor/nih_plug_egui" }

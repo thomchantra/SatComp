@@ -1,37 +1,17 @@
-mod canvas;
 mod ui;
 #[cfg(test)]
 mod golden;
 
 use crate::params::SatCompParams;
 use crate::Shared;
-use canvas::{font_family, Canvas, H, W};
+use satcomp_ui::canvas::{self, Canvas, FONT_NAMES, H, W};
+use satcomp_ui::init_ctx;
 use nih_plug::prelude::Editor;
-use nih_plug_egui::egui::{self, FontData, FontDefinitions, LayerId};
+use nih_plug_egui::egui::{self, LayerId};
 use nih_plug_egui::create_egui_editor;
 use std::sync::Arc;
 use std::time::Duration;
 use ui::{Env, Gui, State};
-
-/// Editor init: embedded UI fonts and egui style tweaks.
-pub(crate) fn init_ctx(ctx: &egui::Context) {
-    let mut fonts = FontDefinitions::default();
-    let faces: [&'static [u8]; 6] = [
-        include_bytes!("../../assets/fonts/FiraCode-Regular.ttf"),
-        include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf"),
-        include_bytes!("../../assets/fonts/GeistMono-Regular.ttf"),
-        include_bytes!("../../assets/fonts/RobotoMono-Regular.ttf"),
-        include_bytes!("../../assets/fonts/OxygenMono-Regular.ttf"),
-        include_bytes!("../../assets/fonts/Doto-Black.ttf"),
-    ];
-    for (i, bytes) in faces.iter().enumerate() {
-        fonts.font_data.insert(format!("f{i}"), Arc::new(FontData::from_static(bytes)));
-        fonts.families.insert(font_family(i), vec![format!("f{i}")]);
-    }
-    ctx.set_fonts(fonts);
-    ctx.tessellation_options_mut(|o| o.feathering = false);
-    ctx.style_mut(|s| s.animation_time = 0.0);
-}
 
 /// One editor frame: map the egui input into logical canvas units, draw the whole UI.
 pub(crate) fn run_frame(
@@ -85,7 +65,7 @@ pub(crate) fn run_frame(
 
 pub fn create(params: Arc<SatCompParams>, shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
     let (pal, light) = ui::initial_palette(&params);
-    let face = params.font.load(std::sync::atomic::Ordering::Relaxed).clamp(0, canvas::FONT_NAMES.len() as i32 - 1) as usize;
+    let face = params.font.load(std::sync::atomic::Ordering::Relaxed).clamp(0, FONT_NAMES.len() as i32 - 1) as usize;
     let state = State::new(pal, light, face, &params);
     let editor_state = params.editor_state.clone();
     create_egui_editor(

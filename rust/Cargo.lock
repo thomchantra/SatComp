@@ -2302,6 +2302,7 @@ dependencies = [
  "parking_lot",
  "rfd",
  "satcomp-dsp",
+ "satcomp-ui",
  "serde",
  "serde_json",
 ]
@@ -2309,6 +2310,13 @@ dependencies = [
 [[package]]
 name = "satcomp-dsp"
 version = "0.5.1"
+
+[[package]]
+name = "satcomp-ui"
+version = "0.5.1"
+dependencies = [
+ "nih_plug_egui",
+]
 
 [[package]]
 name = "scopeguard"
