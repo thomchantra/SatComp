@@ -57,6 +57,7 @@ scheme menu (right-click the icon). Not verified in REAPER (clicks go through th
 | `rust/vendor/nih_plug_egui` | patched copy (see below) |
 | `rust/xtask` | `cargo xtask bundle satcomp --release` |
 | `rust/tools/gen_params.py` | generates `params.rs` |
+| `rust/tools/wavdiff.py` | null-test two WAV renders (peak/RMS of the difference); see Regression nets |
 | `rust/tools/gen_palettes.py` | rewrites `PALETTES` in `satcomp-ui/src/canvas.rs` from `docs/colorscheme.md` |
 
 ## Architecture (0.5.3): blocks, then products
@@ -100,6 +101,9 @@ the same way when SatXComp needs them.
   defaults) and the scope ring is not fed. The header version is fixed under `cfg(test)`. `UI_GOLDEN_OUT=<file> cargo test --release -p satcomp ui_`
   writes the hashes instead of comparing (use it to record, or to diff a baseline checkout against the working tree).
   An intended UI change (text, layout) legitimately changes frames: diff the label lists, check only the expected frames moved, then re-record.
+- **In-host null test between releases** (what the owner does in REAPER): render a loop with the old version installed (offline render, 32-bit float,
+  no dither, same project/preset), install the new bundle, render again, then `python3 rust/tools/wavdiff.py old.wav new.wav` (expect IDENTICAL,
+  or at most about -140 dBFS of rounding noise). A refactor-only release should pass; anything louder means the sound changed.
 - Both nets: do the baseline in a separate `CARGO_TARGET_DIR` (Dropbox syncs `rust/target`).
 
 ## Commands (from `rust/`)
