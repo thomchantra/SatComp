@@ -4,7 +4,7 @@ mod golden;
 
 use crate::params::SatCompParams;
 use crate::Shared;
-use satcomp_ui::canvas::{self, Canvas, FONT_NAMES, H, W};
+use satcomp_ui::canvas::{Canvas, FONT_NAMES, H, W};
 use satcomp_ui::init_ctx;
 use nih_plug::prelude::Editor;
 use nih_plug_egui::egui::{self, LayerId};

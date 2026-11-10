@@ -2315,6 +2315,7 @@ version = "0.5.1"
 name = "satcomp-ui"
 version = "0.5.1"
 dependencies = [
+ "nih_plug",
  "nih_plug_egui",
 ]
 

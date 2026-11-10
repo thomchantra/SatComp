@@ -3,6 +3,7 @@
 
 use satcomp_ui::canvas::{Canvas, FONT_NAMES, PALETTES};
 use satcomp_ui::fft::fft;
+use satcomp_ui::kit::{Kit, Meta, Widgets};
 use theme::{ThemeEdit, UserTheme};
 use crate::params::{SatCompParams, TABLE};
 use crate::presets::{self, Preset};
@@ -15,18 +16,6 @@ use satcomp_dsp::GainComputer;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-
-#[derive(Clone, Copy, Default)]
-pub struct Meta {
-    pub min: f32,
-    pub max: f32,
-    pub def: f32,
-    /// 0 linear, 1 log, 2 sqrt
-    pub mode: u8,
-    /// bit 0: snap to min near the start of travel, bit 1: snap to max near the end
-    pub snap: u8,
-    pub step: f32,
-}
 
 /// One line of the scrolling About / Changelog text. Head = version title (+ rule), takes the next Pad row too.
 enum Row {
@@ -77,6 +66,8 @@ mod scope;
 mod theme;
 
 pub struct State {
+    /// widget interaction state (satcomp-ui); `State` derefs to it
+    pub kit: Kit,
     /// packed scope settings (see scope.rs)
     scope_cfg: i32,
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
@@ -87,8 +78,6 @@ pub struct State {
     pub dummy_shared: Arc<Shared>,
     real_in: (bool, bool, bool, i32, f32, f32),
     del_arm: f64,
-    meta: [Meta; 68],
-    touched: [bool; 68],
     pub pal: usize,
     pub light: bool,
     /// UI font index (FONT_NAMES)
@@ -100,30 +89,14 @@ pub struct State {
     /// time of a logo click waiting out the double-click window (then it cycles the colour scheme)
     logo_pend: f64,
     // interaction
-    act: i32,
-    act_t: f32,
-    last_my: f32,
-    last_clk_n: i32,
-    last_clk_t: f64,
     vt1: usize,
     vt2: usize,
     gdx: f32,
     gdy: f32,
     tacc: f32,
     tlast: f32,
-    last_down: bool,
-    last_rdown: bool,
-    wacc: f32,
     menu: Option<Menu>,
     // per-frame input (logical units)
-    mx: f32,
-    my: f32,
-    down: bool,
-    press: bool,
-    rpress: bool,
-    wheel: i32,
-    shift: bool,
-    now: f64,
     // meters
     gr_disp: f32,
     gr_hold: f32,
@@ -174,7 +147,6 @@ pub struct State {
     /// shape was observed as Custom since the draw view opened (host writes land a frame or more later)
     edit_seen: bool,
     cpt: usize,
-    dk: f32,
     // window resize grip
     resizing: bool,
     resize_off: (f32, f32),
@@ -198,37 +170,21 @@ pub struct State {
 impl State {
     /// Per-frame input snapshot (positions in logical canvas units). Computes press edges like the JSFX.
     pub fn set_input(&mut self, mx: f32, my: f32, down: bool, rdown: bool, scroll: f32, shift: bool, now: f64) {
-        self.mx = mx;
-        self.my = my;
-        self.down = down;
-        self.press = down && !self.last_down;
-        self.last_down = down;
-        self.rpress = rdown && !self.last_rdown;
-        self.last_rdown = rdown;
-        self.shift = shift;
         // The egui clock restarts from 0 whenever the editor window is reopened, but this State lives on. Re-base every
         // stored timestamp, otherwise `now - last` stays negative and the ~8 Hz readouts (PK, RMS, GR) stay frozen.
-        if now < self.now {
+        if self.kit.set_input(mx, my, down, rdown, scroll, shift, now) {
             self.rd_last = now;
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = now;
-            self.last_clk_t = now;
             self.hold_until = now;
             self.spec_t = now;
-        }
-        self.now = now;
-        // notch the scroll: a mouse wheel reports big steps, a trackpad many small ones
-        self.wacc += scroll;
-        self.wheel = 0;
-        if self.wacc.abs() >= 10.0 {
-            self.wheel = if self.wacc > 0.0 { 1 } else { -1 };
-            self.wacc = 0.0;
         }
     }
 
     pub fn new(pal: usize, light: bool, face: usize, params: &SatCompParams) -> Self {
-        let mut meta = [Meta::default(); 68];
+        let mut kit = Kit::new(68);
+        let meta = &mut kit.meta;
         for &(n, _, mn, mx, df) in TABLE {
             meta[n] = Meta { min: mn, max: mx, def: df, mode: 0, snap: 0, step: 1.0 };
         }
@@ -278,8 +234,7 @@ impl State {
         }
         let fwin = (0..4096).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / 4096.0).cos()).collect();
         let mut st = Self {
-            meta,
-            touched: [false; 68],
+            kit,
             pal,
             light,
             face,
@@ -294,29 +249,13 @@ impl State {
             ap_scroll: 0,
             about_scroll: 0,
             logo_pend: -1.0,
-            act: 0,
-            act_t: 0.0,
-            last_my: 0.0,
-            last_clk_n: 0,
-            last_clk_t: 0.0,
             vt1: 0,
             vt2: 0,
             gdx: 0.0,
             gdy: 0.0,
             tacc: 0.0,
             tlast: 0.0,
-            last_down: false,
-            last_rdown: false,
-            wacc: 0.0,
             menu: None,
-            mx: -1000.0,
-            my: -1000.0,
-            down: false,
-            press: false,
-            rpress: false,
-            wheel: 0,
-            shift: false,
-            now: 0.0,
             gr_disp: 0.0,
             gr_hold: 0.0,
             gr_hold_t: 0.0,
@@ -361,7 +300,6 @@ impl State {
             curve_edit: false,
             edit_seen: false,
             cpt: 0,
-            dk: 1.0,
             resizing: false,
             resize_off: (0.0, 0.0),
             ptr_pt: (0.0, 0.0),
@@ -379,6 +317,18 @@ impl State {
     }
 }
 
+impl Deref for State {
+    type Target = Kit;
+    fn deref(&self) -> &Kit {
+        &self.kit
+    }
+}
+impl DerefMut for State {
+    fn deref_mut(&mut self) -> &mut Kit {
+        &mut self.kit
+    }
+}
+
 pub struct Env<'a> {
     pub params: &'a SatCompParams,
     pub setter: &'a ParamSetter<'a>,
@@ -390,6 +340,30 @@ pub struct Gui<'a> {
     pub s: &'a mut State,
     pub cv: Canvas<'a>,
     pub env: Env<'a>,
+}
+
+impl<'a> Widgets<'a> for Gui<'a> {
+    fn kit(&mut self) -> &mut Kit {
+        &mut self.s.kit
+    }
+    fn kit_ref(&self) -> &Kit {
+        &self.s.kit
+    }
+    fn cv(&mut self) -> &mut Canvas<'a> {
+        &mut self.cv
+    }
+    fn param_ptr(&self, n: usize) -> Option<ParamPtr> {
+        self.env.params.ptr(n)
+    }
+    fn host(&self) -> &dyn GuiContext {
+        self.env.setter.raw_context
+    }
+    fn masked(&self) -> bool {
+        self.s.edit.is_some()
+    }
+    fn fmt(&self, n: usize, v: f32) -> String {
+        self.fmt_slot(n, v)
+    }
 }
 
 impl<'a> Deref for Gui<'a> {
@@ -454,146 +428,12 @@ fn blink(t: f64) -> bool {
 
 impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ params (slider-number addressing)
-    fn sget(&self, n: usize) -> f32 {
-        match self.env.params.ptr(n) {
-            Some(p) => {
-                let m = &self.meta[n];
-                m.min + (m.max - m.min) * unsafe { p.unmodulated_normalized_value() }
-            }
-            None => 0.0,
-        }
-    }
-
-    fn sset(&mut self, n: usize, v: f32) {
-        if self.edit.is_some() {
-            return; // theme editor page: dummy widgets never write parameters
-        }
-        if let Some(p) = self.env.params.ptr(n) {
-            let m = self.meta[n];
-            let norm = ((v - m.min) / (m.max - m.min)).clamp(0.0, 1.0);
-            unsafe {
-                if !self.touched[n] {
-                    self.env.setter.raw_context.raw_begin_set_parameter(p);
-                    self.touched[n] = true;
-                }
-                self.env.setter.raw_context.raw_set_parameter_normalized(p, norm);
-            }
-        }
-    }
-
-    fn end_touch(&mut self, n: usize) {
-        if self.edit.is_some() {
-            return;
-        }
-        if n < 68 && self.touched[n] {
-            if let Some(p) = self.env.params.ptr(n) {
-                unsafe { self.env.setter.raw_context.raw_end_set_parameter(p) };
-            }
-            self.touched[n] = false;
-        }
-    }
-
-    /// set + release in one go (a click, not a drag)
-    fn click_set(&mut self, n: usize, v: f32) {
-        self.sset(n, v);
-        self.end_touch(n);
-    }
-
-    fn setv(&mut self, n: usize, mut v: f32) {
-        let m = self.meta[n];
-        if m.step > 0.0 {
-            v = (v / m.step + 0.5).floor() * m.step;
-        }
-        v = v.clamp(m.min, m.max);
-        if v != self.sget(n) {
-            self.sset(n, v);
-        }
-    }
-
-    fn n2t(&self, n: usize, v: f32) -> f32 {
-        let m = self.meta[n];
-        let t = match m.mode {
-            1 => (v.max(m.min) / m.min).ln() / (m.max / m.min).ln(),
-            2 => ((v - m.min).max(0.0) / (m.max - m.min)).sqrt(),
-            _ => (v - m.min) / (m.max - m.min),
-        };
-        t.clamp(0.0, 1.0)
-    }
-
-    fn t2n(&self, n: usize, mut t: f32) -> f32 {
-        let m = self.meta[n];
-        if m.snap & 1 != 0 && t < 0.03 {
-            t = 0.0;
-        }
-        if m.snap & 2 != 0 && t > 0.97 {
-            t = 1.0;
-        }
-        let mut v = match m.mode {
-            1 => m.min * (t * (m.max / m.min).ln()).exp(),
-            2 => m.min + (m.max - m.min) * t * t,
-            _ => m.min + (m.max - m.min) * t,
-        };
-        if m.step > 0.0 {
-            v = (v / m.step + 0.5).floor() * m.step;
-        }
-        v.clamp(m.min, m.max)
-    }
-
-    fn commit(&mut self, n: usize, t: f32) {
-        let v = self.t2n(n, t);
-        if v != self.sget(n) {
-            self.sset(n, v);
-        }
-    }
-
-    fn hit(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
-        self.mx >= x && self.mx < x + w && self.my >= y && self.my < y + h
-    }
-
-    fn dbl(&mut self, id: i32) -> bool {
-        let r = self.last_clk_n == id && self.now - self.last_clk_t < 0.35;
-        self.last_clk_n = if r { 0 } else { id };
-        self.last_clk_t = self.now;
-        r
-    }
-
-    fn begin_drag(&mut self, n: usize) {
-        if self.last_clk_n == n as i32 && self.now - self.last_clk_t < 0.35 {
-            let d = self.meta[n].def;
-            self.click_set(n, d);
-            self.act = 0;
-            self.last_clk_n = 0;
-        } else {
-            self.act = n as i32;
-            self.act_t = self.n2t(n, self.sget(n));
-            self.last_my = self.my;
-            self.last_clk_n = n as i32;
-            self.last_clk_t = self.now;
-        }
-    }
-
-    fn wheel_adj(&mut self, n: usize) {
-        let t = self.n2t(n, self.sget(n)) + if self.wheel > 0 { 1.0 } else { -1.0 } * if self.shift { 0.005 } else { 0.03 };
-        self.commit(n, t.clamp(0.0, 1.0));
-        self.end_touch(n);
-    }
-
-    fn setc(&mut self, red: bool) {
-        self.cv.dk = self.dk;
-        self.cv.setc(red);
-    }
-
-    fn set_dk(&mut self, d: f32) {
-        self.dk = d;
-        self.cv.dk = d;
-    }
-
     fn refresh_dsp(&mut self) {
         self.env.dsp = self.env.params.to_dsp();
     }
 
     // ------------------------------------------------------------------ formatting
-    fn fmt(&self, n: usize, v: f32) -> String {
+    fn fmt_slot(&self, n: usize, v: f32) -> String {
         if (29..=58).contains(&n) {
             let o = (n - 29) % 15;
             return if o < 12 {
@@ -685,104 +525,6 @@ impl<'a> Gui<'a> {
     }
 
     // ------------------------------------------------------------------ widgets
-    fn cell(&mut self, n: usize, x: f32, y: f32, w: f32, h: f32, lbl: &str) {
-        let hv = self.hit(x, y, w, h);
-        if hv && self.press && self.act == 0 {
-            self.begin_drag(n);
-        }
-        if hv && self.wheel != 0 {
-            self.wheel_adj(n);
-        }
-        let v = self.sget(n);
-        let t = self.n2t(n, v);
-        let isact = self.act == n as i32;
-        self.setc(isact);
-        self.cv.boxr(x, y, w, h);
-        self.cv.set_font(1);
-        self.cv.text(x + 3.0, y + 3.0, lbl);
-        self.cv.set_font(2);
-        let s = self.fmt(n, v);
-        self.cv.textc(x, y + (h * 0.4 + 1.0).floor(), w, &s);
-        self.cv.fill(x + 2.0, y + h - 4.0, ((t * (w - 4.0)).floor()).max(1.0), 2.0);
-    }
-
-    /// inverted cell (lit block) for the gain-stage cells
-    fn cell_o(&mut self, n: usize, x: f32, y: f32, w: f32, h: f32, lbl: &str) {
-        let hv = self.hit(x, y, w, h);
-        if hv && self.press && self.act == 0 {
-            self.begin_drag(n);
-        }
-        if hv && self.wheel != 0 {
-            self.wheel_adj(n);
-        }
-        let v = self.sget(n);
-        let t = self.n2t(n, v);
-        let isact = self.act == n as i32;
-        self.setc(isact);
-        self.cv.fill(x, y, w, h);
-        self.cv.setbg();
-        self.cv.set_font(1);
-        self.cv.text(x + 3.0, y + 3.0, lbl);
-        self.cv.set_font(2);
-        let s = self.fmt(n, v);
-        self.cv.textc(x, y + (h * 0.4 + 1.0).floor(), w, &s);
-        self.cv.fill(x + 2.0, y + h - 4.0, ((t * (w - 4.0)).floor()).max(1.0), 2.0);
-        self.setc(false);
-    }
-
-    /// two stacked params in one cell (label left, value right)
-    fn cell2(&mut self, na: usize, nb: usize, x: f32, y: f32, w: f32, h: f32, la: &str, lb: &str) {
-        let hh = (h * 0.5).floor();
-        let ha = self.hit(x, y, w, hh);
-        let hb = self.hit(x, y + hh, w, h - hh);
-        if ha && self.press && self.act == 0 {
-            self.begin_drag(na);
-        }
-        if hb && self.press && self.act == 0 {
-            self.begin_drag(nb);
-        }
-        if ha && self.wheel != 0 {
-            self.wheel_adj(na);
-        }
-        if hb && self.wheel != 0 {
-            self.wheel_adj(nb);
-        }
-        self.setc(self.act == na as i32 || self.act == nb as i32);
-        self.cv.boxr(x, y, w, h);
-        self.setc(false);
-        self.cv.fill(x, y + hh, w, 1.0);
-        self.cv.set_font(1);
-        self.setc(self.act == na as i32);
-        let s = self.fmt(na, self.sget(na));
-        self.cv.text(x + 3.0, y + 3.0, la);
-        self.cv.textr(x, y + 3.0, w - 3.0, &s);
-        self.cv.fill(x + 2.0, y + hh - 3.0, ((self.n2t(na, self.sget(na)) * (w - 4.0)).floor()).max(1.0), 1.0);
-        self.setc(self.act == nb as i32);
-        let s = self.fmt(nb, self.sget(nb));
-        self.cv.text(x + 3.0, y + hh + 3.0, lb);
-        self.cv.textr(x, y + hh + 3.0, w - 3.0, &s);
-        self.cv.fill(x + 2.0, y + h - 4.0, ((self.n2t(nb, self.sget(nb)) * (w - 4.0)).floor()).max(1.0), 2.0);
-        self.setc(false);
-    }
-
-    /// lit: 0 off, 1 white, 2 red
-    fn btn(&mut self, x: f32, y: f32, w: f32, h: f32, s: &str, lit: u8) -> bool {
-        let hv = self.hit(x, y, w, h);
-        let clicked = hv && self.press && self.act == 0;
-        if lit > 0 {
-            self.setc(lit > 1);
-            self.cv.fill(x, y, w, h);
-            self.cv.setbg();
-        } else {
-            self.setc(false);
-            self.cv.boxr(x, y, w, h);
-        }
-        self.cv.set_font(1);
-        self.cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, s);
-        self.setc(false);
-        clicked
-    }
-
     fn open_menu(&mut self, kind: MenuKind, x: f32, y: f32, items: Vec<String>, checked: usize) {
         let items = items.into_iter().enumerate().map(|(i, label)| MItem { label, kind: 0, id: i as i32 }).collect();
         self.menu = Some(Menu { kind, x, y, items, checked: checked as i32, scroll: 0 });
@@ -922,33 +664,6 @@ impl<'a> Gui<'a> {
         self.cv.bk = [a[0], a[1], a[2]];
         self.cv.fg = [a[3], a[4], a[5]];
         self.cv.ac = [a[6], a[7], a[8]];
-    }
-
-    /// module-active square: filled = active, outline = untouched; byp = outlined with an X
-    fn sqind(&mut self, x: f32, y: f32, s: f32, on: bool, lit: bool, byp: bool) {
-        if lit {
-            self.cv.setbg();
-        } else {
-            self.setc(false);
-        }
-        if byp {
-            self.cv.boxr(x, y, s, s);
-            self.cv.line(x, y, x + s - 1.0, y + s - 1.0);
-            self.cv.line(x + s - 1.0, y, x, y + s - 1.0);
-        } else if on {
-            self.cv.fill(x, y, s, s);
-        } else {
-            self.cv.boxr(x, y, s, s);
-        }
-        self.setc(false);
-    }
-
-    fn sq_tog(&mut self, n: usize, x: f32, y: f32, s: f32) {
-        if self.hit(x - 3.0, y - 3.0, s + 6.0, s + 6.0) && self.press && self.act == 0 {
-            let v = if self.sget(n) > 0.5 { 0.0 } else { 1.0 };
-            self.click_set(n, v);
-            self.press = false;
-        }
     }
 
     fn diff_box(&mut self, x: f32, y: f32, w: f32, h: f32) {
