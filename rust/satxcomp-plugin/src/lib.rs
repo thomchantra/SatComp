@@ -1,5 +1,6 @@
 //! SatXComp: 3-band multiband saturator + compressor with a post EQ. nih-plug shell around `satxcomp_dsp::XEngine`.
 
+mod gui;
 mod params;
 
 use nih_plug::prelude::*;
@@ -111,6 +112,10 @@ impl Plugin for SatXComp {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
+    }
+
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        gui::create(self.params.clone(), self.shared.clone())
     }
 
     fn initialize(&mut self, _layout: &AudioIOLayout, buffer_config: &BufferConfig, context: &mut impl InitContext<Self>) -> bool {

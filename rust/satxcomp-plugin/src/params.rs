@@ -350,7 +350,7 @@ pub struct SatXCompParams {
 impl Default for SatXCompParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(840, 504),
+            editor_state: EguiState::from_size(840, 576),
             palette_v2: Arc::new(AtomicI32::new(0)),
             light: Arc::new(AtomicBool::new(false)),
             font: Arc::new(AtomicI32::new(0)),

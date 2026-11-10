@@ -17,3 +17,12 @@ nih_plug_egui = { path = "../vendor/nih_plug_egui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 parking_lot = "0.12"
+
+[features]
+# `cargo run -p satxcomp --features standalone --bin satxcomp-standalone` opens the editor in a plain window (dev aid)
+standalone = ["nih_plug/standalone"]
+
+[[bin]]
+name = "satxcomp-standalone"
+path = "src/standalone.rs"
+required-features = ["standalone"]
