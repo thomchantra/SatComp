@@ -4,7 +4,7 @@ A waveshaping saturator with a compressor and a 2-stage 3-band EQ, in a black-an
 
 ![SatComp](docs/screenshot.png)
 
-VST3 and CLAP for macOS (Apple silicon and Intel) and Windows. Current version: **0.5.1**.
+VST3 and CLAP for macOS (Apple silicon and Intel) and Windows. Current version: **0.5.3**.
 
 ## Features
 - **Saturator:** 15 shapers including a **Custom** one you draw yourself (pencil icon, up to 10 points), drive, bias, HP/LP split, tone, sat mix, output gain, 1x/2x/4x oversampling.
@@ -46,7 +46,7 @@ cargo xtask bundle-universal satcomp --release  # macOS: arm64 + x86_64
 Bundles land in `rust/target/bundled/`. GitHub Actions builds the macOS universal and Windows bundles on every push (see `.github/workflows/build.yml`) and attaches them to a release when a `v*` tag is pushed.
 
 ## Repository
-- `rust/`: the production plug-in (`satcomp-dsp` engine, `satcomp-plugin` nih-plug shell and egui UI, factory presets in `satcomp-plugin/presets/`).
+- `rust/`: the production plug-in (`satcomp-dsp` engine built from reusable blocks, `satcomp-ui` shared egui toolkit, `satcomp-plugin` nih-plug shell and the SatComp pages, factory presets in `satcomp-plugin/presets/`).
 - `SatComp.jsfx`: the original REAPER JSFX prototype. Archival, frozen at v0.3.
 - `docs/`: `FOUNDATION.md` (workflow and gotchas), `PARAMETERS.md` (parameter reference), `HANDOFF.md` (JSFX-era design decisions), `TEST_CHECKLIST.md`.
 
