@@ -1317,7 +1317,7 @@ impl<'a> Gui<'a> {
     }
 
     fn draw_ccurve(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let gc = GainComputer::from_params(&self.env.dsp);
+        let gc = GainComputer::from_params(&self.env.dsp.comp());
         let hv = self.hit(x, y, w, h);
         let thr = self.sget(8);
         if self.act == 120 && self.down {
@@ -1334,7 +1334,7 @@ impl<'a> Gui<'a> {
         let thr = self.sget(8);
         let gc = if self.act == 120 || self.act == 121 {
             self.refresh_dsp();
-            GainComputer::from_params(&self.env.dsp)
+            GainComputer::from_params(&self.env.dsp.comp())
         } else {
             gc
         };
