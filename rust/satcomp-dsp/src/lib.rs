@@ -3,13 +3,20 @@
 //! against JSFX renders (EEL2 is f64 as well).
 
 pub mod biquad;
+pub mod compressor;
+pub mod delay;
 pub mod engine;
 pub mod eq;
 pub mod halfband;
+pub mod keyinput;
+pub mod level;
 pub mod params;
+pub mod saturator;
 pub mod shapers;
 
-pub use engine::{Engine, GainComputer, ScopeRing, TapRing};
+pub use compressor::{CompParams, Compressor, GainComputer};
+pub use engine::{Engine, ScopeRing, TapRing};
+pub use saturator::{SatParams, Saturator};
 pub use params::{EqBandParams, EqStageParams, Params};
 
 /// dB (amplitude) to linear gain, same constant as the JSFX (`exp(db*0.11512925)`).

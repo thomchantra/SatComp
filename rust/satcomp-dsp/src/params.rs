@@ -1,5 +1,7 @@
 //! Parameter set, mirroring the JSFX sliders (see docs/PARAMETERS.md). Slider numbers in comments.
 
+use crate::compressor::CompParams;
+use crate::saturator::SatParams;
 use crate::shapers::Curve;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -69,6 +71,42 @@ pub struct Params {
     pub sc_hp: f64,    // 65  20..2000 Hz (<=20.5 = off)
     pub sc_lp: f64,    // 66  200..20000 Hz (>=19900 = off)
     pub sc_mix: f64,   // 67  0..100 % key mix (0 = main detector only, 100 = key only)
+}
+
+impl Params {
+    /// The saturator block's slice of the parameter set.
+    pub fn sat(&self) -> SatParams {
+        SatParams {
+            shape: self.shape,
+            curve: self.curve,
+            drive: self.drive,
+            bias: self.bias,
+            hp: self.sat_hp,
+            lp: self.sat_lp,
+            tone: self.tone,
+            os: self.os,
+            mix: self.sat_mix,
+            out_db: self.sat_out,
+        }
+    }
+
+    /// The compressor block's slice of the parameter set.
+    pub fn comp(&self) -> CompParams {
+        CompParams {
+            thresh: self.thresh,
+            ratio: self.ratio,
+            attack: self.attack,
+            release: self.release,
+            speed: self.speed,
+            knee: self.knee,
+            knee_shape: self.knee_shape,
+            detector: self.detector,
+            det_hp: self.det_hp,
+            ff_fb: self.ff_fb,
+            gr_dist: self.gr_dist,
+            key_mix: self.sc_mix,
+        }
+    }
 }
 
 impl Default for Params {

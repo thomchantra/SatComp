@@ -1,5 +1,5 @@
-//! EQ decode (stored slider values -> filter kind/freq/gain/Q) and the 10-filter bank
-//! (2 stages x [3 bands + tilt low shelf + tilt high shelf]) with per-block coefficient ramps.
+//! EQ decode (stored slider values -> filter kind/freq/gain/Q), the 5-filter stage bank
+//! ([3 bands + tilt low shelf + tilt high shelf]) with per-block coefficient ramps, and `EqSection`, the stage as a block.
 
 use crate::biquad::{bq, eq_coef, Coef, IDENTITY};
 use crate::params::EqStageParams;
@@ -51,26 +51,27 @@ pub fn decode_tilt(st: &EqStageParams) -> (f64, f64) {
     (t, p)
 }
 
+/// One EQ stage: 3 bands + tilt low shelf + tilt high shelf (5 filters), with per-block coefficient ramps.
 pub struct EqBank {
-    pub cur: [Coef; 10],
-    pub tgt: [Coef; 10],
-    pub delta: [Coef; 10],
-    pub sl: [[f64; 2]; 10],
-    pub sr: [[f64; 2]; 10],
-    pub active: [bool; 10],
-    pub running: [bool; 10],
+    pub cur: [Coef; 5],
+    pub tgt: [Coef; 5],
+    pub delta: [Coef; 5],
+    pub sl: [[f64; 2]; 5],
+    pub sr: [[f64; 2]; 5],
+    pub active: [bool; 5],
+    pub running: [bool; 5],
 }
 
 impl Default for EqBank {
     fn default() -> Self {
         Self {
-            cur: [[0.0; 5]; 10],
-            tgt: [[0.0; 5]; 10],
-            delta: [[0.0; 5]; 10],
-            sl: [[0.0; 2]; 10],
-            sr: [[0.0; 2]; 10],
-            active: [false; 10],
-            running: [false; 10],
+            cur: [[0.0; 5]; 5],
+            tgt: [[0.0; 5]; 5],
+            delta: [[0.0; 5]; 5],
+            sl: [[0.0; 2]; 5],
+            sr: [[0.0; 2]; 5],
+            active: [false; 5],
+            running: [false; 5],
         }
     }
 }
@@ -89,25 +90,25 @@ impl EqBank {
     }
 
     /// Returns (any filter of the stage active). Mirrors eq_setup() minus the output gain.
-    pub fn setup_stage(&mut self, st: usize, p: &EqStageParams, sr: f64) -> bool {
+    pub fn setup(&mut self, p: &EqStageParams, sr: f64) -> bool {
         let mut any = false;
         for b in 0..3 {
             let d = decode_band(p, b);
             let c = if d.on { Some(eq_coef(d.kind, d.freq, d.gain, d.q, sr)) } else { None };
-            self.target(st * 5 + b, c, d.on);
+            self.target(b, c, d.on);
             any |= d.on;
         }
         let (t, pv) = decode_tilt(p);
         let on = t != 0.0;
         let ls = if on { Some(eq_coef(2, pv, -t * 0.5, 0.4, sr)) } else { None };
         let hs = if on { Some(eq_coef(3, pv, t * 0.5, 0.4, sr)) } else { None };
-        self.target(st * 5 + 3, ls, on);
-        self.target(st * 5 + 4, hs, on);
+        self.target(3, ls, on);
+        self.target(4, hs, on);
         any || on
     }
 
-    pub fn clear_stage(&mut self, st: usize) {
-        for f in st * 5..st * 5 + 5 {
+    pub fn clear(&mut self) {
+        for f in 0..5 {
             self.sl[f] = [0.0; 2];
             self.sr[f] = [0.0; 2];
         }
@@ -116,7 +117,7 @@ impl EqBank {
     /// Per block: ramp deltas so a coefficient change glides over one block; retire settled identity filters.
     pub fn prep(&mut self, block_len: usize) {
         let rn = 1.0 / block_len.max(1) as f64;
-        for f in 0..10 {
+        for f in 0..5 {
             if !self.running[f] {
                 continue;
             }
@@ -132,13 +133,13 @@ impl EqBank {
         }
     }
 
-    pub fn stage_running(&self, st: usize) -> bool {
-        self.running[st * 5..st * 5 + 5].iter().any(|&r| r)
+    pub fn is_running(&self) -> bool {
+        self.running.iter().any(|&r| r)
     }
 
     #[inline]
-    pub fn process(&mut self, st: usize, xl: &mut f64, xr: &mut f64) {
-        for f in st * 5..st * 5 + 5 {
+    pub fn process(&mut self, xl: &mut f64, xr: &mut f64) {
+        for f in 0..5 {
             if self.running[f] {
                 for i in 0..5 {
                     self.cur[f][i] += self.delta[f][i];
@@ -148,6 +149,77 @@ impl EqBank {
                 *xr = bq(&mut self.sr[f], &c, *xr);
             }
         }
+    }
+}
+
+/// An EQ stage as a signal block: the filter bank, a smoothed output gain and a smoothed enable crossfade.
+pub struct EqSection {
+    bank: EqBank,
+    g: f64,
+    g_t: f64,
+    /// any band, the tilt or the output gain does something
+    pub act: bool,
+    en: f64,
+    prev_en: bool,
+    bs: f64,
+    run: bool,
+    bs_c: f64,
+    g_c: f64,
+}
+
+impl Default for EqSection {
+    fn default() -> Self {
+        Self { bank: EqBank::default(), g: 1.0, g_t: 1.0, act: false, en: 1.0, prev_en: true, bs: 1.0, run: false, bs_c: 0.0, g_c: 0.0 }
+    }
+}
+
+impl EqSection {
+    /// `enabled` = not bypassed. `snap` jumps the smoothed values to their targets (first parameter set).
+    pub fn derive(&mut self, p: &EqStageParams, enabled: bool, sr: f64, snap: bool) {
+        let any = self.bank.setup(p, sr);
+        let g2 = p.out_gain.clamp(-12.0, 12.0);
+        self.g_t = (g2 * crate::level::LN10_20).exp();
+        self.act = any || g2 != 0.0;
+        self.en = if enabled { 1.0 } else { 0.0 };
+        if enabled && !self.prev_en {
+            self.bank.clear();
+            self.g = self.g_t;
+        }
+        self.prev_en = enabled;
+        self.bs_c = crate::level::one_pole(sr, 0.01);
+        self.g_c = crate::level::one_pole(sr, 0.02);
+        if snap {
+            self.g = self.g_t;
+            self.bs = self.en;
+        }
+    }
+
+    /// Per host block (before its samples).
+    pub fn begin_block(&mut self, n: usize) {
+        if (self.bs - self.en).abs() < 0.00001 {
+            self.bs = self.en;
+        }
+        self.bank.prep(n);
+        if (self.g - self.g_t).abs() < 0.0000001 {
+            self.g = self.g_t;
+        }
+        self.run = self.bank.is_running() || self.g != 1.0 || self.g_t != 1.0;
+    }
+
+    #[inline]
+    pub fn tick(&mut self, x: [f64; 2]) -> [f64; 2] {
+        self.bs += (self.en - self.bs) * self.bs_c;
+        if self.run && self.bs > 0.0 {
+            let (mut xl, mut xr) = (x[0], x[1]);
+            self.bank.process(&mut xl, &mut xr);
+            self.g += (self.g_t - self.g) * self.g_c;
+            if self.bs >= 1.0 {
+                return [xl * self.g, xr * self.g];
+            }
+            let b = self.bs;
+            return [x[0] + (xl * self.g - x[0]) * b, x[1] + (xr * self.g - x[1]) * b];
+        }
+        x
     }
 }
 
