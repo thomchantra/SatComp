@@ -77,7 +77,8 @@ fn fill(out: &mut [Coef], kind: Kind, f: f64, slope: usize, repeat: usize, sr: f
     }
 }
 
-pub struct Crossover3 {
+struct Core {
+    slopes: (usize, usize),
     cur: [Coef; N],
     tgt: [Coef; N],
     delta: [Coef; N],
@@ -88,15 +89,10 @@ pub struct Crossover3 {
     sign_delta: [f64; 3],
 }
 
-impl Default for Crossover3 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Crossover3 {
-    pub fn new() -> Self {
+impl Core {
+    fn new() -> Self {
         Self {
+            slopes: (1, 1),
             cur: [IDENTITY; N],
             tgt: [IDENTITY; N],
             delta: [[0.0; 5]; N],
@@ -108,23 +104,16 @@ impl Crossover3 {
         }
     }
 
-    /// Clamp the pair so f1 < f2 with at least a 5 % gap.
-    pub fn order(f1: f64, f2: f64) -> (f64, f64) {
-        let f1 = f1.clamp(20.0, 19000.0);
-        (f1, f2.max(f1 * 1.05).min(20000.0))
-    }
-
     /// Per-band polarity the engine multiplies each band with when summing (-1 only for the 12 dB/oct high sides).
     #[inline]
-    pub fn signs(&self) -> [f64; 3] {
+    fn signs(&self) -> [f64; 3] {
         self.sign_cur
     }
 
     /// New crossover frequencies and slopes (0..3 = 12 / 24 / 48 / 96 dB/oct); `snap` jumps to them (first parameter set),
     /// otherwise they glide over the next block.
-    pub fn set(&mut self, f1: f64, f2: f64, slope1: usize, slope2: usize, sr: f64, snap: bool) {
-        let (f1, f2) = Self::order(f1, f2);
-        let (s1, s2) = (slope1.min(SLOPES - 1), slope2.min(SLOPES - 1));
+    fn set(&mut self, f1: f64, f2: f64, s1: usize, s2: usize, sr: f64, snap: bool) {
+        self.slopes = (s1, s2);
         fill(&mut self.tgt[LP1..HP1], Kind::Lp, f1, s1, 2, sr);
         fill(&mut self.tgt[HP1..LP2], Kind::Hp, f1, s1, 2, sr);
         fill(&mut self.tgt[LP2..HP2], Kind::Lp, f2, s2, 2, sr);
@@ -142,7 +131,7 @@ impl Crossover3 {
     }
 
     /// Per host block: ramp towards the targets over `n` samples.
-    pub fn begin_block(&mut self, n: usize) {
+    fn begin_block(&mut self, n: usize) {
         let rn = 1.0 / n.max(1) as f64;
         let mut moving = false;
         for f in 0..N {
@@ -186,7 +175,7 @@ impl Crossover3 {
 
     /// One stereo sample -> natural-polarity [low, mid, high], each [l, r] (sum them with `signs()`).
     #[inline]
-    pub fn tick(&mut self, x: [f64; 2]) -> [[f64; 2]; 3] {
+    fn tick(&mut self, x: [f64; 2]) -> [[f64; 2]; 3] {
         if self.ramping {
             for f in 0..N {
                 for i in 0..5 {
@@ -206,6 +195,108 @@ impl Crossover3 {
             out[0][c] = self.chain(AP2, AP_SEC, c, low);
             out[1][c] = mid;
             out[2][c] = high;
+        }
+        out
+    }
+}
+
+/// Samples of input history replayed through a freshly built crossover so it starts warm.
+const HIST: usize = 4096;
+/// Length of the crossfade when a slope changes (about 10 ms at 48 kHz).
+const FADE: usize = 512;
+
+/// The 3-way crossover. A frequency change glides the filter coefficients; a slope change builds the new crossover next to
+/// the old one (warmed up on recent input) and crossfades, because the two have different filter structures.
+pub struct Crossover3 {
+    core: Core,
+    old: Option<Core>,
+    fade: usize,
+    hist: Box<[[f64; 2]; HIST]>,
+    hpos: usize,
+    sign_mix: [f64; 3],
+}
+
+impl Default for Crossover3 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Crossover3 {
+    pub fn new() -> Self {
+        Self { core: Core::new(), old: None, fade: 0, hist: Box::new([[0.0; 2]; HIST]), hpos: 0, sign_mix: [1.0; 3] }
+    }
+
+    /// Clamp the pair so f1 < f2 with at least a 5 % gap.
+    pub fn order(f1: f64, f2: f64) -> (f64, f64) {
+        let f1 = f1.clamp(20.0, 19000.0);
+        (f1, f2.max(f1 * 1.05).min(20000.0))
+    }
+
+    /// Per-band polarity the engine multiplies each band with when summing (-1 only for the 12 dB/oct high sides).
+    #[inline]
+    pub fn signs(&self) -> [f64; 3] {
+        self.sign_mix
+    }
+
+    /// True when nothing is moving: no coefficient glide and no slope crossfade in progress.
+    pub fn settled(&self) -> bool {
+        self.old.is_none() && !self.core.ramping
+    }
+
+    /// New crossover frequencies and slopes (0..3 = 12 / 24 / 48 / 96 dB/oct); `snap` jumps to them (first parameter set).
+    /// Otherwise frequencies glide over the next block and a slope change crossfades.
+    pub fn set(&mut self, f1: f64, f2: f64, slope1: usize, slope2: usize, sr: f64, snap: bool) {
+        let (f1, f2) = Self::order(f1, f2);
+        let (s1, s2) = (slope1.min(SLOPES - 1), slope2.min(SLOPES - 1));
+        if snap {
+            self.old = None;
+            self.core.set(f1, f2, s1, s2, sr, true);
+            self.sign_mix = self.core.sign_cur;
+        } else if (s1, s2) != self.core.slopes {
+            let mut fresh = Core::new();
+            fresh.set(f1, f2, s1, s2, sr, true);
+            // warm it up on the last HIST input samples, oldest first
+            for k in 0..HIST {
+                let _ = fresh.tick(self.hist[(self.hpos + k) % HIST]);
+            }
+            self.old = Some(std::mem::replace(&mut self.core, fresh));
+            self.fade = 0;
+        } else {
+            self.core.set(f1, f2, s1, s2, sr, false);
+        }
+    }
+
+    /// Per host block: ramp towards the targets over `n` samples.
+    pub fn begin_block(&mut self, n: usize) {
+        self.core.begin_block(n);
+        if let Some(o) = self.old.as_mut() {
+            o.begin_block(n);
+        }
+    }
+
+    /// One stereo sample -> natural-polarity [low, mid, high], each [l, r] (sum them with `signs()`).
+    #[inline]
+    pub fn tick(&mut self, x: [f64; 2]) -> [[f64; 2]; 3] {
+        self.hist[self.hpos] = x;
+        self.hpos = (self.hpos + 1) % HIST;
+        let new = self.core.tick(x);
+        let Some(old) = self.old.as_mut() else {
+            self.sign_mix = self.core.sign_cur;
+            return new;
+        };
+        let a = (self.fade + 1) as f64 / FADE as f64;
+        let prev = old.tick(x);
+        let mut out = [[0.0f64; 2]; 3];
+        for b in 0..3 {
+            for c in 0..2 {
+                out[b][c] = prev[b][c] + (new[b][c] - prev[b][c]) * a;
+            }
+            self.sign_mix[b] = old.sign_cur[b] + (self.core.sign_cur[b] - old.sign_cur[b]) * a;
+        }
+        self.fade += 1;
+        if self.fade >= FADE {
+            self.old = None;
         }
         out
     }
@@ -304,7 +395,7 @@ mod tests {
         }
         assert!(peak < 2.0, "{peak}");
         assert!((settled - 1.0).abs() < 0.02, "{settled}");
-        assert!(!x.ramping);
+        assert!(x.settled());
     }
 
     #[test]

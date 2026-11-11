@@ -439,6 +439,31 @@ mod tests {
     }
 
     #[test]
+    fn switching_crossover_slope_does_not_click() {
+        // a steady tone through the whole engine; the slopes change mid-stream and the output must stay as smooth as the tone itself
+        let amp = 0.5;
+        let w = 2.0 * PI * 330.0 / SR;
+        let tone: Vec<f64> = (0..48000).map(|i| amp * (w * i as f64).sin()).collect();
+        for (from, to) in [((1, 1), (2, 1)), ((1, 1), (0, 1)), ((0, 0), (3, 3)), ((3, 3), (1, 1))] {
+            let mut p = neutral();
+            p.x1 = 200.0;
+            p.x2 = 2500.0;
+            p.x1_slope = from.0;
+            p.x2_slope = from.1;
+            let mut e = XEngine::new(SR);
+            e.set_params(&p);
+            let mut y = run(&mut e, &tone[..24000]);
+            p.x1_slope = to.0;
+            p.x2_slope = to.1;
+            e.set_params(&p);
+            y.extend(run(&mut e, &tone[24000..]));
+            let worst = y.windows(2).skip(8000).map(|d| (d[1] - d[0]).abs()).fold(0.0, f64::max);
+            // a pure sine of this amplitude moves at most amp * w per sample
+            assert!(worst < amp * w * 1.5, "slope {from:?} -> {to:?} clicked: step {worst:.4} (tone {:.4})", amp * w);
+        }
+    }
+
+    #[test]
     fn a_band_only_affects_its_own_range() {
         // compress only the mid band hard: a low tone is untouched, a mid tone is reduced
         let tone = |f: f64| (0..48000).map(|i| 0.5 * (2.0 * PI * f * i as f64 / SR).sin()).collect::<Vec<f64>>();
