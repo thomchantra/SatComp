@@ -98,7 +98,11 @@ fn base() -> Params {
 pub fn scenarios() -> Vec<Scn> {
     let mut v: Vec<Scn> = Vec::new();
 
-    v.push(Scn::new("default".into(), Params::default()));
+    // the v0.5.1 defaults, pinned (INIT now starts with drive 0 / threshold 0)
+    let mut p = Params::default();
+    p.drive = 25.0;
+    p.thresh = -18.0;
+    v.push(Scn::new("default".into(), p));
     v.push(Scn::new("base".into(), base()));
 
     // every shaper x every oversampling mode

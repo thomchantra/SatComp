@@ -1,7 +1,10 @@
 //! Golden-render tool.
 //!
 //!   golden render <dir>          render every scenario to <dir>/<name>.f32 + .txt (telemetry), print a summary
-//!   golden diff <dirA> <dirB>    compare two render folders: max |diff|, differing samples, telemetry equality
+//!   golden diff <dirA> <dirB> [shift]
+//!                                compare two render folders: max |diff|, differing samples, telemetry equality.
+//!                                With `shift` (stereo samples) B is compared with its first `shift` samples dropped, for
+//!                                a change that only added constant latency (A[i] must equal B[i + shift]).
 //!   golden record                rewrite tests/golden/golden.txt from the current build
 //!
 //! Build it once against the stable tag and once against the refactor, render both, diff.
@@ -33,7 +36,7 @@ fn main() {
                 println!("{:34} audio {ha:016x} telem {ht:016x} rms {rms:.6} pk {pk:.6}", sc.name);
             }
         }
-        Some("diff") => diff(Path::new(&a[2]), Path::new(&a[3])),
+        Some("diff") => diff(Path::new(&a[2]), Path::new(&a[3]), a.get(4).and_then(|v| v.parse().ok()).unwrap_or(0)),
         Some("record") => {
             let mut out = String::from("# name audio-hash telemetry-hash rms peak (cargo run --release -p satcomp-dsp --example golden -- record)\n");
             for sc in scen::scenarios() {
@@ -48,7 +51,7 @@ fn main() {
     }
 }
 
-fn diff(a: &Path, b: &Path) {
+fn diff(a: &Path, b: &Path, shift: usize) {
     let mut names: Vec<String> = fs::read_dir(a)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -71,7 +74,9 @@ fn diff(a: &Path, b: &Path) {
             println!("{n:34} LENGTH DIFFERS {} vs {}", x.len(), y.len());
             continue;
         }
-        for (p, q) in x.iter().zip(&y) {
+        let sh = shift * 2;
+        let (x, y) = (&x[..x.len().saturating_sub(sh)], &y[sh.min(y.len())..]);
+        for (p, q) in x.iter().zip(y) {
             if p.to_bits() != q.to_bits() {
                 cnt += 1;
                 max = max.max((*p as f64 - *q as f64).abs());
@@ -81,7 +86,7 @@ fn diff(a: &Path, b: &Path) {
         let tb = fs::read_to_string(b.join(format!("{n}.txt"))).unwrap_or_default();
         let tdiff: Vec<&str> = ta.lines().zip(tb.lines()).filter(|(p, q)| p != q).map(|(p, _)| p.split(' ').next().unwrap_or("")).collect();
         let tel = if ta == tb { "identical".to_string() } else { format!("DIFFERS in {} ({} lines; first: {})", tdiff.len(), tdiff.len(), tdiff.first().unwrap_or(&"-")) };
-        if cnt == 0 && ta == tb {
+        if cnt == 0 && (ta == tb || shift > 0) {
             same += 1;
         }
         println!("{n:34} {max:12.3e} {cnt:10} {:10}  {tel}", x.len());

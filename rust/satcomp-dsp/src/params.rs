@@ -71,6 +71,8 @@ pub struct Params {
     pub sc_hp: f64,    // 65  20..2000 Hz (<=20.5 = off)
     pub sc_lp: f64,    // 66  200..20000 Hz (>=19900 = off)
     pub sc_mix: f64,   // 67  0..100 % key mix (0 = main detector only, 100 = key only)
+    // OUTPUT LIMITER (true-peak brickwall at -0.2 dBTP; the delay is always reported, this only engages the gain)
+    pub lim_on: bool,  // 68
 }
 
 impl Params {
@@ -114,13 +116,13 @@ impl Default for Params {
         Self {
             shape: 0,
             curve: Curve::linear(),
-            drive: 25.0,
+            drive: 0.0,
             bias: 0.0,
             sat_hp: 20.0,
             sat_lp: 20000.0,
             tone: 20000.0,
             os: 0,
-            thresh: -18.0,
+            thresh: 0.0,
             ratio: 4.0,
             attack: 10.0,
             release: 150.0,
@@ -148,6 +150,7 @@ impl Default for Params {
             sc_hp: 20.0,
             sc_lp: 20000.0,
             sc_mix: 100.0,
+            lim_on: false, // the plug-in's own default is on; the engine default stays off so bare-engine renders are untouched
         }
     }
 }

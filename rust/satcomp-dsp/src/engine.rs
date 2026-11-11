@@ -1,6 +1,6 @@
 //! The SatComp signal path, composed from the DSP blocks: saturator (HP/LP split, shaper + optional oversampling, DC block,
-//! tone, sat mix, sat out) -> EQ pre -> lookahead -> compressor -> makeup/mix -> EQ post -> out gain -> equal-loudness
-//! bypass -> delta. Port of the JSFX `@block` / `@sample` sections. The blocks (`saturator`, `compressor`, `keyinput`,
+//! tone, sat mix, sat out) -> EQ pre -> lookahead -> compressor -> makeup/mix -> EQ post -> out gain -> output limiter ->
+//! equal-loudness bypass blend -> delta. Port of the JSFX `@block` / `@sample` sections. The blocks (`saturator`, `compressor`, `keyinput`,
 //! `eq::EqSection`, `delay`, `level`) hold the algorithms; this file wires them together, owns the output stage and
 //! the level-match state machines, and publishes the meters the UI reads.
 
@@ -8,7 +8,8 @@ use crate::compressor::Compressor;
 use crate::delay::StereoDelay;
 use crate::eq::EqSection;
 use crate::keyinput::KeyInput;
-use crate::level::{ms_step, one_pole, Matcher, DB_POW, LN10_20};
+use crate::level::{ms_step, one_pole, Matcher, DB_AMP, DB_POW, LN10_20};
+use crate::limiter::Limiter;
 use crate::params::Params;
 use crate::saturator::Saturator;
 use crate::DENORM;
@@ -102,6 +103,10 @@ pub struct Engine {
     comp: Compressor,
     key: KeyInput,
     eq: [EqSection; 2],
+    lim: Limiter,
+    /// delta / sidechain-solo monitor signals, delayed by the limiter latency so they line up with the limited path
+    mon_d: StereoDelay<1024>,
+    mon_s: StereoDelay<1024>,
 
     // ---- delay lines: input aligned with the (latency-delayed) wet path, and the compressor lookahead
     dw: StereoDelay<4096>,
@@ -172,6 +177,8 @@ pub struct Engine {
     pub clip_f: bool,
     pub gr_blk: f64,
     pub gr_pk: f64,
+    /// Peak limiter gain reduction (dB, positive) since the shell last took it.
+    pub lim_gr_pk: f64,
     pub vz_blk: f64,
     pub vz_lv: f64,
     /// Main-signal level at the compressor input (decaying peak), for the sidechain viewport.
@@ -197,6 +204,9 @@ impl Engine {
             comp: Compressor::new(),
             key: KeyInput::new(),
             eq: [EqSection::default(), EqSection::default()],
+            lim: Limiter::new(sr),
+            mon_d: StereoDelay::new(),
+            mon_s: StereoDelay::new(),
             dw: StereoDelay::new(),
             lk: StereoDelay::new(),
             la_s: 0,
@@ -250,6 +260,7 @@ impl Engine {
             clip_f: false,
             gr_blk: 0.0,
             gr_pk: 0.0,
+            lim_gr_pk: 0.0,
             vz_blk: 0.0,
             vz_lv: 0.0,
             mn_blk: 0.0,
@@ -274,6 +285,7 @@ impl Engine {
             self.first_set = false;
             self.p = *p;
             self.sat.set_out_db(p.sat_out);
+            self.lim.snap_on(p.lim_on);
             self.snap = true;
             let sm = std::mem::replace(&mut self.smoothing, false); // shaper table commits at once, no morph from shape 0
             self.derive();
@@ -289,9 +301,9 @@ impl Engine {
         }
     }
 
-    /// PDC latency to report (oversampling + lookahead).
+    /// PDC latency to report (oversampling + compressor lookahead + limiter lookahead, the last one always).
     pub fn latency(&self) -> u32 {
-        (self.sat.latency() + self.la_s) as u32
+        (self.sat.latency() + self.la_s + self.lim.latency()) as u32
     }
 
     pub fn request_match(&mut self) {
@@ -335,6 +347,7 @@ impl Engine {
         let sr = self.sr;
         self.sr_prev = sr;
         self.dirty = false;
+        self.lim.set_sample_rate(sr);
         let snap = self.snap;
 
         self.sat.derive(&p.sat(), sr, snap, self.smoothing);
@@ -418,6 +431,8 @@ impl Engine {
         let trim = if self.match_on { self.match_trim } else { 0.0 };
         self.og_t = ((self.p.out_gain + trim) * LN10_20).exp();
         self.gr_pk = self.gr_pk.max(self.gr_blk);
+        self.lim_gr_pk = self.lim_gr_pk.max(-self.lim.gmin.max(1e-6).ln() * DB_AMP);
+        self.lim.gmin = 1.0;
         self.gr_blk = 0.0;
         let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
         self.vz_lv = self.vz_blk.max(self.vz_lv * vz_d);
@@ -474,7 +489,10 @@ impl Engine {
         self.dw.advance();
         self.dw.put(inp);
         let lat = self.sat.latency();
+        let ll = self.lim.latency();
         let dt = self.dw.tap(lat + self.la_s);
+        // the untouched input again, a limiter latency later: lines up with the limited path for the bypass blend
+        let db = self.dw.tap(lat + self.la_s + ll);
 
         // ------------------------------------------------ SAT (+ SAT OUT)
         let mut cc = self.sat.tick(inp, self.smoothing);
@@ -523,19 +541,27 @@ impl Engine {
             self.bg_t = (self.pms / self.ims).sqrt().clamp(0.0631, 15.85);
         }
         self.bg += (self.bg_t - self.bg) * self.bg_c;
-        let mut out = [pp[0] + (dt[0] * self.bg - pp[0]) * self.byp_s, pp[1] + (dt[1] * self.bg - pp[1]) * self.byp_s];
+        // output limiter (processed path only: bypass, delta and solo are monitors / the untouched input)
+        let lo = self.lim.tick(pp, self.p.lim_on);
+        let mut out = [lo[0] + (db[0] * self.bg - lo[0]) * self.byp_s, lo[1] + (db[1] * self.bg - lo[1]) * self.byp_s];
         // delta monitor
         self.d_s += ((if self.delta_on { 1.0 } else { 0.0 }) - self.d_s) * self.byp_c;
+        self.mon_d.advance();
+        self.mon_d.put([cd[0] - y[0], cd[1] - y[1]]);
         if self.d_s > 0.0001 {
+            let dd = self.mon_d.tap(ll);
             for c in 0..2 {
-                out[c] += ((cd[c] - y[c]) - out[c]) * self.d_s;
+                out[c] += (dd[c] - out[c]) * self.d_s;
             }
         }
         // sidechain solo: what the detector hears (post gain/HP/LP), replaces the output
         self.sc_s += ((if self.sc_solo && sc_act { 1.0 } else { 0.0 }) - self.sc_s) * self.byp_c;
+        self.mon_s.advance();
+        self.mon_s.put(scv);
         if self.sc_s > 0.0001 {
+            let sv = self.mon_s.tap(ll);
             for c in 0..2 {
-                out[c] += (scv[c] - out[c]) * self.sc_s;
+                out[c] += (sv[c] - out[c]) * self.sc_s;
             }
         }
         // meters
@@ -605,16 +631,20 @@ mod tests {
         (0..n).map(|i| a * (2.0 * PI * f * i as f64 / SR).sin()).collect()
     }
 
+    /// The limiter's constant delay at 48 kHz (always reported, limiter on or off).
+    const LIM_LAT: usize = 32 + 72;
+
     #[test]
     fn neutral_settings_are_bit_transparent() {
         let mut e = Engine::new(SR);
         e.set_params(&neutral());
         let x = noise(4800, 1);
         let y = run(&mut e, &x, 256);
-        for (a, b) in x.iter().zip(&y) {
-            assert!((a - b).abs() < 1e-12);
+        let ll = LIM_LAT;
+        for i in ll..x.len() {
+            assert!((x[i - ll] - y[i]).abs() < 1e-12);
         }
-        assert_eq!(e.latency(), 0);
+        assert_eq!(e.latency() as usize, ll);
     }
 
     #[test]
@@ -627,8 +657,9 @@ mod tests {
             let mut e = Engine::new(SR);
             e.smoothing = false;
             e.set_params(&p);
+            let lat = lat + LIM_LAT;
             assert_eq!(e.latency() as usize, lat);
-            let mut x = vec![0.0; 200];
+            let mut x = vec![0.0; 400];
             x[10] = 1.0;
             let y = run(&mut e, &x, 64);
             let peak = y.iter().enumerate().max_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap()).unwrap().0;
@@ -643,11 +674,63 @@ mod tests {
         p.lookahead_ms = 1.0;
         let mut e = Engine::new(SR);
         e.set_params(&p);
-        let mut x = vec![0.0; 200];
+        let mut x = vec![0.0; 400];
         x[5] = 1.0;
         let y = run(&mut e, &x, 64);
-        assert_eq!(e.latency(), 48);
-        assert!((y[5 + 48] - 1.0).abs() < 1e-9);
+        let lat = 48 + LIM_LAT;
+        assert_eq!(e.latency() as usize, lat);
+        assert!((y[5 + lat] - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn limiter_latency_is_reported_on_or_off() {
+        let mut p = neutral();
+        let mut e = Engine::new(SR);
+        e.set_params(&p);
+        let off = e.latency();
+        p.lim_on = true;
+        e.set_params(&p);
+        assert_eq!(e.latency(), off);
+        assert_eq!(off as usize, LIM_LAT);
+    }
+
+    #[test]
+    fn limiter_holds_hot_output_at_the_ceiling_and_reports_reduction() {
+        let mut p = neutral();
+        p.lim_on = true;
+        let mut e = Engine::new(SR);
+        e.set_params(&p);
+        let hot = sine(24000, 440.0, 2.0);
+        let y = run(&mut e, &hot, 256);
+        let pk = y[12000..].iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        assert!(pk <= 0.9773 && pk > 0.95, "peak {pk}");
+        assert!(e.lim_gr_pk > 5.0, "gr {}", e.lim_gr_pk);
+        // off: same engine settings pass the signal through untouched (apart from the delay)
+        p.lim_on = false;
+        let mut e = Engine::new(SR);
+        e.set_params(&p);
+        let y = run(&mut e, &hot, 256);
+        assert!((y[12000..].iter().fold(0.0f64, |m, v| m.max(v.abs())) - 2.0).abs() < 0.01);
+        assert_eq!(e.lim_gr_pk, 0.0);
+    }
+
+    #[test]
+    fn limiter_does_not_touch_bypass_or_misalign_it() {
+        // bypass returns the (equal-loudness) dry input, delayed like the processed path, unlimited
+        let mut p = neutral();
+        p.lim_on = true;
+        p.bypass = true;
+        let mut e = Engine::new(SR);
+        e.smoothing = false;
+        e.set_params(&p);
+        let hot = sine(24000, 440.0, 2.0);
+        let y = run(&mut e, &hot, 256);
+        let lat = e.latency() as usize;
+        let x = &hot[12000 - lat..24000 - lat];
+        let o = &y[12000..24000];
+        let (px, po) = (x.iter().fold(0.0f64, |m, v| m.max(v.abs())), o.iter().fold(0.0f64, |m, v| m.max(v.abs())));
+        assert!(po > 1.5, "bypass output was limited: {po}");
+        assert!((po / px - 1.0).abs() < 0.05, "gain {}", po / px);
     }
 
     #[test]

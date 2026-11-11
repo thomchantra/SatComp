@@ -10,12 +10,14 @@ pub mod eq;
 pub mod halfband;
 pub mod keyinput;
 pub mod level;
+pub mod limiter;
 pub mod params;
 pub mod saturator;
 pub mod shapers;
 
 pub use compressor::{CompParams, Compressor, GainComputer};
 pub use engine::{Engine, ScopeRing, TapRing};
+pub use limiter::Limiter;
 pub use saturator::{SatParams, Saturator};
 pub use params::{EqBandParams, EqStageParams, Params};
 
