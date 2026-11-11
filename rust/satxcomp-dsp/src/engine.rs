@@ -455,6 +455,22 @@ mod tests {
     }
 
     #[test]
+    fn sat_gain_changes_the_level_after_the_first_block() {
+        let x = noise(48000, 4);
+        let mut e = XEngine::new(SR);
+        e.set_params(&neutral());
+        let y0 = run(&mut e, &x);
+        let mut p = neutral();
+        for b in p.bands.iter_mut() {
+            b.sat_gain = 6.0;
+        }
+        e.set_params(&p);
+        let y1 = run(&mut e, &x);
+        let g = 20.0 * (rms(&y1[8000..]) / rms(&y0[8000..])).log10();
+        assert!((g - 6.0).abs() < 0.5, "sat gain +6 dB moved the level by {g}");
+    }
+
+    #[test]
     fn saturation_and_all_modes_run_clean() {
         let x = noise(24000, 3);
         for os in 0..3 {

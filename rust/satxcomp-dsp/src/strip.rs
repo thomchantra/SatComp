@@ -86,6 +86,8 @@ impl Strip {
 
     pub fn derive(&mut self, p: &BandParams, os: i32, la_s: usize, sr: f64, snap: bool, smoothing: bool) {
         self.sat.derive(&Self::sat_params(p, os), sr, snap, smoothing);
+        // Saturator::derive only latches SAT OUT on a snap; the target has to follow the parameter every time
+        self.sat.set_out_db(p.sat_gain);
         self.comp.derive(&Self::comp_params(p), sr);
         self.la_s = la_s;
         self.cmix_t = p.comp_mix * 0.01;
