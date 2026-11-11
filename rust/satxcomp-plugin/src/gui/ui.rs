@@ -87,6 +87,8 @@ const ACT_PIVOT: i32 = VIEW_ACT + 10;
 const ACT_TILT: i32 = VIEW_ACT + 11;
 /// custom-curve point drag in the draw view
 const ACT_CURVE: i32 = VIEW_ACT + 20;
+/// band handle drag in the spectrum (threshold); band b is ACT_THR + b
+const ACT_THR: i32 = VIEW_ACT + 30;
 const MENU_ROWS: usize = 18;
 const MENU_ROW_H: f32 = 14.0;
 
@@ -143,6 +145,15 @@ pub struct State {
     edit_seen: bool,
     cpt: usize,
     menu: Option<Menu>,
+    /// gain-reduction readouts refresh slowly (peak over the last interval) so the numbers stay readable
+    gr_txt: [f32; 3],
+    gr_txt_pk: [f32; 3],
+    gr_txt_t: f64,
+    /// per band post-saturator meter: decaying level, hold, and the last time it clipped
+    vu: [f32; 3],
+    vu_hold: [f32; 3],
+    vu_hold_t: [f64; 3],
+    vu_clip_t: [f64; 3],
     /// window-size grip drag and the pointer / window in host points (set by run_frame)
     resizing: bool,
     resize_off: (f32, f32),
@@ -243,6 +254,13 @@ impl State {
             edit_seen: false,
             cpt: 0,
             menu: None,
+            gr_txt: [0.0; 3],
+            gr_txt_pk: [0.0; 3],
+            gr_txt_t: 0.0,
+            vu: [0.0; 3],
+            vu_hold: [0.0; 3],
+            vu_hold_t: [0.0; 3],
+            vu_clip_t: [-10.0; 3],
             resizing: false,
             resize_off: (0.0, 0.0),
             ptr_pt: (0.0, 0.0),
@@ -479,11 +497,11 @@ impl<'a> Gui<'a> {
         self.cv.fill(163.0, y + 3.0, 4.0, 3.0);
         self.cv.boxr(162.0, y + 8.0, 6.0, 5.0);
         self.setc(false);
-        self.cv.boxr(178.0, y, 120.0, h);
+        self.cv.boxr(178.0, y, 144.0, h);
         self.cv.set_font(2);
-        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 120.0, "-- INIT --");
+        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 144.0, "-- INIT --");
         for (i, dir) in [(0, -1), (1, 1)] {
-            let x = 298.0 + i as f32 * 25.0;
+            let x = 322.0 + i as f32 * 25.0;
             let _ = self.btn(x, y, 25.0, h, "", 0);
             self.setc(false);
             let (cx, cy) = (x + 12.5, y + h * 0.5);
@@ -494,8 +512,8 @@ impl<'a> Gui<'a> {
             }
         }
         let label = format!("{:.0}%", self.cur_scale() * 100.0);
-        if self.btn(354.0, y, 42.0, h, &label, 0) {
-            self.open_size_menu(354.0, y + h);
+        if self.btn(378.0, y, 42.0, h, &label, 0) {
+            self.open_size_menu(378.0, y + h);
         }
     }
 
@@ -544,6 +562,9 @@ impl<'a> Gui<'a> {
         l(&self.cv, 0.5, 20.5, 0.5, 13.5);
         l(&self.cv, 6.5, 14.5, 0.5, 20.5);
         l(&self.cv, 14.5, 6.5, 20.5, 0.5);
+        // second diagonal: the X of SatXComp
+        l(&self.cv, 6.5, 6.5, 0.5, 0.5);
+        l(&self.cv, 14.5, 14.5, 20.5, 20.5);
     }
 
     fn out_meter(&mut self, x: f32, y: f32, w: f32, h: f32) {
@@ -613,6 +634,24 @@ impl<'a> Gui<'a> {
             } else if now - self.gr_hold_t[b] > 1.0 {
                 self.gr_hold[b] = (self.gr_hold[b] - 0.4).max(0.0);
             }
+            self.gr_txt_pk[b] = self.gr_txt_pk[b].max(self.gr_disp[b]);
+            // post-saturator level meter
+            let pk = sh.sat_out_pk[b].swap(0.0, Ordering::Relaxed);
+            self.vu[b] = pk.max(self.vu[b] * 0.85);
+            if pk >= self.vu_hold[b] {
+                self.vu_hold[b] = pk;
+                self.vu_hold_t[b] = now;
+            } else if now - self.vu_hold_t[b] > 1.0 {
+                self.vu_hold[b] *= 0.9;
+            }
+            if pk >= 1.0 {
+                self.vu_clip_t[b] = now;
+            }
+        }
+        if now - self.gr_txt_t >= 0.25 {
+            self.gr_txt = self.gr_txt_pk;
+            self.gr_txt_pk = [0.0; 3];
+            self.gr_txt_t = now;
         }
     }
 
@@ -754,36 +793,102 @@ impl<'a> Gui<'a> {
             }
             self.setc(false);
         }
-        // band markers: selected = wide box, others small; click selects
+        // Band handles. The handle sits at the band's threshold on the spectrum's dB axis: drag = threshold (double-click =
+        // default), click = select. A line marks the band's frequency range, a small bar hangs from the handle for the
+        // gain reduction and its number sits to the right.
         let sel = self.sel();
         let centers = [(20.0 * f1).sqrt(), (f1 * f2).sqrt(), (f2 * 20000.0).sqrt()];
+        let edges = [(x + 1.0, px1), (px1, px2), (px2, x + w - 1.0)];
+        let y_of = |t: f32| y + h - 1.0 - ((t + 100.0) / 95.0).clamp(0.0, 1.0) * (h - 2.0);
         for b in 0..3 {
+            let o = band_base(b);
             let cx = freq_to_x(centers[b], x + 1.0, w - 2.0).floor();
             let (bw, bx) = if b == sel { (26.0, cx - 13.0) } else { (14.0, cx - 7.0) };
-            let by = y + 5.0;
+            let cyy = y_of(self.sget(o + THRESH)).clamp(y + 7.0, y + h - 7.0).floor();
+            let by = cyy - 6.0;
             if self.hit(bx, by, bw, 12.0) && self.kit.press && self.kit.act == 0 {
                 self.select_band(b);
+                if self.dbl(160 + b as i32) {
+                    let d = self.kit.meta[o + THRESH].def;
+                    self.click_set(o + THRESH, d);
+                } else {
+                    self.kit.act = ACT_THR + b as i32;
+                }
                 self.kit.press = false;
             }
-            let on = self.sget(band_base(b) + ON) > 0.5;
+            if self.kit.act == ACT_THR + b as i32 && self.kit.down {
+                let t = (y + h - 1.0 - self.kit.my) / (h - 2.0) * 95.0 - 100.0;
+                self.setv(o + THRESH, t.clamp(-40.0, 0.0));
+            }
+            let on = self.sget(o + ON) > 0.5;
+            let held = self.kit.act == ACT_THR + b as i32;
+            // range line
             self.setc(false);
+            let (xl, xr) = edges[b];
+            self.cv.fill(xl.floor(), cyy, (xr - xl).floor().max(1.0), 1.0);
+            // gain reduction bar from the centre of the handle, 2 px per dB
+            let gr = self.gr_disp[b];
+            if gr > 0.05 && on {
+                self.setc(true);
+                self.cv.fill(cx - 1.0, by + 12.0, 3.0, (gr * 2.0).min(36.0).floor().max(1.0));
+            }
+            self.setc(held);
             if b == sel {
                 self.cv.fill(bx, by, bw, 12.0);
                 self.cv.setbg();
             } else {
                 self.cv.setbg();
                 self.cv.fill(bx, by, bw, 12.0);
-                self.setc(false);
+                self.setc(held);
                 self.cv.boxr(bx, by, bw, 12.0);
             }
             self.cv.set_font(1);
             self.cv.textc(bx, by + 2.0, bw, BAND_LETTERS[b]);
-            // small gain-reduction readout under the marker
-            let s = if self.gr_disp[b] > 0.05 { format!("-{:.1}", self.gr_disp[b]) } else { "0.0".to_string() };
-            self.setc(self.gr_disp[b] > 0.05 && on);
-            self.cv.textc(cx - 20.0, by + 16.0, 40.0, &s);
+            // gain reduction number, right of the handle (left of it when there is no room), slow refresh
+            let g = self.gr_txt[b];
+            let txt = if g > 0.05 { format!("-{:.1}", g) } else { "0.0".to_string() };
+            let tw = self.cv.text_w(&txt);
+            let tx = if bx + bw + 3.0 + tw > x + w - 2.0 { bx - 3.0 - tw } else { bx + bw + 3.0 };
+            self.setc(g > 0.05 && on);
+            self.cv.text(tx, by + 2.0, &txt);
             self.setc(false);
         }
+    }
+
+    /// Post-saturator level of the selected band: digital bar (-48..0 dB), accent stroke on top while it clips (held ~1 s).
+    fn draw_vu(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let b = self.sel();
+        self.setc(false);
+        self.cv.boxr(x, y, w, h);
+        let lvf = |v: f32| ((8.6858896 * v.max(0.0000001).ln() + 48.0) / 48.0).clamp(0.0, 1.0);
+        let ih = h - 2.0;
+        let lh = (ih * lvf(self.vu[b])).floor();
+        if lh > 0.0 {
+            self.cv.fill(x + 1.0, y + h - 1.0 - lh, w - 2.0, lh);
+        }
+        // segment gaps give the digital look
+        self.cv.setbg();
+        let mut k = 2.0;
+        while k < ih {
+            self.cv.fill(x + 1.0, y + h - 1.0 - k, w - 2.0, 1.0);
+            k += 3.0;
+        }
+        // held peak
+        self.setc(false);
+        if self.vu_hold[b] > 0.0001 {
+            let hy = (ih * lvf(self.vu_hold[b])).floor().max(1.0);
+            self.cv.fill(x + 1.0, y + h - 1.0 - hy, w - 2.0, 1.0);
+        }
+        // scale ticks every 6 dB
+        for db in (0..=48).step_by(6) {
+            let ty = y + 1.0 + ih * (db as f32 / 48.0);
+            self.cv.fill(x + w - 4.0, ty.floor(), 3.0, 1.0);
+        }
+        if self.kit.now - self.vu_clip_t[b] < 1.0 {
+            self.setc(true);
+            self.cv.fill(x + 1.0, y + 1.0, w - 2.0, 3.0);
+        }
+        self.setc(false);
     }
 
     // ------------------------------------------------------------------ band modules
@@ -1206,6 +1311,8 @@ impl<'a> Gui<'a> {
         self.cell(o + TONE, sat_x, rows[1], CELL_W, CELL_H, "TONE");
         self.cell(o + SAT_MIX, sat_x, rows[2], CELL_W, CELL_H, "SAT MIX");
         self.cell_o(o + SAT_GAIN, sat_x, rows[3], CELL_W, CELL_H, "SAT GAIN");
+        // band level after the saturator, in the gap between the saturator and compressor sections
+        self.draw_vu(sat_x + CELL_W + 8.0, y0, 24.0, ph);
         // gain reduction meter
         self.draw_gr_meter(meter_x, y0, 30.0, ph);
         // compressor: 3 columns x 4 rows
@@ -1497,7 +1604,7 @@ impl<'a> Gui<'a> {
             }
         }
         let d = self.rd_eq_diff;
-        self.diff_row(VX + EQ_P * 5.0, y, EQ_PW, 16.0, "EQ IN>OUT", d);
+        self.diff_row(VX + EQ_P * 5.0, y, EQ_PW, 16.0, "IN>OUT", d);
     }
 
     fn eq_cells(&mut self, y0: f32) {
@@ -1510,10 +1617,6 @@ impl<'a> Gui<'a> {
             let ty = (self.sget(o + 1) + 0.5).floor() as i32;
             self.setc(false);
             self.cv.boxr(x, y0, EQ_W, CELL_H);
-            // stroke lines between the six type buttons
-            self.cv.fill(x, y0 + 22.0, EQ_W, 1.0);
-            self.cv.fill((x + EQ_W / 3.0).floor(), y0, 1.0, CELL_H);
-            self.cv.fill((x + EQ_W * 2.0 / 3.0).floor(), y0, 1.0, CELL_H);
             for t in 0..6usize {
                 let (gx, gy) = (x + 1.0 + (t % 3) as f32 * EQ_W / 3.0, y0 + 1.0 + (t / 3) as f32 * 22.0);
                 let cur = t as i32 == ty;
@@ -1583,6 +1686,9 @@ impl<'a> Gui<'a> {
             self.end_touch(2);
             self.end_touch(EQ_TILT);
             self.end_touch(EQ_PIVOT);
+            for b in 0..3 {
+                self.end_touch(band_base(b) + THRESH);
+            }
             for b in 0..5 {
                 for k in 2..5 {
                     self.end_touch(eq_base(b) + k);
@@ -1606,16 +1712,16 @@ impl<'a> Gui<'a> {
         let title = format!("SATXCOMP {}", version_short());
         self.cv.text(44.0, 12.0, &title);
         self.preset_bar();
-        let _ = self.btn(402.0, 8.0, 76.0, 16.0, "SIDECHAIN", 0);
+        let _ = self.btn(424.0, 8.0, 76.0, 16.0, "SIDECHAIN", 0);
         {
             // EQ page toggle; the square in it bypasses the whole EQ module (X = bypassed, like SatComp)
             let eq = self.env.dsp.eq;
             let eq_any = eq.bands.iter().any(|b| b.on) || eq.tilt != 0.0 || eq.gain != 0.0;
-            self.sq_tog(EQ_BYPASS, 494.0, 12.0, 8.0);
-            if self.btn(484.0, 8.0, 56.0, 16.0, "EQ", self.eq_page as u8) {
+            self.sq_tog(EQ_BYPASS, 507.0, 12.0, 8.0);
+            if self.btn(500.0, 8.0, 40.0, 16.0, "EQ", self.eq_page as u8) {
                 self.eq_page = !self.eq_page;
             }
-            self.sqind(494.0, 12.0, 8.0, eq_any, self.eq_page, eq_byp);
+            self.sqind(507.0, 12.0, 8.0, eq_any, self.eq_page, eq_byp);
         }
         self.out_meter(RX, 8.0, RW, 16.0);
 

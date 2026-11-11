@@ -127,12 +127,12 @@ fn script() -> (u64, Vec<String>) {
     r.click(350.0, 198.0); // band row: HI tab
     r.click(468.0, 198.0); // DELTA of the band
     r.click(516.0, 198.0); // SOLO of the band
-    r.click(512.0, 16.0); // EQ page (header)
+    r.click(530.0, 16.0); // EQ page (header)
     r.drag(60.0, 120.0, 90.0, 80.0); // EQ node
     r.click(300.0, 198.0); // EQ band toggle
     r.drag(50.0, 282.0, 50.0, 257.0); // an EQ cell
     r.click(50.0, 223.0); // type glyph
-    r.click(512.0, 16.0); // back to the main page
+    r.click(530.0, 16.0); // back to the main page
     r.click(640.0, 42.0); // BYPASS
     (r.hash, r.log())
 }
@@ -160,7 +160,7 @@ fn eq_page_cells_above_slot_100_can_be_dragged() {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.click(512.0, 16.0); // EQ page
+    r.click(530.0, 16.0); // EQ page
     // (x, y, drag dy, parameter that must be written): cells start at y 212, 48 apart; EQ mix sits at its maximum
     for (x, y, dy, name) in [
         (490.0, 234.0, -25.0, "EQ Pivot"),
@@ -234,14 +234,14 @@ fn header_preset_layout_is_inert_and_scale_menu_opens() {
         r.frame(vec![]);
     }
     let n0 = r.log().len();
-    for (x, y) in [(165.0, 16.0), (240.0, 16.0), (310.0, 16.0), (335.0, 16.0), (440.0, 16.0)] {
+    for (x, y) in [(165.0, 16.0), (240.0, 16.0), (330.0, 16.0), (355.0, 16.0), (460.0, 16.0)] {
         r.click(x, y); // save icon, name, prev, next, SIDECHAIN
     }
     assert!(r.log()[n0..].is_empty(), "preset bar / sidechain must not write parameters: {:?}", &r.log()[n0..]);
     // the scale button opens a menu; clicking an entry must not touch parameters and a click elsewhere closes it
-    r.click(375.0, 16.0);
-    r.click(380.0, 24.0 + 1.0 + 14.0 * 2.0 + 7.0);
-    r.click(375.0, 16.0);
+    r.click(395.0, 16.0);
+    r.click(400.0, 24.0 + 1.0 + 14.0 * 2.0 + 7.0);
+    r.click(395.0, 16.0);
     r.click(300.0, 300.0);
     assert!(r.log()[n0..].is_empty(), "scale menu must not write parameters: {:?}", &r.log()[n0..]);
 }
@@ -253,7 +253,7 @@ fn eq_viewport_pivot_tilt_and_band_reset() {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.click(512.0, 16.0); // EQ page
+    r.click(530.0, 16.0); // EQ page
     // the 600 Hz pivot line sits at x ~271 on the 528-wide log axis
     let n0 = r.log().len();
     r.drag(271.0, 60.0, 310.0, 60.0);
@@ -320,4 +320,27 @@ fn saturator_module_dropdown_plot_gain_and_curve_drawing() {
     r.click(80.0, 330.0);
     assert_eq!(r.params.curve_mid.lock().len(), 3);
     assert_eq!(r.params.curve_lo.lock().len(), 2);
+}
+
+/// Band handles on the spectrum sit at the band's threshold: dragging one writes only that band's threshold.
+#[test]
+fn spectrum_handle_drag_sets_the_band_threshold() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    // default threshold -18 dB on the -100..-5 dB axis of the 150-high viewport (y 34..184): handle centre y ~55; the low band's
+    // handle sits at its centre frequency (~55 Hz): x ~88
+    let n0 = r.log().len();
+    r.drag(88.0, 55.0, 88.0, 85.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("Lo Thresh")), "handle drag: {new:?}");
+    // lower on screen = lower level: the last write must be below the default -18 dB (normalised (-18+40)/40 = 0.55)
+    let last: f32 = new.last().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
+    assert!(last < 0.55, "dragging the handle down must lower the threshold: {new:?}");
+    // double-click on the handle writes the default back (the rig does not echo values, so the handle stays at y 55)
+    let n0 = r.log().len();
+    r.click(88.0, 55.0);
+    r.click(88.0, 55.0);
+    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Thresh 0.550")), "double-click resets the threshold: {:?}", &r.log()[n0..]);
 }
