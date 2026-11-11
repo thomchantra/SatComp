@@ -35,6 +35,8 @@ pub(crate) fn run_frame(ctx: &egui::Context, setter: &nih_plug::prelude::ParamSe
         None => (-1000.0, -1000.0),
     };
     st.set_input(mx, my, down, rdown, scroll, shift, now);
+    st.ptr_pt = pos.map(|p| (p.x, p.y)).unwrap_or((0.0, 0.0));
+    st.win_pt = (screen.width(), screen.height());
     let painter = ctx.layer_painter(LayerId::background());
     let cv = Canvas::new(&painter, ppp, ox, oy, s, st.colors(), st.face);
     painter.rect_filled(screen, 0.0, cv.bg_color());

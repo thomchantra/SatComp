@@ -54,12 +54,12 @@ const X2_SLOPE: usize = 83;
 // ---- layout (logical units; the window is W x H = 680 x 480)
 /// viewport (spectrum / crossover / EQ curve)
 const VX: f32 = 10.0;
-const VY: f32 = 56.0;
-const VW: f32 = 510.0;
-const VH: f32 = 128.0;
+const VY: f32 = 34.0;
+const VW: f32 = 530.0;
+const VH: f32 = 150.0;
 /// right-hand column (levels, crossover sliders, output module)
-const RX: f32 = 530.0;
-const RW: f32 = 140.0;
+const RX: f32 = 550.0;
+const RW: f32 = 120.0;
 /// row of band tabs / EQ band toggles under the viewport
 const BAND_Y: f32 = VY + VH + 6.0;
 /// first row of cells; four rows, CELL_P apart
@@ -68,6 +68,14 @@ const CELL_H: f32 = 44.0;
 const CELL_P: f32 = 48.0;
 /// band module cells (saturator / compressor)
 const CELL_W: f32 = 74.0;
+/// spectrum look: true = solid UI-colour fill under the output, false = background fill with a stroke (accent shows the gap to dry)
+const FFT_SOLID_FILL: bool = false;
+/// EQ page columns: five bands plus the pivot column, across the viewport width
+const EQ_W: f32 = 80.0;
+const EQ_P: f32 = 86.0;
+const EQ_PW: f32 = VW - 5.0 * EQ_P;
+/// window scale steps (x the 680 x 410 base)
+const SIZES: [f32; 6] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5];
 /// `kit.act` values: 1..VIEW_ACT are parameter slots (vertical drag, slots run to 119); VIEW_ACT and up are viewport drags
 const VIEW_ACT: i32 = 1000;
 const ACT_X1: i32 = VIEW_ACT + 1;
@@ -83,14 +91,20 @@ const MENU_ROWS: usize = 18;
 const MENU_ROW_H: f32 = 14.0;
 
 /// popup list (shaper dropdown): plain label rows, one checked
+#[derive(Clone, Copy)]
+enum MenuKind {
+    /// shaper list of band `b`
+    Shape(usize),
+    Size,
+}
+
 struct Menu {
+    kind: MenuKind,
     x: f32,
     y: f32,
     items: Vec<String>,
     checked: i32,
     scroll: usize,
-    /// band whose shaper the menu sets
-    band: usize,
 }
 
 const KIND_NAMES: [&str; 8] = ["HPF", "LPF", "LO SHELF", "HI SHELF", "BAND", "ALLPASS", "BANDPASS", "NOTCH"];
@@ -129,6 +143,11 @@ pub struct State {
     edit_seen: bool,
     cpt: usize,
     menu: Option<Menu>,
+    /// window-size grip drag and the pointer / window in host points (set by run_frame)
+    resizing: bool,
+    resize_off: (f32, f32),
+    pub ptr_pt: (f32, f32),
+    pub win_pt: (f32, f32),
     /// EQ viewport drags: tilt accumulator, last pointer x, pivot grab offset
     tacc: f32,
     tlast: f32,
@@ -224,6 +243,10 @@ impl State {
             edit_seen: false,
             cpt: 0,
             menu: None,
+            resizing: false,
+            resize_off: (0.0, 0.0),
+            ptr_pt: (0.0, 0.0),
+            win_pt: (super::W, super::H),
             tacc: 0.0,
             tlast: 0.0,
             gdx: 0.0,
@@ -388,6 +411,92 @@ fn fmt_slot(n: usize, v: f32) -> String {
 impl<'a> Gui<'a> {
     fn sel(&self) -> usize {
         (self.env.params.sel_band.load(Ordering::Relaxed).max(0) as usize).min(2)
+    }
+
+    // ------------------------------------------------------------------ window size
+    fn cur_scale(&self) -> f32 {
+        self.env.params.editor_state.size().0 as f32 / super::W
+    }
+
+    /// Ask the host to resize the editor to `scale` x the base size (aspect locked).
+    fn request_scale(&mut self, scale: f32) {
+        let sc = scale.clamp(SIZES[0], SIZES[SIZES.len() - 1]);
+        if (sc - self.cur_scale()).abs() > 0.001 {
+            self.env.params.editor_state.set_requested_size(((super::W * sc).round() as u32, (super::H * sc).round() as u32));
+        }
+    }
+
+    fn open_size_menu(&mut self, x: f32, y: f32) {
+        let items = SIZES.iter().map(|v| format!("{:.0}%", v * 100.0)).collect();
+        let cur = SIZES.iter().position(|v| (v - self.cur_scale()).abs() < 0.13).unwrap_or(0);
+        self.menu = Some(Menu { kind: MenuKind::Size, x, y, items, checked: cur as i32, scroll: 0 });
+    }
+
+    /// Bottom-right grip: drag = aspect-locked resize in 25% steps, right-click = size menu.
+    fn resize_grip(&mut self) {
+        let (gx, gy, gw, gh) = (super::W - 16.0, super::H - 16.0, 16.0, 16.0);
+        let hv = self.hit(gx, gy, gw, gh);
+        if hv && self.kit.press && self.kit.act == 0 {
+            self.resizing = true;
+            // distance from the pointer to the window's bottom-right corner, in window points
+            self.resize_off = (self.win_pt.0 - self.ptr_pt.0, self.win_pt.1 - self.ptr_pt.1);
+            self.kit.press = false;
+        }
+        if hv && self.kit.rpress {
+            self.open_size_menu(gx - 40.0, gy - 90.0);
+            self.kit.rpress = false;
+        }
+        if self.resizing {
+            if self.kit.down {
+                // Absolute target (pointer + fixed corner offset), independent of the lagging render scale. Only issue a new
+                // request once the host window has caught up with the last one, otherwise stale pointer/size pairs make the
+                // target overshoot and the window loops.
+                let (cw, _) = self.env.params.editor_state.size();
+                if (self.win_pt.0 - cw as f32).abs() < 1.5 {
+                    let w = (self.ptr_pt.0 + self.resize_off.0) / super::W;
+                    let h = (self.ptr_pt.1 + self.resize_off.1) / super::H;
+                    self.request_scale((w.min(h) * 4.0).round() / 4.0);
+                }
+            } else {
+                self.resizing = false;
+            }
+        }
+        self.set_dk(1.0);
+        self.setc(self.resizing);
+        for o in [4.0, 8.0, 12.0] {
+            self.cv.line(super::W - 1.0, super::H - 1.0 - o, super::W - 1.0 - o, super::H - 1.0);
+        }
+        self.setc(false);
+    }
+
+    /// Header preset bar (save icon | name | prev next) and the window-scale button. Layout only for now: the preset
+    /// controls are drawn but not wired.
+    fn preset_bar(&mut self) {
+        let (y, h) = (8.0, 16.0);
+        let _ = self.btn(152.0, y, 26.0, h, "", 0);
+        self.setc(false);
+        self.cv.boxr(160.0, y + 3.0, 10.0, 10.0);
+        self.cv.fill(163.0, y + 3.0, 4.0, 3.0);
+        self.cv.boxr(162.0, y + 8.0, 6.0, 5.0);
+        self.setc(false);
+        self.cv.boxr(178.0, y, 120.0, h);
+        self.cv.set_font(2);
+        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 120.0, "-- INIT --");
+        for (i, dir) in [(0, -1), (1, 1)] {
+            let x = 298.0 + i as f32 * 25.0;
+            let _ = self.btn(x, y, 25.0, h, "", 0);
+            self.setc(false);
+            let (cx, cy) = (x + 12.5, y + h * 0.5);
+            if dir < 0 {
+                self.cv.tri((cx + 2.0, cy - 3.0), (cx + 2.0, cy + 3.0), (cx - 2.0, cy));
+            } else {
+                self.cv.tri((cx - 2.0, cy - 3.0), (cx - 2.0, cy + 3.0), (cx + 2.0, cy));
+            }
+        }
+        let label = format!("{:.0}%", self.cur_scale() * 100.0);
+        if self.btn(354.0, y, 42.0, h, &label, 0) {
+            self.open_size_menu(354.0, y + h);
+        }
     }
 
     fn select_band(&mut self, b: usize) {
@@ -580,11 +689,12 @@ impl<'a> Gui<'a> {
         let inv = [1.0 - ac[0], 1.0 - ac[1], 1.0 - ac[2]];
         self.setc(false);
         self.cv.boxr(x, y, w, h);
+        let mut prev: Option<f32> = None;
         for i in 0..n {
             let (ho, hd) = (hh(co[i]), hh(cd[i]));
             let (lo, hi) = (ho.min(hd), ho.max(hd));
             self.setc(false);
-            if lo > 0.0 {
+            if FFT_SOLID_FILL && lo > 0.0 {
                 self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - lo, 1.0, lo);
             }
             if hi > lo {
@@ -596,6 +706,16 @@ impl<'a> Gui<'a> {
                 }
                 self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - hi, 1.0, hi - lo);
             }
+            if !FFT_SOLID_FILL {
+                // white stroke along the output spectrum, joined to its neighbour so steep edges stay connected
+                self.setc(false);
+                let (a, b) = match prev {
+                    Some(p) => (p.min(ho), p.max(ho)),
+                    None => (ho, ho),
+                };
+                self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - b, 1.0, (b - a).max(1.0));
+            }
+            prev = Some(ho);
         }
         self.setc(false);
     }
@@ -680,7 +800,7 @@ impl<'a> Gui<'a> {
         let open = |s: &mut Self| {
             let items = SHAPER_NAMES.iter().map(|s| s.to_string()).collect();
             let band = s.sel();
-            s.menu = Some(Menu { x, y: y + h, items, checked: sel, scroll: 0, band });
+            s.menu = Some(Menu { kind: MenuKind::Shape(band), x, y: y + h, items, checked: sel, scroll: 0 });
         };
         if hv && self.kit.rpress {
             open(self);
@@ -723,7 +843,7 @@ impl<'a> Gui<'a> {
         let Some((x, y, mw, mh, rows)) = self.menu_geom() else { return };
         let inside = self.hit(x, y, mw, mh);
         let row = ((self.kit.my - y - 1.0) / MENU_ROW_H).floor() as i32;
-        let mut chosen: Option<(usize, i32)> = None;
+        let mut chosen: Option<(MenuKind, i32)> = None;
         let mut close = false;
         let (wheel, press, rpress) = (self.kit.wheel, self.kit.press, self.kit.rpress);
         if let Some(m) = self.menu.as_mut() {
@@ -733,7 +853,7 @@ impl<'a> Gui<'a> {
             }
             if press {
                 if inside && row >= 0 && (row as usize) < rows {
-                    chosen = Some((m.band, (m.scroll + row as usize) as i32));
+                    chosen = Some((m.kind, (m.scroll + row as usize) as i32));
                 }
                 close = true;
             }
@@ -743,8 +863,11 @@ impl<'a> Gui<'a> {
         }
         if close || chosen.is_some() {
             self.menu = None;
-            if let Some((band, id)) = chosen {
-                self.click_set(band_base(band) + SHAPE, id as f32);
+            if let Some((kind, id)) = chosen {
+                match kind {
+                    MenuKind::Shape(band) => self.click_set(band_base(band) + SHAPE, id as f32),
+                    MenuKind::Size => self.request_scale(SIZES[(id as usize).min(SIZES.len() - 1)]),
+                }
             }
         }
         // a menu swallows every click and wheel turn while it is open
@@ -1002,8 +1125,8 @@ impl<'a> Gui<'a> {
     /// the four slope steps of a crossover as one button group (12 / 24 / 48 / 96 dB per octave)
     fn slope_buttons(&mut self, n: usize, x: f32, y: f32) {
         let cur = (self.sget(n) + 0.5).floor() as i32;
-        for (i, l) in ["12dB", "24dB", "48dB", "96dB"].iter().enumerate() {
-            if self.btn(x + 35.0 * i as f32, y, 35.0, 16.0, l, (cur == i as i32) as u8) {
+        for (i, l) in ["12", "24", "48", "96"].iter().enumerate() {
+            if self.btn(x + RW / 4.0 * i as f32, y, RW / 4.0, 16.0, l, (cur == i as i32) as u8) {
                 self.click_set(n, i as f32);
             }
         }
@@ -1042,23 +1165,24 @@ impl<'a> Gui<'a> {
         let (f1, f2) = (self.env.dsp.x1 as f32, (self.env.dsp.x2 as f32).max(self.env.dsp.x1 as f32 * 1.05));
         let ranges = [(20.0, f1), (f1, f2), (f2, 20000.0)];
         for b in 0..3 {
-            let x = VX + 138.0 * b as f32;
+            let tw = (VW - 96.0) / 3.0;
+            let x = VX + tw * b as f32;
             let base = band_base(b);
             let on = self.sget(base + ON) > 0.5;
             self.sq_tog(base + ON, x + 7.0, y + 4.0, 8.0);
             let label = format!("{} {}-{}", BAND_NAMES[b], hz(ranges[b].0), hz(ranges[b].1));
             self.set_dk(1.0);
-            if self.btn(x, y, 138.0, 16.0, &label, (b == sel) as u8) {
+            if self.btn(x, y, tw, 16.0, &label, (b == sel) as u8) {
                 self.select_band(b);
             }
             self.sqind(x + 7.0, y + 4.0, 8.0, on, b == sel, !on);
         }
         let base = band_base(sel);
         let (d, s) = (self.sget(base + DELTA) > 0.5, self.sget(base + SOLO) > 0.5);
-        if self.btn(VX + 3.0 * 138.0, y, 48.0, 16.0, "DELTA", if d { 2 } else { 0 }) {
+        if self.btn(VX + VW - 96.0, y, 48.0, 16.0, "DELTA", if d { 2 } else { 0 }) {
             self.click_set(base + DELTA, if d { 0.0 } else { 1.0 });
         }
-        if self.btn(VX + 3.0 * 138.0 + 48.0, y, 48.0, 16.0, "SOLO", if s { 2 } else { 0 }) {
+        if self.btn(VX + VW - 48.0, y, 48.0, 16.0, "SOLO", if s { 2 } else { 0 }) {
             self.click_set(base + SOLO, if s { 0.0 } else { 1.0 });
         }
 
@@ -1068,14 +1192,16 @@ impl<'a> Gui<'a> {
         let b = self.sel();
         let o = band_base(b);
         let rows = [y0, y0 + CELL_P, y0 + 2.0 * CELL_P, y0 + 3.0 * CELL_P];
-        let sat_w = 2.0 * CELL_W + 6.0;
-        let (sat_x, meter_x) = (VX + sat_w + 6.0, VX + sat_w + 6.0 + CELL_W + 6.0);
-        let col0 = meter_x + 30.0 + 6.0;
         let ph = 3.0 * CELL_P + CELL_H;
-        // saturator: shape selector, drive row, transfer plot
+        // saturator module: the transfer plot is square (rows 2-4), selector and drive row above it
+        let sat_w = ph - CELL_P;
+        let sat_x = VX + sat_w + 6.0;
+        // compressor section sits flush right (GR meter + three columns); what is left over is the gap to the saturator
+        let col0 = VX + VW - (3.0 * CELL_W + 12.0);
+        let meter_x = col0 - 6.0 - 30.0;
         self.shape_selector(o + SHAPE, VX, y0, sat_w, 22.0);
         self.cell1(o + DRIVE, VX, y0 + 22.0, sat_w, 22.0, "DRIVE");
-        self.draw_sat_plot(VX, y0 + CELL_P, sat_w, ph - CELL_P);
+        self.draw_sat_plot(VX, y0 + CELL_P, sat_w, sat_w);
         self.cell(o + BIAS, sat_x, rows[0], CELL_W, CELL_H, "BIAS");
         self.cell(o + TONE, sat_x, rows[1], CELL_W, CELL_H, "TONE");
         self.cell(o + SAT_MIX, sat_x, rows[2], CELL_W, CELL_H, "SAT MIX");
@@ -1357,11 +1483,11 @@ impl<'a> Gui<'a> {
     /// the five EQ band toggles: type name while on, "EQ n" while off
     fn eq_row(&mut self, y: f32) {
         for b in 0..5 {
-            let x = VX + 82.0 * b as f32;
+            let x = VX + EQ_P * b as f32;
             let on = self.sget(eq_base(b)) > 0.5;
             let ty = (self.sget(eq_base(b) + 1) + 0.5).floor() as i32;
             let label = if on { KIND_NAMES[eq_kind(b, ty) as usize].to_string() } else { format!("EQ {}", b + 1) };
-            if self.btn(x, y, 78.0, 16.0, &label, on as u8) {
+            if self.btn(x, y, EQ_W, 16.0, &label, on as u8) {
                 self.eq_sel = b;
                 if self.dbl(150 + b as i32) {
                     self.reset_eq_band(b);
@@ -1371,57 +1497,57 @@ impl<'a> Gui<'a> {
             }
         }
         let d = self.rd_eq_diff;
-        self.diff_row(VX + 82.0 * 5.0, y, 98.0, 16.0, "EQ IN>OUT", d);
+        self.diff_row(VX + EQ_P * 5.0, y, EQ_PW, 16.0, "EQ IN>OUT", d);
     }
 
     fn eq_cells(&mut self, y0: f32) {
         for b in 0..5 {
-            let x = VX + 82.0 * b as f32;
+            let x = VX + EQ_P * b as f32;
             let o = eq_base(b);
             let on = self.sget(o) > 0.5;
             self.set_dk(if on { 1.0 } else { 0.5 });
             // type glyph grid (2 x 3)
             let ty = (self.sget(o + 1) + 0.5).floor() as i32;
             self.setc(false);
-            self.cv.boxr(x, y0, 78.0, CELL_H);
+            self.cv.boxr(x, y0, EQ_W, CELL_H);
             // stroke lines between the six type buttons
-            self.cv.fill(x, y0 + 22.0, 78.0, 1.0);
-            self.cv.fill(x + 26.0, y0, 1.0, CELL_H);
-            self.cv.fill(x + 52.0, y0, 1.0, CELL_H);
+            self.cv.fill(x, y0 + 22.0, EQ_W, 1.0);
+            self.cv.fill((x + EQ_W / 3.0).floor(), y0, 1.0, CELL_H);
+            self.cv.fill((x + EQ_W * 2.0 / 3.0).floor(), y0, 1.0, CELL_H);
             for t in 0..6usize {
-                let (gx, gy) = (x + 1.0 + (t % 3) as f32 * 26.0, y0 + 1.0 + (t / 3) as f32 * 22.0);
+                let (gx, gy) = (x + 1.0 + (t % 3) as f32 * EQ_W / 3.0, y0 + 1.0 + (t / 3) as f32 * 22.0);
                 let cur = t as i32 == ty;
-                if self.hit(gx, gy, 25.0, 21.0) && self.kit.press && self.kit.act == 0 {
+                if self.hit(gx, gy, EQ_W / 3.0 - 1.0, 21.0) && self.kit.press && self.kit.act == 0 {
                     self.click_set(o + 1, t as f32);
                     self.kit.press = false;
                 }
                 self.setc(false);
                 if cur {
-                    self.cv.fill(gx, gy, 25.0, 21.0);
+                    self.cv.fill(gx, gy, EQ_W / 3.0 - 1.0, 21.0);
                     self.cv.setbg();
                 }
-                self.eq_glyph(EQ_KINDS[b][t], gx + 12.5, gy + 10.5);
+                self.eq_glyph(EQ_KINDS[b][t], gx + EQ_W / 6.0, gy + 10.5);
                 self.setc(false);
             }
-            self.cell(o + 3, x, y0 + CELL_P, 78.0, CELL_H, "Q");
-            self.cell(o + 2, x, y0 + 2.0 * CELL_P, 78.0, CELL_H, "FREQ");
+            self.cell(o + 3, x, y0 + CELL_P, EQ_W, CELL_H, "Q");
+            self.cell(o + 2, x, y0 + 2.0 * CELL_P, EQ_W, CELL_H, "FREQ");
             if matches!(eq_kind(b, ty), 2 | 3 | 4) {
-                self.cell(o + 4, x, y0 + 3.0 * CELL_P, 78.0, CELL_H, "GAIN");
+                self.cell(o + 4, x, y0 + 3.0 * CELL_P, EQ_W, CELL_H, "GAIN");
             } else {
                 self.setc(false);
-                self.cv.boxr(x, y0 + 3.0 * CELL_P, 78.0, CELL_H);
+                self.cv.boxr(x, y0 + 3.0 * CELL_P, EQ_W, CELL_H);
                 self.cv.set_font(1);
                 self.cv.text(x + 3.0, y0 + 3.0 * CELL_P + 3.0, "GAIN");
                 self.cv.set_font(2);
-                self.cv.textc(x, y0 + 3.0 * CELL_P + (CELL_H * 0.4 + 1.0).floor(), 78.0, "---");
+                self.cv.textc(x, y0 + 3.0 * CELL_P + (CELL_H * 0.4 + 1.0).floor(), EQ_W, "---");
             }
         }
         self.set_dk(1.0);
-        let x = VX + 82.0 * 5.0;
-        self.cell(EQ_PIVOT, x, y0, 98.0, CELL_H, "PIVOT");
-        self.cell(EQ_TILT, x, y0 + CELL_P, 98.0, CELL_H, "TILT");
-        self.cell(EQ_MIX, x, y0 + 2.0 * CELL_P, 98.0, CELL_H, "EQ MIX");
-        self.cell_o(EQ_GAIN, x, y0 + 3.0 * CELL_P, 98.0, CELL_H, "EQ GAIN");
+        let x = VX + EQ_P * 5.0;
+        self.cell(EQ_PIVOT, x, y0, EQ_PW, CELL_H, "PIVOT");
+        self.cell(EQ_TILT, x, y0 + CELL_P, EQ_PW, CELL_H, "TILT");
+        self.cell(EQ_MIX, x, y0 + 2.0 * CELL_P, EQ_PW, CELL_H, "EQ MIX");
+        self.cell_o(EQ_GAIN, x, y0 + 3.0 * CELL_P, EQ_PW, CELL_H, "EQ GAIN");
     }
 
     // ------------------------------------------------------------------ frame
@@ -1470,44 +1596,37 @@ impl<'a> Gui<'a> {
         let eq_byp = self.sget(EQ_BYPASS) > 0.5;
         let band_on = self.sget(band_base(self.sel()) + ON) > 0.5;
 
-        // ---------- header
+        self.resize_grip();
+
+        // ---------- header: logo, title, preset bar, sidechain (not wired yet), EQ page toggle, output meter
         self.set_dk(1.0);
         self.logo(13.0, 5.0);
         self.setc(false);
         self.cv.set_font(2);
         let title = format!("SATXCOMP {}", version_short());
         self.cv.text(44.0, 12.0, &title);
-        self.out_meter(RX, 8.0, RW, 16.0);
-
-        // ---------- tab row
-        self.set_dk(if byp { 0.5 } else { 1.0 });
-        let os_i = (self.sget(3) + 0.5).floor() as i32;
-        for i in 0..3 {
-            let l = ["x1", "x2", "x4"][i as usize];
-            if self.btn(10.0 + i as f32 * 40.0, 34.0, 40.0, 16.0, l, (os_i == i) as u8) {
-                self.click_set(3, i as f32);
-            }
-        }
-        self.set_dk(1.0);
+        self.preset_bar();
+        let _ = self.btn(402.0, 8.0, 76.0, 16.0, "SIDECHAIN", 0);
         {
             // EQ page toggle; the square in it bypasses the whole EQ module (X = bypassed, like SatComp)
             let eq = self.env.dsp.eq;
             let eq_any = eq.bands.iter().any(|b| b.on) || eq.tilt != 0.0 || eq.gain != 0.0;
-            self.sq_tog(EQ_BYPASS, 150.0, 38.0, 8.0);
-            if self.btn(140.0, 34.0, 70.0, 16.0, "EQ", self.eq_page as u8) {
+            self.sq_tog(EQ_BYPASS, 494.0, 12.0, 8.0);
+            if self.btn(484.0, 8.0, 56.0, 16.0, "EQ", self.eq_page as u8) {
                 self.eq_page = !self.eq_page;
             }
-            self.sqind(150.0, 38.0, 8.0, eq_any, self.eq_page, eq_byp);
+            self.sqind(494.0, 12.0, 8.0, eq_any, self.eq_page, eq_byp);
         }
+        self.out_meter(RX, 8.0, RW, 16.0);
+
+        // ---------- viewport row; right column: delta / bypass, levels, then the parameter group on the bottom edge
         let delta = sh.delta_on.load(Ordering::Relaxed);
-        if self.btn(RX, 34.0, 70.0, 16.0, "DELTA", if delta { 2 } else { 0 }) {
+        if self.btn(RX, VY, RW * 0.5, 16.0, "DELTA", if delta { 2 } else { 0 }) {
             sh.delta_on.store(!delta, Ordering::Relaxed);
         }
-        if self.btn(RX + 70.0, 34.0, 70.0, 16.0, "BYPASS", byp as u8) {
+        if self.btn(RX + RW * 0.5, VY, RW * 0.5, 16.0, "BYPASS", byp as u8) {
             self.click_set(8, if byp { 0.0 } else { 1.0 });
         }
-
-        // ---------- viewport row
         self.set_dk(if byp || (self.eq_page && eq_byp) { 0.5 } else { 1.0 });
         if self.eq_page {
             self.draw_eq(VX, VY, VW, VH);
@@ -1516,22 +1635,34 @@ impl<'a> Gui<'a> {
             self.draw_crossover(VX, VY, VW, VH);
         }
         self.set_dk(1.0);
-        // right column: levels, crossover frequency and slope
         self.cv.set_font(1);
         self.setc(false);
         let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
         self.setc(self.rd_pk > 0.9999);
-        self.cv.text(RX, VY + 2.0, "PK");
-        self.cv.textr(RX, VY + 2.0, RW, &s1);
+        self.cv.text(RX, VY + 22.0, "PK");
+        self.cv.textr(RX, VY + 22.0, RW, &s1);
         self.setc(false);
         let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
-        self.cv.text(RX, VY + 14.0, "RMS");
-        self.cv.textr(RX, VY + 14.0, RW, &s1);
-        // each crossover: frequency row with its slope switcher flush underneath
-        self.cell1(1, RX, VY + 30.0, RW, 16.0, "X-OVER 1");
-        self.slope_buttons(X1_SLOPE, RX, VY + 46.0);
-        self.cell1(2, RX, VY + 68.0, RW, 16.0, "X-OVER 2");
-        self.slope_buttons(X2_SLOPE, RX, VY + 84.0);
+        self.cv.text(RX, VY + 34.0, "RMS");
+        self.cv.textr(RX, VY + 34.0, RW, &s1);
+        // parameter group, evenly spaced and aligned to the viewport's bottom edge: crossover 1, crossover 2, oversampling
+        let bottom = VY + VH;
+        let os_y = bottom - 16.0;
+        let x2_y = os_y - 6.0 - 32.0;
+        let x1_y = x2_y - 6.0 - 32.0;
+        self.cell1(1, RX, x1_y, RW, 16.0, "X-OVR1");
+        self.slope_buttons(X1_SLOPE, RX, x1_y + 16.0);
+        self.cell1(2, RX, x2_y, RW, 16.0, "X-OVR2");
+        self.slope_buttons(X2_SLOPE, RX, x2_y + 16.0);
+        self.set_dk(if byp { 0.5 } else { 1.0 });
+        let os_i = (self.sget(3) + 0.5).floor() as i32;
+        for i in 0..3 {
+            let l = ["x1", "x2", "x4"][i as usize];
+            if self.btn(RX + i as f32 * RW / 3.0, os_y, RW / 3.0, 16.0, l, (os_i == i) as u8) {
+                self.click_set(3, i as f32);
+            }
+        }
+        self.set_dk(1.0);
 
         // ---------- band row, band cells, output column
         if self.eq_page {

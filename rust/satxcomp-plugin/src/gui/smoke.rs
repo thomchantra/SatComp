@@ -118,22 +118,22 @@ fn script() -> (u64, Vec<String>) {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.click(70.0, 42.0); // oversampling x2
-    r.click(110.0, 42.0); // oversampling x4
+    r.click(610.0, 176.0); // oversampling x2 (right column, bottom row)
+    r.click(650.0, 176.0); // oversampling x4
     r.drag(41.0, 245.0, 41.0, 220.0); // DRIVE row of the selected band
     r.click(200.0, 198.0); // band row: select MID (click on the tab)
     r.drag(41.0, 245.0, 41.0, 230.0); // DRIVE of MID
     r.drag(100.0, 100.0, 150.0, 100.0); // viewport: grab a crossover line / marker area
     r.click(350.0, 198.0); // band row: HI tab
-    r.click(447.0, 198.0); // DELTA of the band
-    r.click(495.0, 198.0); // SOLO of the band
-    r.click(175.0, 42.0); // EQ page
+    r.click(468.0, 198.0); // DELTA of the band
+    r.click(516.0, 198.0); // SOLO of the band
+    r.click(512.0, 16.0); // EQ page (header)
     r.drag(60.0, 120.0, 90.0, 80.0); // EQ node
     r.click(300.0, 198.0); // EQ band toggle
     r.drag(50.0, 282.0, 50.0, 257.0); // an EQ cell
     r.click(50.0, 223.0); // type glyph
-    r.click(175.0, 42.0); // back to the main page
-    r.click(630.0, 42.0); // BYPASS
+    r.click(512.0, 16.0); // back to the main page
+    r.click(640.0, 42.0); // BYPASS
     (r.hash, r.log())
 }
 
@@ -160,16 +160,16 @@ fn eq_page_cells_above_slot_100_can_be_dragged() {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.click(175.0, 42.0); // EQ page
+    r.click(512.0, 16.0); // EQ page
     // (x, y, drag dy, parameter that must be written): cells start at y 212, 48 apart; EQ mix sits at its maximum
     for (x, y, dy, name) in [
-        (470.0, 234.0, -25.0, "EQ Pivot"),
-        (470.0, 282.0, -25.0, "EQ Tilt"),
-        (470.0, 330.0, 25.0, "EQ Mix"),
-        (470.0, 378.0, -25.0, "EQ Gain"),
-        (210.0, 282.0, -25.0, "EQ3 Q"),
-        (210.0, 330.0, -25.0, "EQ3 Freq"),
-        (377.0, 378.0, -25.0, "EQ5 Gain"),
+        (490.0, 234.0, -25.0, "EQ Pivot"),
+        (490.0, 282.0, -25.0, "EQ Tilt"),
+        (490.0, 330.0, 25.0, "EQ Mix"),
+        (490.0, 378.0, -25.0, "EQ Gain"),
+        (222.0, 282.0, -25.0, "EQ3 Q"),
+        (222.0, 330.0, -25.0, "EQ3 Freq"),
+        (394.0, 378.0, -25.0, "EQ5 Gain"),
     ] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
@@ -177,42 +177,46 @@ fn eq_page_cells_above_slot_100_can_be_dragged() {
         assert!(new.iter().any(|l| l.starts_with(name)), "dragging the {name} cell wrote nothing: {new:?}");
         assert!(new.iter().all(|l| l.starts_with(name)), "dragging the {name} cell also wrote other parameters: {new:?}");
     }
-    // an EQ node drag must only move that node's own freq and gain (EQ2 sits at 200 Hz on the 0 dB line, x ~180, y 120)
+    // an EQ node drag must only move that node's own freq and gain (EQ2 sits at 200 Hz on the 0 dB line, x ~187, y 109)
     let n0 = r.log().len();
-    r.drag(180.0, 120.0, 240.0, 90.0);
+    r.drag(187.0, 109.0, 247.0, 79.0);
     let new: Vec<String> = r.log()[n0..].to_vec();
     assert!(new.iter().any(|l| l.starts_with("EQ2 Freq")) && new.iter().any(|l| l.starts_with("EQ2 Gain")), "{new:?}");
     assert!(new.iter().all(|l| l.starts_with("EQ2 ")), "an EQ node drag wrote other parameters: {new:?}");
 }
 
-/// The controls that moved or appeared in the 680 x 410 layout all reach the host.
+/// The controls of the 680 x 410 layout all reach the host.
 #[test]
 fn main_page_controls_of_the_wide_layout_write_parameters() {
     let mut r = Rig::new();
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    // (x, y, drag dy, parameter): X-OVER rows are 16 high at y 86 / 124, L.AHEAD is the small row at the end of the band row
-    for (x, y, dy, name) in [(600.0, 94.0, -25.0, "X-Over 1"), (600.0, 132.0, -25.0, "X-Over 2"), (600.0, 198.0, -25.0, "Lookahead")] {
+    // (x, y, drag dy, parameter): the crossover rows are 16 high at y 92 / 130, L.AHEAD is the small row at the end of the band row
+    for (x, y, dy, name) in [(600.0, 100.0, -25.0, "X-Over 1"), (600.0, 138.0, -25.0, "X-Over 2"), (600.0, 198.0, -25.0, "Lookahead")] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
         let new: Vec<String> = r.log()[n0..].to_vec();
         assert!(new.iter().any(|l| l.starts_with(name)), "dragging {name} wrote nothing: {new:?}");
         assert!(new.iter().all(|l| l.starts_with(name)), "dragging {name} also wrote other parameters: {new:?}");
     }
-    // slope buttons: 12 / 24 / 48 / 96 dB under each crossover, 35 wide from x 530
-    for (x, y, name) in [(617.0, 110.0, "X-Slope 1"), (547.0, 148.0, "X-Slope 2")] {
+    // slope buttons: 12 / 24 / 48 / 96, 30 wide from x 550, under each crossover
+    for (x, y, name) in [(625.0, 116.0, "X-Slope 1"), (565.0, 154.0, "X-Slope 2")] {
         let n0 = r.log().len();
         r.click(x, y);
         let new: Vec<String> = r.log()[n0..].to_vec();
         assert!(new.iter().any(|l| l.starts_with(name)) && new.iter().all(|l| l.starts_with(name)), "clicking a {name} button: {new:?}");
     }
+    // oversampling lives under the crossover group
+    let n0 = r.log().len();
+    r.click(610.0, 176.0);
+    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Sat Oversampling")));
     // band cells: THRESH of the selected (low) band, SAT GAIN, and the OUT column
     for (x, y, dy, name) in [
-        (323.0, 234.0, -25.0, "Lo Thresh"),
-        (207.0, 378.0, -25.0, "Lo Sat Gain"),
-        (600.0, 378.0, -25.0, "Out Gain"),
-        (600.0, 330.0, 25.0, "Mix"),
+        (343.0, 234.0, -25.0, "Lo Thresh"),
+        (193.0, 378.0, -25.0, "Lo Sat Gain"),
+        (610.0, 378.0, -25.0, "Out Gain"),
+        (610.0, 330.0, 25.0, "Mix"),
     ] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
@@ -220,6 +224,26 @@ fn main_page_controls_of_the_wide_layout_write_parameters() {
         assert!(new.iter().any(|l| l.starts_with(name)), "dragging {name} wrote nothing: {new:?}");
         assert!(new.iter().all(|l| l.starts_with(name)), "dragging {name} also wrote other parameters: {new:?}");
     }
+}
+
+/// Header: the preset bar and SIDECHAIN are layout only (no parameter writes), the scale button opens the size menu.
+#[test]
+fn header_preset_layout_is_inert_and_scale_menu_opens() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    let n0 = r.log().len();
+    for (x, y) in [(165.0, 16.0), (240.0, 16.0), (310.0, 16.0), (335.0, 16.0), (440.0, 16.0)] {
+        r.click(x, y); // save icon, name, prev, next, SIDECHAIN
+    }
+    assert!(r.log()[n0..].is_empty(), "preset bar / sidechain must not write parameters: {:?}", &r.log()[n0..]);
+    // the scale button opens a menu; clicking an entry must not touch parameters and a click elsewhere closes it
+    r.click(375.0, 16.0);
+    r.click(380.0, 24.0 + 1.0 + 14.0 * 2.0 + 7.0);
+    r.click(375.0, 16.0);
+    r.click(300.0, 300.0);
+    assert!(r.log()[n0..].is_empty(), "scale menu must not write parameters: {:?}", &r.log()[n0..]);
 }
 
 /// EQ page: the dashed pivot line and empty space drive pivot and tilt, double-click resets a band.
@@ -229,14 +253,14 @@ fn eq_viewport_pivot_tilt_and_band_reset() {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.click(175.0, 42.0); // EQ page
-    // the 600 Hz pivot line sits at x ~261 on the 508-wide log axis
+    r.click(512.0, 16.0); // EQ page
+    // the 600 Hz pivot line sits at x ~271 on the 528-wide log axis
     let n0 = r.log().len();
-    r.drag(261.0, 70.0, 300.0, 70.0);
+    r.drag(271.0, 60.0, 310.0, 60.0);
     let new: Vec<String> = r.log()[n0..].to_vec();
     assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("EQ Pivot")), "pivot line drag: {new:?}");
     let n0 = r.log().len();
-    r.drag(400.0, 70.0, 450.0, 70.0);
+    r.drag(450.0, 60.0, 500.0, 60.0);
     let new: Vec<String> = r.log()[n0..].to_vec();
     assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("EQ Tilt")), "sideways drag in empty space = tilt: {new:?}");
     // double-click on an EQ band toggle puts the whole band back (on, type, freq, Q, gain)
@@ -280,7 +304,7 @@ fn saturator_module_dropdown_plot_gain_and_curve_drawing() {
     assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("Lo Sat Gain")), "plot drag: {new:?}");
     // pencil: selects Custom and opens the draw view; a click adds a point, three clicks on it remove it again
     let n0 = r.log().len();
-    r.click(156.0, 268.0);
+    r.click(142.0, 268.0);
     let new: Vec<String> = r.log()[n0..].to_vec();
     assert!(new.len() == 1 && new[0].starts_with("Lo Shape 1.000"), "pencil should select the Custom shaper: {new:?}");
     assert_eq!(r.params.curve_lo.lock().len(), 2);
@@ -292,7 +316,7 @@ fn saturator_module_dropdown_plot_gain_and_curve_drawing() {
     assert_eq!(r.params.curve_lo.lock().len(), 2, "double-click removes the point");
     // the draw view edits the band that is selected
     r.click(200.0, 198.0); // MID tab
-    r.click(156.0, 268.0);
+    r.click(142.0, 268.0);
     r.click(80.0, 330.0);
     assert_eq!(r.params.curve_mid.lock().len(), 3);
     assert_eq!(r.params.curve_lo.lock().len(), 2);
