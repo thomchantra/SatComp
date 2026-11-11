@@ -63,7 +63,7 @@ impl Rig {
         }
         self.shared.tap_out.w.store(8192, std::sync::atomic::Ordering::Relaxed);
         self.shared.tap_dry.w.store(8192, std::sync::atomic::Ordering::Relaxed);
-        let raw = RawInput { time: Some(self.t), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(840.0, 576.0))), events, ..Default::default() };
+        let raw = RawInput { time: Some(self.t), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1020.0, 720.0))), events, ..Default::default() };
         let setter = ParamSetter::new(&*self.host);
         let (p, sh) = (self.params.clone(), self.shared.clone());
         let st = &mut self.st;
@@ -112,20 +112,20 @@ fn script() -> (u64, Vec<String>) {
     }
     r.click(70.0, 42.0); // oversampling x2
     r.click(110.0, 42.0); // oversampling x4
-    r.drag(41.0, 255.0, 41.0, 230.0); // DRIVE of the selected band
-    r.click(200.0, 198.0); // band row: select MID (click on the tab)
-    r.drag(41.0, 255.0, 41.0, 240.0); // DRIVE of MID
+    r.drag(41.0, 310.0, 41.0, 285.0); // DRIVE row of the selected band
+    r.click(200.0, 268.0); // band row: select MID (click on the tab)
+    r.drag(41.0, 310.0, 41.0, 295.0); // DRIVE of MID
     r.drag(100.0, 100.0, 150.0, 100.0); // viewport: grab a crossover line / marker area
-    r.click(400.0, 198.0); // band row: HI tab
-    r.click(470.0, 198.0); // DELTA of the band
-    r.click(520.0, 198.0); // SOLO of the band
+    r.click(350.0, 268.0); // band row: HI tab
+    r.click(450.0, 268.0); // DELTA of the band
+    r.click(496.0, 268.0); // SOLO of the band
     r.click(175.0, 42.0); // EQ page
     r.drag(60.0, 120.0, 90.0, 80.0); // EQ node
-    r.click(300.0, 198.0); // EQ band toggle
-    r.drag(75.0, 330.0, 75.0, 300.0); // an EQ cell
-    r.click(50.0, 225.0); // type glyph
+    r.click(300.0, 268.0); // EQ band toggle
+    r.drag(50.0, 352.0, 50.0, 327.0); // an EQ cell
+    r.click(50.0, 291.0); // type glyph
     r.click(175.0, 42.0); // back to the main page
-    r.click(520.0, 42.0); // BYPASS
+    r.click(630.0, 42.0); // BYPASS
     (r.hash, r.log())
 }
 
@@ -153,15 +153,15 @@ fn eq_page_cells_above_slot_100_can_be_dragged() {
         r.frame(vec![]);
     }
     r.click(175.0, 42.0); // EQ page
-    // (x, y, drag dy, parameter that must be written): cells start at y 212, 42 apart; EQ mix sits at its maximum
+    // (x, y, drag dy, parameter that must be written): cells start at y 282, 48 apart; EQ mix sits at its maximum
     for (x, y, dy, name) in [
-        (375.0, 231.0, -25.0, "EQ Pivot"),
-        (375.0, 273.0, -25.0, "EQ Tilt"),
-        (375.0, 315.0, 25.0, "EQ Mix"),
-        (375.0, 357.0, -25.0, "EQ Gain"),
-        (175.0, 273.0, -25.0, "EQ3 Q"),
-        (175.0, 315.0, -25.0, "EQ3 Freq"),
-        (307.0, 357.0, -25.0, "EQ5 Gain"),
+        (470.0, 304.0, -25.0, "EQ Pivot"),
+        (470.0, 352.0, -25.0, "EQ Tilt"),
+        (470.0, 400.0, 25.0, "EQ Mix"),
+        (470.0, 448.0, -25.0, "EQ Gain"),
+        (210.0, 352.0, -25.0, "EQ3 Q"),
+        (210.0, 400.0, -25.0, "EQ3 Freq"),
+        (377.0, 448.0, -25.0, "EQ5 Gain"),
     ] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
@@ -169,10 +169,47 @@ fn eq_page_cells_above_slot_100_can_be_dragged() {
         assert!(new.iter().any(|l| l.starts_with(name)), "dragging the {name} cell wrote nothing: {new:?}");
         assert!(new.iter().all(|l| l.starts_with(name)), "dragging the {name} cell also wrote other parameters: {new:?}");
     }
-    // an EQ node drag must only move that node's own freq and gain (EQ2 sits at 200 Hz on the 0 dB line, x ~146, y 120)
+    // an EQ node drag must only move that node's own freq and gain (EQ2 sits at 200 Hz on the 0 dB line, x ~180, y 155)
     let n0 = r.log().len();
-    r.drag(146.0, 120.0, 200.0, 90.0);
+    r.drag(180.0, 155.0, 240.0, 120.0);
     let new: Vec<String> = r.log()[n0..].to_vec();
     assert!(new.iter().any(|l| l.starts_with("EQ2 Freq")) && new.iter().any(|l| l.starts_with("EQ2 Gain")), "{new:?}");
     assert!(new.iter().all(|l| l.starts_with("EQ2 ")), "an EQ node drag wrote other parameters: {new:?}");
+}
+
+/// The controls that moved or appeared in the 680 x 480 layout all reach the host.
+#[test]
+fn main_page_controls_of_the_wide_layout_write_parameters() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    // (x, y, drag dy, parameter): X-SLOPE rows are 22 high at y 210 / 232 (a slope step is ~55 px of drag), L.AHEAD is the small row
+    // right of the band tabs, X-OVER rows sit above the slopes
+    for (x, y, dy, name) in [
+        (600.0, 221.0, -70.0, "X-Slope 1"),
+        (600.0, 243.0, -70.0, "X-Slope 2"),
+        (600.0, 268.0, -25.0, "Lookahead"),
+        (600.0, 173.0, -25.0, "X-Over 1"),
+        (600.0, 195.0, -25.0, "X-Over 2"),
+    ] {
+        let n0 = r.log().len();
+        r.drag(x, y, x, y + dy);
+        let new: Vec<String> = r.log()[n0..].to_vec();
+        assert!(new.iter().any(|l| l.starts_with(name)), "dragging {name} wrote nothing: {new:?}");
+        assert!(new.iter().all(|l| l.starts_with(name)), "dragging {name} also wrote other parameters: {new:?}");
+    }
+    // band cells: THRESH of the selected (low) band, SAT GAIN, and the OUT column
+    for (x, y, dy, name) in [
+        (323.0, 304.0, -25.0, "Lo Thresh"),
+        (207.0, 448.0, -25.0, "Lo Sat Gain"),
+        (600.0, 448.0, -25.0, "Out Gain"),
+        (600.0, 400.0, 25.0, "Mix"),
+    ] {
+        let n0 = r.log().len();
+        r.drag(x, y, x, y + dy);
+        let new: Vec<String> = r.log()[n0..].to_vec();
+        assert!(new.iter().any(|l| l.starts_with(name)), "dragging {name} wrote nothing: {new:?}");
+        assert!(new.iter().all(|l| l.starts_with(name)), "dragging {name} also wrote other parameters: {new:?}");
+    }
 }

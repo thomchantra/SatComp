@@ -49,6 +49,25 @@ const EQ_PIVOT: usize = 116;
 const EQ_MIX: usize = 117;
 const EQ_GAIN: usize = 118;
 const EQ_BYPASS: usize = 119;
+const X1_SLOPE: usize = 82;
+const X2_SLOPE: usize = 83;
+// ---- layout (logical units; the window is W x H = 680 x 480)
+/// viewport (spectrum / crossover / EQ curve)
+const VX: f32 = 10.0;
+const VY: f32 = 56.0;
+const VW: f32 = 510.0;
+const VH: f32 = 198.0;
+/// right-hand column (levels, crossover sliders, output module)
+const RX: f32 = 530.0;
+const RW: f32 = 140.0;
+/// row of band tabs / EQ band toggles under the viewport
+const BAND_Y: f32 = VY + VH + 6.0;
+/// first row of cells; four rows, CELL_P apart
+const CELLS_Y: f32 = BAND_Y + 22.0;
+const CELL_H: f32 = 44.0;
+const CELL_P: f32 = 48.0;
+/// band module cells (saturator / compressor)
+const CELL_W: f32 = 74.0;
 /// `kit.act` values: 1..VIEW_ACT are parameter slots (vertical drag, slots run to 119); VIEW_ACT and up are viewport drags
 const VIEW_ACT: i32 = 1000;
 const ACT_X1: i32 = VIEW_ACT + 1;
@@ -255,6 +274,9 @@ fn hz(v: f32) -> String {
 }
 
 fn fmt_slot(n: usize, v: f32) -> String {
+    if n == X1_SLOPE || n == X2_SLOPE {
+        return format!("{}dB", [12, 24, 48, 96][(v + 0.5).floor().clamp(0.0, 3.0) as usize]);
+    }
     if (10..82).contains(&n) {
         return match (n - 10) % 24 {
             DRIVE | SAT_MIX | SPEED | KNEE_SHAPE | DETECTOR | FF_FB | GR_DIST | COMP_MIX => format!("{:.0}%", v),
@@ -668,54 +690,60 @@ impl<'a> Gui<'a> {
         let (f1, f2) = (self.env.dsp.x1 as f32, (self.env.dsp.x2 as f32).max(self.env.dsp.x1 as f32 * 1.05));
         let ranges = [(20.0, f1), (f1, f2), (f2, 20000.0)];
         for b in 0..3 {
-            let x = 10.0 + 136.0 * b as f32;
+            let x = VX + 138.0 * b as f32;
             let base = band_base(b);
             let on = self.sget(base + ON) > 0.5;
             self.sq_tog(base + ON, x + 7.0, y + 4.0, 8.0);
             let label = format!("{} {}-{}", BAND_NAMES[b], hz(ranges[b].0), hz(ranges[b].1));
             self.set_dk(1.0);
-            if self.btn(x, y, 136.0, 16.0, &label, (b == sel) as u8) {
+            if self.btn(x, y, 138.0, 16.0, &label, (b == sel) as u8) {
                 self.select_band(b);
             }
             self.sqind(x + 7.0, y + 4.0, 8.0, on, b == sel, false);
         }
         let base = band_base(sel);
         let (d, s) = (self.sget(base + DELTA) > 0.5, self.sget(base + SOLO) > 0.5);
-        if self.btn(430.0, y, 60.0, 16.0, "DELTA", if d { 2 } else { 0 }) {
+        if self.btn(VX + 3.0 * 138.0 + 6.0, y, 44.0, 16.0, "DELTA", if d { 2 } else { 0 }) {
             self.click_set(base + DELTA, if d { 0.0 } else { 1.0 });
         }
-        if self.btn(490.0, y, 60.0, 16.0, "SOLO", if s { 2 } else { 0 }) {
+        if self.btn(VX + 3.0 * 138.0 + 50.0, y, 44.0, 16.0, "SOLO", if s { 2 } else { 0 }) {
             self.click_set(base + SOLO, if s { 0.0 } else { 1.0 });
         }
+        self.set_dk(1.0);
+        self.cell1(4, RX, y, RW, 16.0, "L.AHEAD");
     }
 
     fn band_cells(&mut self, y0: f32) {
         let b = self.sel();
         let o = band_base(b);
-        let rows = [y0, y0 + 42.0, y0 + 84.0, y0 + 126.0];
-        // saturator
-        self.shape_selector(o + SHAPE, 10.0, y0, 120.0, 16.0);
-        self.cell(o + DRIVE, 10.0, y0 + 20.0, 120.0, 38.0, "DRIVE");
-        self.draw_sat_plot(10.0, y0 + 62.0, 120.0, 102.0);
-        self.cell(o + BIAS, 136.0, rows[0], 60.0, 38.0, "BIAS");
-        self.cell(o + TONE, 136.0, rows[1], 60.0, 38.0, "TONE");
-        self.cell(o + SAT_MIX, 136.0, rows[2], 60.0, 38.0, "SAT MIX");
-        self.cell_o(o + SAT_GAIN, 136.0, rows[3], 60.0, 38.0, "SAT GAIN");
+        let rows = [y0, y0 + CELL_P, y0 + 2.0 * CELL_P, y0 + 3.0 * CELL_P];
+        let sat_w = 2.0 * CELL_W + 6.0;
+        let (sat_x, meter_x) = (VX + sat_w + 6.0, VX + sat_w + 6.0 + CELL_W + 6.0);
+        let col0 = meter_x + 30.0 + 6.0;
+        let ph = 3.0 * CELL_P + CELL_H;
+        // saturator: shape selector, drive row, transfer plot
+        self.shape_selector(o + SHAPE, VX, y0, sat_w, 16.0);
+        self.cell1(o + DRIVE, VX, y0 + 20.0, sat_w, 16.0, "DRIVE");
+        self.draw_sat_plot(VX, y0 + 40.0, sat_w, ph - 40.0);
+        self.cell(o + BIAS, sat_x, rows[0], CELL_W, CELL_H, "BIAS");
+        self.cell(o + TONE, sat_x, rows[1], CELL_W, CELL_H, "TONE");
+        self.cell(o + SAT_MIX, sat_x, rows[2], CELL_W, CELL_H, "SAT MIX");
+        self.cell_o(o + SAT_GAIN, sat_x, rows[3], CELL_W, CELL_H, "SAT GAIN");
         // gain reduction meter
-        self.draw_gr_meter(200.0, y0, 26.0, 164.0);
+        self.draw_gr_meter(meter_x, y0, 30.0, ph);
         // compressor: 3 columns x 4 rows
-        let cols = [232.0, 296.0, 360.0];
         let cells = [
             [(THRESH, "THRESH"), (RATIO, "RATIO"), (ATTACK, "ATTACK"), (RELEASE, "RELEASE")],
             [(KNEE, "KNEE"), (KNEE_SHAPE, "K.SHAPE"), (GR_DIST, "GR DIST"), (SPEED, "SPEED")],
             [(DETECTOR, "PEAK>RMS"), (FF_FB, "FF>FB"), (COMP_MIX, "COMP MIX"), (COMP_GAIN, "CMP GAIN")],
         ];
         for (c, col) in cells.iter().enumerate() {
+            let cx = col0 + (CELL_W + 6.0) * c as f32;
             for (r, (off, lbl)) in col.iter().enumerate() {
                 if *off == COMP_GAIN {
-                    self.cell_o(o + off, cols[c], rows[r], 60.0, 38.0, lbl);
+                    self.cell_o(o + off, cx, rows[r], CELL_W, CELL_H, lbl);
                 } else {
-                    self.cell(o + off, cols[c], rows[r], 60.0, 38.0, lbl);
+                    self.cell(o + off, cx, rows[r], CELL_W, CELL_H, lbl);
                 }
             }
         }
@@ -736,11 +764,11 @@ impl<'a> Gui<'a> {
         } else {
             ("TRIM", "-----dB".to_string())
         };
-        self.cv.text(430.0, y0 + 2.0, lbl);
-        self.cv.textr(430.0, y0 + 2.0, 120.0, &val);
+        self.cv.text(RX, y0 + 4.0, lbl);
+        self.cv.textr(RX, y0 + 4.0, RW, &val);
         let blink = ((self.kit.now * 4.0).floor() as i64) & 1 == 1;
         let lit = if gmatch { if meas && blink { 1 } else { 2 } } else { 0 };
-        if self.btn(430.0, y0 + 16.0, 120.0, 16.0, "GAIN MATCH", lit) {
+        if self.btn(RX, y0 + 18.0, RW, 16.0, "GAIN MATCH", lit) {
             if gmatch {
                 self.click_set(7, 0.0);
             } else {
@@ -748,9 +776,9 @@ impl<'a> Gui<'a> {
                 sh.match_req.store(true, Ordering::Relaxed);
             }
         }
-        self.diff_box(430.0, y0 + 42.0, 120.0, 38.0);
-        self.cell(5, 430.0, y0 + 84.0, 120.0, 38.0, "MIX");
-        self.cell_o(6, 430.0, y0 + 126.0, 120.0, 38.0, "OUT GAIN");
+        self.diff_box(RX, y0 + CELL_P, RW, CELL_H);
+        self.cell(5, RX, y0 + 2.0 * CELL_P, RW, CELL_H, "MIX");
+        self.cell_o(6, RX, y0 + 3.0 * CELL_P, RW, CELL_H, "OUT GAIN");
     }
 
     // ------------------------------------------------------------------ EQ page
@@ -938,7 +966,7 @@ impl<'a> Gui<'a> {
     /// the five EQ band toggles: type name while on, "EQ n" while off
     fn eq_row(&mut self, y: f32) {
         for b in 0..5 {
-            let x = 10.0 + 82.0 * b as f32;
+            let x = VX + 82.0 * b as f32;
             let on = self.sget(eq_base(b)) > 0.5;
             let ty = (self.sget(eq_base(b) + 1) + 0.5).floor() as i32;
             let label = if on { KIND_NAMES[eq_kind(b, ty) as usize].to_string() } else { format!("EQ {}", b + 1) };
@@ -951,48 +979,48 @@ impl<'a> Gui<'a> {
 
     fn eq_cells(&mut self, y0: f32) {
         for b in 0..5 {
-            let x = 10.0 + 66.0 * b as f32;
+            let x = VX + 82.0 * b as f32;
             let o = eq_base(b);
             let on = self.sget(o) > 0.5;
             self.set_dk(if on { 1.0 } else { 0.5 });
             // type glyph grid (2 x 3)
             let ty = (self.sget(o + 1) + 0.5).floor() as i32;
             self.setc(false);
-            self.cv.boxr(x, y0, 62.0, 38.0);
+            self.cv.boxr(x, y0, 78.0, CELL_H);
             for t in 0..6usize {
-                let (gx, gy) = (x + 1.0 + (t % 3) as f32 * 20.0, y0 + 1.0 + (t / 3) as f32 * 18.5);
+                let (gx, gy) = (x + 1.0 + (t % 3) as f32 * 25.0, y0 + 1.0 + (t / 3) as f32 * 21.5);
                 let cur = t as i32 == ty;
-                if self.hit(gx, gy, 20.0, 18.5) && self.kit.press && self.kit.act == 0 {
+                if self.hit(gx, gy, 25.0, 21.5) && self.kit.press && self.kit.act == 0 {
                     self.click_set(o + 1, t as f32);
                     self.kit.press = false;
                 }
                 self.setc(false);
                 if cur {
-                    self.cv.fill(gx, gy, 20.0, 18.5);
+                    self.cv.fill(gx, gy, 25.0, 21.5);
                     self.cv.setbg();
                 }
-                self.eq_glyph(EQ_KINDS[b][t], gx + 10.0, gy + 9.5);
+                self.eq_glyph(EQ_KINDS[b][t], gx + 12.5, gy + 11.0);
                 self.setc(false);
             }
-            self.cell(o + 3, x, y0 + 42.0, 62.0, 38.0, "Q");
-            self.cell(o + 2, x, y0 + 84.0, 62.0, 38.0, "FREQ");
+            self.cell(o + 3, x, y0 + CELL_P, 78.0, CELL_H, "Q");
+            self.cell(o + 2, x, y0 + 2.0 * CELL_P, 78.0, CELL_H, "FREQ");
             if matches!(eq_kind(b, ty), 2 | 3 | 4) {
-                self.cell(o + 4, x, y0 + 126.0, 62.0, 38.0, "GAIN");
+                self.cell(o + 4, x, y0 + 3.0 * CELL_P, 78.0, CELL_H, "GAIN");
             } else {
                 self.setc(false);
-                self.cv.boxr(x, y0 + 126.0, 62.0, 38.0);
+                self.cv.boxr(x, y0 + 3.0 * CELL_P, 78.0, CELL_H);
                 self.cv.set_font(1);
-                self.cv.text(x + 3.0, y0 + 129.0, "GAIN");
+                self.cv.text(x + 3.0, y0 + 3.0 * CELL_P + 3.0, "GAIN");
                 self.cv.set_font(2);
-                self.cv.textc(x, y0 + 142.0, 62.0, "---");
+                self.cv.textc(x, y0 + 3.0 * CELL_P + (CELL_H * 0.4 + 1.0).floor(), 78.0, "---");
             }
         }
         self.set_dk(1.0);
-        let x = 10.0 + 66.0 * 5.0;
-        self.cell(EQ_PIVOT, x, y0, 70.0, 38.0, "PIVOT");
-        self.cell(EQ_TILT, x, y0 + 42.0, 70.0, 38.0, "TILT");
-        self.cell(EQ_MIX, x, y0 + 84.0, 70.0, 38.0, "EQ MIX");
-        self.cell_o(EQ_GAIN, x, y0 + 126.0, 70.0, 38.0, "EQ GAIN");
+        let x = VX + 82.0 * 5.0;
+        self.cell(EQ_PIVOT, x, y0, 98.0, CELL_H, "PIVOT");
+        self.cell(EQ_TILT, x, y0 + CELL_P, 98.0, CELL_H, "TILT");
+        self.cell(EQ_MIX, x, y0 + 2.0 * CELL_P, 98.0, CELL_H, "EQ MIX");
+        self.cell_o(EQ_GAIN, x, y0 + 3.0 * CELL_P, 98.0, CELL_H, "EQ GAIN");
     }
 
     // ------------------------------------------------------------------ frame
@@ -1042,7 +1070,7 @@ impl<'a> Gui<'a> {
         self.cv.set_font(2);
         let title = format!("SATXCOMP {}", version_short());
         self.cv.text(44.0, 12.0, &title);
-        self.out_meter(430.0, 8.0, 120.0, 16.0);
+        self.out_meter(RX, 8.0, RW, 16.0);
 
         // ---------- tab row
         self.set_dk(if byp { 0.5 } else { 1.0 });
@@ -1064,47 +1092,47 @@ impl<'a> Gui<'a> {
             self.sqind(150.0, 38.0, 8.0, eq_on, self.eq_page, false);
         }
         let delta = sh.delta_on.load(Ordering::Relaxed);
-        if self.btn(430.0, 34.0, 60.0, 16.0, "DELTA", if delta { 2 } else { 0 }) {
+        if self.btn(RX, 34.0, 70.0, 16.0, "DELTA", if delta { 2 } else { 0 }) {
             sh.delta_on.store(!delta, Ordering::Relaxed);
         }
-        if self.btn(490.0, 34.0, 60.0, 16.0, "BYPASS", byp as u8) {
+        if self.btn(RX + 70.0, 34.0, 70.0, 16.0, "BYPASS", byp as u8) {
             self.click_set(8, if byp { 0.0 } else { 1.0 });
         }
 
         // ---------- viewport row
         self.set_dk(if byp { 0.5 } else { 1.0 });
         if self.eq_page {
-            self.draw_eq(10.0, 56.0, 408.0, 128.0);
+            self.draw_eq(VX, VY, VW, VH);
         } else {
-            self.draw_spectrum(10.0, 56.0, 408.0, 128.0);
-            self.draw_crossover(10.0, 56.0, 408.0, 128.0);
+            self.draw_spectrum(VX, VY, VW, VH);
+            self.draw_crossover(VX, VY, VW, VH);
         }
         self.set_dk(1.0);
-        // right column: levels, crossover sliders, lookahead
+        // right column: levels, crossover frequency and slope
         self.cv.set_font(1);
         self.setc(false);
         let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
         self.setc(self.rd_pk > 0.9999);
-        self.cv.text(430.0, 58.0, "PK");
-        self.cv.textr(430.0, 58.0, 120.0, &s1);
+        self.cv.text(RX, VY + 2.0, "PK");
+        self.cv.textr(RX, VY + 2.0, RW, &s1);
         self.setc(false);
         let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
-        self.cv.text(430.0, 70.0, "RMS");
-        self.cv.textr(430.0, 70.0, 120.0, &s1);
-        self.cell2(1, 2, 430.0, 84.0, 120.0, 38.0, "X-OVER 1", "X-OVER 2");
-        self.cell(4, 430.0, 126.0, 120.0, 38.0, "L.AHEAD");
+        self.cv.text(RX, VY + 14.0, "RMS");
+        self.cv.textr(RX, VY + 14.0, RW, &s1);
+        self.cell2(1, 2, RX, VY + VH - 2.0 * CELL_P + 4.0, RW, CELL_H, "X-OVER 1", "X-OVER 2");
+        self.cell2(X1_SLOPE, X2_SLOPE, RX, VY + VH - CELL_H, RW, CELL_H, "X-SLOPE 1", "X-SLOPE 2");
 
         // ---------- band row, band cells, output column
         if self.eq_page {
-            self.eq_row(190.0);
+            self.eq_row(BAND_Y);
             self.set_dk(if byp || self.sget(EQ_BYPASS) > 0.5 { 0.5 } else { 1.0 });
-            self.eq_cells(212.0);
+            self.eq_cells(CELLS_Y);
         } else {
-            self.band_row(190.0);
+            self.band_row(BAND_Y);
             self.set_dk(if byp { 0.5 } else { 1.0 });
-            self.band_cells(212.0);
+            self.band_cells(CELLS_Y);
         }
         self.set_dk(1.0);
-        self.out_column(212.0);
+        self.out_column(CELLS_Y);
     }
 }

@@ -16,8 +16,8 @@ use std::time::Duration;
 use ui::{Env, Gui, State};
 
 /// Logical grid (units); the window scales it in quarter steps.
-pub const W: f32 = 560.0;
-pub const H: f32 = 384.0;
+pub const W: f32 = 680.0;
+pub const H: f32 = 480.0;
 
 /// One editor frame: map the egui input into logical canvas units, draw the whole UI.
 pub(crate) fn run_frame(ctx: &egui::Context, setter: &nih_plug::prelude::ParamSetter, st: &mut State, params: &SatXCompParams, shared: &Shared) {
