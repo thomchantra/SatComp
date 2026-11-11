@@ -49,6 +49,12 @@ const EQ_PIVOT: usize = 116;
 const EQ_MIX: usize = 117;
 const EQ_GAIN: usize = 118;
 const EQ_BYPASS: usize = 119;
+/// `kit.act` values: 1..VIEW_ACT are parameter slots (vertical drag, slots run to 119); VIEW_ACT and up are viewport drags
+const VIEW_ACT: i32 = 1000;
+const ACT_X1: i32 = VIEW_ACT + 1;
+const ACT_X2: i32 = VIEW_ACT + 2;
+/// EQ node `b` is ACT_NODE + b
+const ACT_NODE: i32 = VIEW_ACT + 3;
 const KIND_NAMES: [&str; 8] = ["HPF", "LPF", "LO SHELF", "HI SHELF", "BAND", "ALLPASS", "BANDPASS", "NOTCH"];
 
 const BAND_NAMES: [&str; 3] = ["LOW", "MID", "HI"];
@@ -540,14 +546,14 @@ impl<'a> Gui<'a> {
         if self.hit(x, y, w, h) && self.kit.press && self.kit.act == 0 {
             let (d1, d2) = ((self.kit.mx - px1).abs(), (self.kit.mx - px2).abs());
             if d1.min(d2) < 6.0 {
-                self.kit.act = if d1 <= d2 { 101 } else { 102 };
+                self.kit.act = if d1 <= d2 { ACT_X1 } else { ACT_X2 };
                 self.kit.press = false;
             }
         }
-        if self.kit.act == 101 && self.kit.down {
+        if self.kit.act == ACT_X1 && self.kit.down {
             let f = x_to_freq(self.kit.mx, x + 1.0, w - 2.0);
             self.setv(1, f.min(f2 * 0.95));
-        } else if self.kit.act == 102 && self.kit.down {
+        } else if self.kit.act == ACT_X2 && self.kit.down {
             let f = x_to_freq(self.kit.mx, x + 1.0, w - 2.0);
             self.setv(2, f.max(f1 * 1.05));
         }
@@ -555,7 +561,7 @@ impl<'a> Gui<'a> {
         // dotted lines
         self.setc(false);
         for (k, px) in [px1, px2].into_iter().enumerate() {
-            let lit = active == 101 + k as i32;
+            let lit = active == ACT_X1 + k as i32;
             if lit {
                 self.setc(true);
             }
@@ -883,12 +889,12 @@ impl<'a> Gui<'a> {
                 if self.sget(eq_base(b)) < 0.5 {
                     self.click_set(eq_base(b), 1.0);
                 }
-                self.kit.act = 103 + b as i32;
+                self.kit.act = ACT_NODE + b as i32;
                 self.kit.press = false;
             }
         }
-        if self.kit.act >= 103 && self.kit.act < 108 && self.kit.down {
-            let b = (self.kit.act - 103) as usize;
+        if self.kit.act >= ACT_NODE && self.kit.act < ACT_NODE + 5 && self.kit.down {
+            let b = (self.kit.act - ACT_NODE) as usize;
             let f = x_to_freq(self.kit.mx, x0, pw);
             self.setv(eq_base(b) + 2, f);
             if matches!(eq_kind(b, self.env.dsp.eq.bands[b].ty), 2 | 3 | 4) {
@@ -1002,8 +1008,8 @@ impl<'a> Gui<'a> {
         self.env.dsp = self.env.params.to_dsp();
         self.update_gr();
 
-        // drag update (single active widget): 1..99 = slot (vertical drag), >= 100 = viewport drags
-        if self.kit.act != 0 && self.kit.act < 100 {
+        // drag update (single active widget): slots (vertical drag) below VIEW_ACT, viewport drags from VIEW_ACT
+        if self.kit.act != 0 && self.kit.act < VIEW_ACT {
             let a = self.kit.act as usize;
             if self.kit.down {
                 let k = self.kit.shift;
@@ -1015,7 +1021,7 @@ impl<'a> Gui<'a> {
                 self.kit.act = 0;
             }
         }
-        if self.kit.act >= 100 && !self.kit.down {
+        if self.kit.act >= VIEW_ACT && !self.kit.down {
             self.end_touch(1);
             self.end_touch(2);
             for b in 0..5 {

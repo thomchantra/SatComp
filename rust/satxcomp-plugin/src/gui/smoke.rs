@@ -143,3 +143,36 @@ fn editor_runs_both_pages_and_writes_parameters() {
     assert!(joined.contains("EQ1 Type"), "type glyph click should write the EQ type:\n{joined}");
     assert!(joined.contains("Bypass"), "BYPASS click should reach the host");
 }
+
+/// Regression: EQ-page cells whose parameter slot is 100 or above (EQ3-5 Q/freq/gain, tilt, pivot, mix, EQ gain) used to start
+/// a drag that was never processed, and dragging an EQ node or a crossover line shared ids with those slots.
+#[test]
+fn eq_page_cells_above_slot_100_can_be_dragged() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    r.click(175.0, 42.0); // EQ page
+    // (x, y, drag dy, parameter that must be written): cells start at y 212, 42 apart; EQ mix sits at its maximum
+    for (x, y, dy, name) in [
+        (375.0, 231.0, -25.0, "EQ Pivot"),
+        (375.0, 273.0, -25.0, "EQ Tilt"),
+        (375.0, 315.0, 25.0, "EQ Mix"),
+        (375.0, 357.0, -25.0, "EQ Gain"),
+        (175.0, 273.0, -25.0, "EQ3 Q"),
+        (175.0, 315.0, -25.0, "EQ3 Freq"),
+        (307.0, 357.0, -25.0, "EQ5 Gain"),
+    ] {
+        let n0 = r.log().len();
+        r.drag(x, y, x, y + dy);
+        let new: Vec<String> = r.log()[n0..].to_vec();
+        assert!(new.iter().any(|l| l.starts_with(name)), "dragging the {name} cell wrote nothing: {new:?}");
+        assert!(new.iter().all(|l| l.starts_with(name)), "dragging the {name} cell also wrote other parameters: {new:?}");
+    }
+    // an EQ node drag must only move that node's own freq and gain (EQ2 sits at 200 Hz on the 0 dB line, x ~146, y 120)
+    let n0 = r.log().len();
+    r.drag(146.0, 120.0, 200.0, 90.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(new.iter().any(|l| l.starts_with("EQ2 Freq")) && new.iter().any(|l| l.starts_with("EQ2 Gain")), "{new:?}");
+    assert!(new.iter().all(|l| l.starts_with("EQ2 ")), "an EQ node drag wrote other parameters: {new:?}");
+}
