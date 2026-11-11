@@ -10,13 +10,13 @@ use std::sync::Arc;
 /// (slider number, id, min, max, default, step) for every parameter; slider numbers follow SatComp.jsfx.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (1, "shape", 0.0, 14.0, 0.0),
-    (2, "drive", 0.0, 100.0, 25.0),
+    (2, "drive", 0.0, 100.0, 0.0),
     (3, "bias", -100.0, 100.0, 0.0),
     (4, "sat_hp", 20.0, 2000.0, 20.0),
     (5, "sat_lp", 200.0, 20000.0, 20000.0),
     (6, "tone", 1000.0, 20000.0, 20000.0),
     (7, "os", 0.0, 2.0, 0.0),
-    (8, "thresh", -40.0, 0.0, -18.0),
+    (8, "thresh", -40.0, 0.0, 0.0),
     (9, "ratio", 1.0, 20.0, 4.0),
     (10, "attack", 0.05, 100.0, 10.0),
     (11, "release", 5.0, 2000.0, 150.0),
@@ -73,6 +73,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (65, "sc_hp", 20.0, 2000.0, 20.0),
     (66, "sc_lp", 200.0, 20000.0, 20000.0),
     (67, "sc_mix", 0.0, 100.0, 100.0),
+    (68, "lim_on", 0.0, 1.0, 1.0),
 ];
 
 #[derive(Params)]
@@ -234,6 +235,8 @@ pub struct SatCompParams {
     pub sc_lp: FloatParam,
     #[id = "sc_mix"]
     pub sc_mix: FloatParam,
+    #[id = "lim_on"]
+    pub lim_on: BoolParam,
 }
 
 impl Default for SatCompParams {
@@ -250,13 +253,13 @@ impl Default for SatCompParams {
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             match_trim: Arc::new(AtomicF32::new(0.0)),
             shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 14 }),
-            drive: FloatParam::new("Drive", 25.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
+            drive: FloatParam::new("Drive", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
             bias: FloatParam::new("Bias", 0.0, FloatRange::Linear { min: -100.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
             sat_hp: FloatParam::new("Sat HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             sat_lp: FloatParam::new("Sat LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             tone: FloatParam::new("Tone", 20000.0, FloatRange::Linear { min: 1000.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             os: IntParam::new("Oversampling", 0, IntRange::Linear { min: 0, max: 2 }),
-            thresh: FloatParam::new("Thresh", -18.0, FloatRange::Linear { min: -40.0, max: 0.0 }).with_unit(" dB").with_step_size(0.1),
+            thresh: FloatParam::new("Thresh", 0.0, FloatRange::Linear { min: -40.0, max: 0.0 }).with_unit(" dB").with_step_size(0.1),
             ratio: FloatParam::new("Ratio", 4.0, FloatRange::Linear { min: 1.0, max: 20.0 }).with_step_size(0.1),
             attack: FloatParam::new("Attack", 10.0, FloatRange::Linear { min: 0.05, max: 100.0 }).with_unit(" ms").with_step_size(0.01),
             release: FloatParam::new("Release", 150.0, FloatRange::Linear { min: 5.0, max: 2000.0 }).with_unit(" ms").with_step_size(1.0),
@@ -313,6 +316,7 @@ impl Default for SatCompParams {
             sc_hp: FloatParam::new("SC HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             sc_lp: FloatParam::new("SC LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             sc_mix: FloatParam::new("Key Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            lim_on: BoolParam::new("Limiter", true),
         }
     }
 }
@@ -354,6 +358,7 @@ impl SatCompParams {
             lookahead_ms: self.lookahead.value() as f64, eq_pre_bypass: self.eq_pre_bypass.value(),
             eq_post_bypass: self.eq_post_bypass.value(), eq_module_bypass: self.eq_module_bypass.value(),
             sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64, sc_mix: self.sc_mix.value() as f64,
+            lim_on: self.lim_on.value(),
         }
     }
 
@@ -424,6 +429,7 @@ impl SatCompParams {
             65 => self.sc_hp.as_ptr(),
             66 => self.sc_lp.as_ptr(),
             67 => self.sc_mix.as_ptr(),
+            68 => self.lim_on.as_ptr(),
             _ => return None,
         })
     }

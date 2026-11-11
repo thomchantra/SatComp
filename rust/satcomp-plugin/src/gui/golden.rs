@@ -3,7 +3,7 @@
 //! `golden.txt`; any visual or interaction change shows up as a different hash at a named step.
 //!
 //! Re-record deliberately (only when the UI is *meant* to change):
-//!   UI_GOLDEN_RECORD=1 cargo test --release -p satcomp ui_matches_golden_fixture
+//!   UI_GOLDEN_OUT=$PWD/satcomp-plugin/src/gui/golden.txt cargo test --release -p satcomp ui_matches_golden_fixture
 
 use super::ui::State;
 use crate::params::SatCompParams;
@@ -55,6 +55,10 @@ struct Rig {
     down: bool,
     rdown: bool,
     out: Vec<(String, u64)>,
+    /// every host parameter write so far (the frame hash drains the log; tests want to read it)
+    writes: Vec<String>,
+    /// tests that drive `sat_pk` themselves
+    manual_sat: bool,
 }
 
 fn fnv(s: &str) -> u64 {
@@ -89,6 +93,8 @@ impl Rig {
             down: false,
             rdown: false,
             out: Vec::new(),
+            writes: Vec::new(),
+            manual_sat: false,
         }
     }
 
@@ -104,6 +110,10 @@ impl Rig {
         sh.fms.store(0.002 + 0.05 * w, Relaxed);
         sh.vz_lv.store(0.05 + 0.6 * w, Relaxed);
         sh.sat_vz.store(0.1 + 0.5 * (n * 0.03).sin().abs(), Relaxed);
+        sh.lim_gr_pk.store(4.0 * (n * 0.045).sin().abs(), Relaxed);
+        if !self.manual_sat {
+            sh.sat_pk.store(0.1 + 0.7 * (n * 0.03).sin().abs(), Relaxed);
+        }
         sh.mn_lv.store(0.05 + 0.5 * (n * 0.02).cos().abs(), Relaxed);
         sh.diff_disp.store(6.0 * (n * 0.04).sin(), Relaxed);
         sh.sat_db.store(3.0 * (n * 0.06).sin(), Relaxed);
@@ -131,6 +141,7 @@ impl Rig {
         let st = &mut self.st;
         let full = self.ctx.run(raw, |ctx| super::run_frame(ctx, &setter, st, &params, &shared));
         let writes: Vec<String> = self.host.log.lock().drain(..).collect();
+        self.writes.extend(writes.iter().cloned());
         self.out.push((label.to_string(), fnv(&format!("{:?}|{:?}", full.shapes, writes))));
     }
 
@@ -236,6 +247,9 @@ fn script() -> Vec<(String, u64)> {
     r.click("bypass_on", 520.0, 42.0);
     r.idle("bypass_idle", 3, 0.05);
     r.click("bypass_off", 520.0, 42.0);
+    r.click("lim_off", 445.0, 16.0);
+    r.idle("lim_off_idle", 3, 0.05);
+    r.click("lim_on", 445.0, 16.0);
     r.click("gain_match", 507.0, 135.0);
     r.idle("gain_match_idle", 6, 0.1);
     r.click("gain_match_off", 507.0, 135.0);
@@ -352,6 +366,38 @@ fn ui_matches_golden_fixture() {
         }
     }
     assert!(bad.is_empty(), "{} frames differ; first: {}", bad.len(), bad.first().unwrap());
+}
+
+#[test]
+fn limiter_button_writes_its_parameter() {
+    let mut r = Rig::new(1.0);
+    r.idle("boot", 3, 0.016);
+    r.click("lim", 445.0, 16.0);
+    assert!(r.writes.iter().any(|w| w.starts_with("set Limiter") && w.ends_with("0.000000")), "{:?}", r.writes);
+    // and the preset-stored state: the parameter is in the preset table and not excluded
+    assert!(crate::params::TABLE.iter().any(|e| e.1 == "lim_on" && e.4 == 1.0));
+    assert!(!crate::presets::EXCLUDED.contains(&"lim_on"));
+}
+
+/// The post-saturator meter turns accent when the saturator output passes 0 dBFS and holds it for one second.
+#[test]
+fn sat_meter_clip_holds_for_a_second_then_releases() {
+    let run = |peak: f32, probe: usize| {
+        let mut r = Rig::new(1.0);
+        r.manual_sat = true;
+        r.idle("boot", 3, 0.016);
+        r.shared.sat_pk.store(peak, std::sync::atomic::Ordering::Relaxed);
+        r.frame("hit", vec![], 0.016);
+        for i in 0..probe {
+            r.shared.sat_pk.store(0.0, std::sync::atomic::Ordering::Relaxed);
+            r.frame(&format!("after{i}"), vec![], 0.05);
+        }
+        r.out.last().unwrap().1
+    };
+    // 0.3 s later: clipped meter differs from a just-under-0 dBFS one (accent colour held)
+    assert_ne!(run(1.0, 6), run(0.99999, 6));
+    // 1.5 s later: the hold is over, both draw the same
+    assert_eq!(run(1.0, 30), run(0.99999, 30));
 }
 
 #[test]

@@ -144,7 +144,9 @@ mod tests {
     fn init_roundtrips_and_excludes_performance_switches() {
         let p = Preset::init();
         assert!(!p.params.contains_key("bypass") && !p.params.contains_key("gain_match"));
-        assert_eq!(p.params["drive"], 25.0);
+        assert_eq!(p.params["drive"], 0.0);
+        assert_eq!(p.params["thresh"], 0.0);
+        assert_eq!(p.params["lim_on"], 1.0); // the limiter switch is stored with presets
         let q = Preset::from_json(&p.to_json()).unwrap();
         assert_eq!(q.params, p.params);
         assert!(Preset::from_json("{\"format\":\"nope\"}").is_none());

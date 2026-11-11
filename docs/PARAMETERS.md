@@ -113,6 +113,7 @@ plug-in; hosts without sidechain support get the plain stereo layout.
 | **SC HP** *(65)* | 20…2000 Hz, OFF | 2nd-order Butterworth high-pass on the key. |
 | **SC LP** *(66)* | 200…20k Hz, OFF | 2nd-order Butterworth low-pass on the key. |
 | **Key Mix** *(67, cell `KEY MIX`)* | 0–100 %, 100 | Stands in for FF>FB while Sidechain is on (same cell). Detector level = (1−m)·main + m·key, blended as **levels** (each source has its own low-cut and peak/RMS state), so 0 % = the normal internal detector, 100 % = key only, in between ducks from both. FF>FB is not applied while Sidechain is on, whatever its value. Stored in presets. |
+| **Limiter** *(68, `LIM` button in the output meter row)* | off/on, **on** | True-peak brickwall at a fixed **-0.2 dBTP**, the last stage of the processed path (after Out Gain; Bypass, Delta and Sidechain solo are not limited). Detection is 4x polyphase (2x at 96 kHz-class rates, plain sample peak above 100 kHz) with a 1.5 ms lookahead; release is program dependent (about 30 ms for isolated peaks, up to 300 ms under sustained reduction). Its gain reduction is the `LIM` readout in the output column (the compressor GR number is at the top of the GR meter). **Stored in presets**; a preset without it loads as on. The limiter's delay (1.5 ms + the detector's, about 2.2 ms at 48 kHz) is **always reported to the host, on or off**, so toggling never changes PDC. Gain Match measures before the limiter. |
 | **SOLO** *(UI only, not a parameter)* | off | Replaces the output with the key as the detector hears it (after gain/HP/LP, before Low Cut and the peak/RMS blend). Clears itself when Sidechain is switched off. |
 
 Key path: aux in > SC Gain > SC HP > SC LP > (solo tap) > detector (Low Cut, peak/RMS blend, gain computer). The key is
@@ -145,6 +146,7 @@ into COMP. The tab row no longer carries the OVERSAMPLING label (OFF / x2 / x4 s
 | | | 44–58 | EQ Post (see EQ) |
 | 59 | Lookahead | 60–62 | EQ Pre / Post / Module bypass |
 | 63 | Sidechain *(v0.5)* | 64–67 | SC Gain / SC HP / SC LP / Key Mix *(v0.5)* |
+| | | 68 | Limiter *(0.5.2, default on)* |
 
 New sliders were appended (25–27, 29–58) so existing sessions/automation keep their mapping. Old sessions should sound identical (Sat Mix 100 %, Bypass off, Sat Out 0 dB, Auto off); if REAPER restores missing sliders as 0, re-set Sat Mix to 100 % once.
 

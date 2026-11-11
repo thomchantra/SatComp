@@ -20,6 +20,10 @@ pub struct Shared {
     pub opk: [AtomicF32; 2],
     pub clip: AtomicBool,
     pub gr_pk: AtomicF32,
+    /// peak limiter gain reduction (dB, positive), accumulated like `gr_pk`
+    pub lim_gr_pk: AtomicF32,
+    /// post-saturator peak (linear), accumulated and consumed like `opk`
+    pub sat_pk: AtomicF32,
     pub fms: AtomicF32,
     pub vz_lv: AtomicF32,
     pub sat_vz: AtomicF32,
@@ -55,6 +59,8 @@ impl Shared {
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
             clip: AtomicBool::new(false),
             gr_pk: AtomicF32::new(0.0),
+            lim_gr_pk: AtomicF32::new(0.0),
+            sat_pk: AtomicF32::new(0.0),
             fms: AtomicF32::new(1e-9),
             vz_lv: AtomicF32::new(0.0),
             sat_vz: AtomicF32::new(0.0),
@@ -209,6 +215,10 @@ impl Plugin for SatComp {
         }
         sh.gr_pk.fetch_max(e.gr_pk as f32, Ordering::Relaxed);
         e.gr_pk = 0.0;
+        sh.lim_gr_pk.fetch_max(e.lim_gr_pk as f32, Ordering::Relaxed);
+        e.lim_gr_pk = 0.0;
+        sh.sat_pk.fetch_max(e.sat_pk as f32, Ordering::Relaxed);
+        e.sat_pk = 0.0;
         sh.fms.store(e.fms as f32, Ordering::Relaxed);
         sh.vz_lv.store(e.vz_lv as f32, Ordering::Relaxed);
         sh.mn_lv.store(e.mn_lv as f32, Ordering::Relaxed);

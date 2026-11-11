@@ -110,10 +110,16 @@ pub struct State {
     hl_r_t: f64,
     opk_max: f32,
     clip_lat: bool,
+    /// post-saturator level meter: decaying level and the last time it clipped (accent, held 1 s)
+    sat_lv: f32,
+    sat_clip_t: f64,
+    /// limiter gain reduction (dB): decaying display value
+    lim_disp: f32,
     // readouts (refresh ~8x/s)
     rd_last: f64,
     rd_tick: bool,
     rd_gr: f32,
+    rd_lim: f32,
     rd_pk: f32,
     rd_rms: f32,
     rd_diff: f32,
@@ -177,13 +183,14 @@ impl State {
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = now;
+            self.sat_clip_t = -10.0;
             self.hold_until = now;
             self.spec_t = now;
         }
     }
 
     pub fn new(pal: usize, light: bool, face: usize, params: &SatCompParams) -> Self {
-        let mut kit = Kit::new(68);
+        let mut kit = Kit::new(69);
         let meta = &mut kit.meta;
         for &(n, _, mn, mx, df) in TABLE {
             meta[n] = Meta { min: mn, max: mx, def: df, mode: 0, snap: 0, step: 1.0 };
@@ -268,9 +275,13 @@ impl State {
             hl_r_t: 0.0,
             opk_max: 0.0,
             clip_lat: false,
+            sat_lv: 0.0,
+            sat_clip_t: -10.0,
+            lim_disp: 0.0,
             rd_last: 0.0,
             rd_tick: false,
             rd_gr: 0.0,
+            rd_lim: 0.0,
             rd_pk: 0.0,
             rd_rms: 0.0,
             rd_diff: 0.0,
@@ -388,7 +399,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
-    ("v0.5.2", &["Housekeeping release with no new features: the code was reorganised so parts can be shared with upcoming plug-ins.", "Sound and look are unchanged."]),
+    ("v0.5.2", &["New output limiter: a true-peak brickwall at -0.2 dBTP, on by default (LIM button). Its gain reduction shows in the LIM readout, and it adds about 2 ms of latency that is always reported to the host.", "New thin level meter after the saturator that turns accent when it clips. The compressor GR number now sits at the top of the GR meter.", "The signal flow shows the limiter. INIT now starts with drive 0 and threshold 0."]),
     ("v0.5.1", &["Fixed a loud thump when the plug-in is enabled or the window regains focus.", "New Appearance tab under About: colour mode, a scheme list with swatches, six fonts and a custom theme editor with a colour picker.", "New waveform scope (transient meter): click the icon in the compressor plot corner for a half or full wave view with the gain reduction stacked in the accent colour. Drag the view to change the window and ceiling (+2 dB to -14 dB).", "Sulfur and Matcha were replaced by Genesis and Suika.", "The oversampling OFF button now reads x1."]),
     ("v0.5", &["Added a sidechain input with key gain, HP, LP, a solo monitor and KEY MIX.", "Every colour scheme now has a light mode: double-click the icon or use the scheme menu.", "LP filters now reach down to 200 Hz."]),
     ("v0.4.1", &["Fixed the PK readout and peak reset after reopening the window."]),
@@ -693,6 +704,8 @@ impl<'a> Gui<'a> {
     fn draw_meter(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let g = self.env.shared.gr_pk.swap(0.0, Ordering::Relaxed);
         self.gr_disp = g.max(self.gr_disp * 0.9);
+        let lg = self.env.shared.lim_gr_pk.swap(0.0, Ordering::Relaxed);
+        self.lim_disp = lg.max(self.lim_disp * 0.9);
         if g >= self.gr_hold {
             self.gr_hold = g;
             self.gr_hold_t = self.now;
@@ -716,6 +729,13 @@ impl<'a> Gui<'a> {
         let hp = y + 1.0 + ((h - 3.0) * (self.gr_hold / rg).min(1.0)).floor();
         self.cv.fill(x + 1.0, hp, w - 2.0, 1.0);
         self.cv.set_font(1);
+        // compressor GR as a number in a window at the top of the bar (positive, like the bar)
+        self.cv.setbg();
+        self.cv.fill(x + 1.0, y + 1.0, w - 2.0, 11.0);
+        self.setc(false);
+        self.cv.fill(x + 1.0, y + 12.0, w - 2.0, 1.0);
+        let gs = format!("{:.1}", self.rd_gr);
+        self.cv.textc(x, y + 3.0, w, &gs);
         let mj = if rg == 3.0 { 1.0 } else if rg == 6.0 { 2.0 } else if rg == 12.0 { 3.0 } else { 6.0 };
         let stp = if rg <= 6.0 { 0.5 } else { 1.0 };
         let cnt = (rg / stp) as i32;
@@ -731,6 +751,25 @@ impl<'a> Gui<'a> {
                 self.cv.fill(x + w - 3.0, ty, 2.0, 1.0);
             }
         }
+    }
+
+    /// Thin summed post-saturator level (solid fill, -48..0 dB). The whole meter turns accent while the saturator output
+    /// is over 0 dBFS, held for 1 s after the last clip.
+    fn sat_vu(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let pk = self.env.shared.sat_pk.swap(0.0, Ordering::Relaxed);
+        self.sat_lv = pk.max(self.sat_lv * 0.85);
+        if pk >= 1.0 {
+            self.sat_clip_t = self.now;
+        }
+        let clip = self.now - self.sat_clip_t < 1.0;
+        let lvf = |v: f32| ((8.6858896 * v.max(0.0000001).ln() + 48.0) / 48.0).clamp(0.0, 1.0);
+        self.setc(clip);
+        self.cv.boxr(x, y, w, h);
+        let lh = ((h - 2.0) * lvf(self.sat_lv)).floor();
+        if lh > 0.0 {
+            self.cv.fill(x + 1.0, y + h - 1.0 - lh, w - 2.0, lh);
+        }
+        self.setc(false);
     }
 
     fn out_meter(&mut self, x: f32, y: f32, w: f32, h: f32) {
@@ -2179,15 +2218,17 @@ impl<'a> Gui<'a> {
         let pre_on = a0 && !eq_mod && self.sget(60) < 0.5;
         let post_on = a1 && !eq_mod && self.sget(61) < 0.5;
         let sat_on = sh.sat_vz.load(Ordering::Relaxed) > 0.02;
-        let names = ["IN", "SAT", "PRE EQ", "COMP", "MIX", "POST EQ", "OUT"];
-        let bw = [26.0, 34.0, 52.0, 40.0, 32.0, 58.0, 32.0];
-        let lit = [false, sat_on, pre_on, gr > 0.1, false, post_on, false];
-        let eq_off = [false, false, eq_mod || self.sget(60) > 0.5, false, false, eq_mod || self.sget(61) > 0.5, false];
-        let gap = (w - 24.0 - bw.iter().sum::<f32>()) / 6.0;
+        let names = ["IN", "SAT", "PRE EQ", "COMP", "MIX", "POST EQ", "LIM", "OUT"];
+        let bw = [24.0, 32.0, 48.0, 38.0, 30.0, 50.0, 26.0, 28.0];
+        let lim_on = self.sget(68) > 0.5;
+        let lit = [false, sat_on, pre_on, gr > 0.1, false, post_on, lim_on && self.lim_disp > 0.1, false];
+        // an unused stage is drawn dim: the EQ stages when bypassed, the limiter when switched off
+        let eq_off = [false, false, eq_mod || self.sget(60) > 0.5, false, false, eq_mod || self.sget(61) > 0.5, !lim_on, false];
+        let gap = (w - 24.0 - bw.iter().sum::<f32>()) / 7.0;
         let (cy, bh) = (y + 50.0, 22.0);
-        let mut bx = [0.0f32; 7];
+        let mut bx = [0.0f32; 8];
         let mut cx = x + 12.0;
-        for i in 0..7 {
+        for i in 0..8 {
             bx[i] = cx;
             cx += bw[i] + gap;
         }
@@ -2200,7 +2241,7 @@ impl<'a> Gui<'a> {
             }
         };
         self.setc(false);
-        for i in 0..6 {
+        for i in 0..7 {
             let (g0, g1) = (bx[i] + bw[i], bx[i + 1]);
             self.cv.fill(g0, cy, g1 - g0 - 3.0, 1.0);
             self.cv.tri((g1 - 4.0, cy - 3.0), (g1 - 4.0, cy + 4.0), (g1, cy + 0.5));
@@ -2233,7 +2274,7 @@ impl<'a> Gui<'a> {
         }
         self.cv.textc(xa, yd + 4.0, xb - xa, "DRY");
         // blocks
-        for i in 0..7 {
+        for i in 0..8 {
             self.set_dk(if eq_off[i] { prev * 0.5 } else { prev });
             let (bxl, byt) = (bx[i], cy - bh * 0.5 + 0.5);
             if lit[i] {
@@ -2297,6 +2338,7 @@ impl<'a> Gui<'a> {
         if self.rd_tick {
             self.rd_last = self.now;
             self.rd_gr = self.gr_disp;
+            self.rd_lim = self.lim_disp;
             self.rd_pk = self.opk_max;
             self.rd_rms = sh.fms.load(Ordering::Relaxed);
             self.rd_diff = sh.diff_disp.load(Ordering::Relaxed);
@@ -2354,7 +2396,12 @@ impl<'a> Gui<'a> {
         }
         self.cv.text(44.0, 12.0, &title);
         self.preset_bar();
-        self.out_meter(430.0, 8.0, 120.0, 16.0);
+        // LIM switch + output peak meter
+        if self.btn(430.0, 8.0, 30.0, 16.0, "LIM", (self.sget(68) > 0.5) as u8) {
+            let on = self.sget(68) > 0.5;
+            self.click_set(68, if on { 0.0 } else { 1.0 });
+        }
+        self.out_meter(464.0, 8.0, 86.0, 16.0);
 
         // ---------- tab row
         let ab = self.about > 0;
@@ -2433,6 +2480,7 @@ impl<'a> Gui<'a> {
         self.cell(6, 78.0, 240.0, 62.0, 38.0, "TONE");
         self.cell(25, 10.0, 284.0, 62.0, 38.0, "SAT MIX");
         self.cell_o(27, 78.0, 284.0, 62.0, 38.0, "OUT GAIN");
+        self.sat_vu(144.0, 196.0, 5.0, 126.0);
 
         // ---------- COMP cells (or the EQ page's cells)
         if self.eq_page {
@@ -2465,9 +2513,13 @@ impl<'a> Gui<'a> {
         self.set_dk(1.0);
         self.cv.set_font(1);
         self.setc(false);
-        self.cv.text(464.0, 58.0, "GR");
-        let s = format!("{:04.1}", self.rd_gr);
+        // limiter reduction: the only sign the limiter has engaged (the compressor's GR number lives on its meter)
+        let lim_on = self.sget(68) > 0.5;
+        self.setc(lim_on && self.rd_lim > 0.05);
+        self.cv.text(464.0, 58.0, "LIM");
+        let s = if lim_on { format!("{:04.1}dB", self.rd_lim) } else { "-----dB".to_string() };
         self.cv.textr(464.0, 58.0, 86.0, &s);
+        self.setc(false);
         let gmatch = self.sget(23) > 0.5;
         let meas = sh.out_meas.load(Ordering::Relaxed);
         let s1 = if gmatch {

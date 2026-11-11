@@ -6,13 +6,13 @@ def add(n, field, name, kind, mn, mx, df, step=None, unit=""):
     P.append((n, field, name, kind, mn, mx, df, step, unit))
 
 add(1, "shape", "Shape", "int", 0, 14, 0)
-add(2, "drive", "Drive", "f", 0, 100, 25, 0.1, " %")
+add(2, "drive", "Drive", "f", 0, 100, 0, 0.1, " %")
 add(3, "bias", "Bias", "f", -100, 100, 0, 0.1, " %")
 add(4, "sat_hp", "Sat HP", "f", 20, 2000, 20, 1, " Hz")
 add(5, "sat_lp", "Sat LP", "f", 200, 20000, 20000, 1, " Hz")
 add(6, "tone", "Tone", "f", 1000, 20000, 20000, 1, " Hz")
 add(7, "os", "Oversampling", "int", 0, 2, 0)
-add(8, "thresh", "Thresh", "f", -40, 0, -18, 0.1, " dB")
+add(8, "thresh", "Thresh", "f", -40, 0, 0, 0.1, " dB")
 add(9, "ratio", "Ratio", "f", 1, 20, 4, 0.1)
 add(10, "attack", "Attack", "f", 0.05, 100, 10, 0.01, " ms")
 add(11, "release", "Release", "f", 5, 2000, 150, 1, " ms")
@@ -51,6 +51,7 @@ add(64, "sc_gain", "SC Gain", "f", -24, 24, 0, 0.1, " dB")
 add(65, "sc_hp", "SC HP", "f", 20, 2000, 20, 1, " Hz")
 add(66, "sc_lp", "SC LP", "f", 200, 20000, 20000, 1, " Hz")
 add(67, "sc_mix", "Key Mix", "f", 0, 100, 100, 1, " %")
+add(68, "lim_on", "Limiter", "bool", 0, 1, 1)
 
 def f(x):
     s = repr(float(x))

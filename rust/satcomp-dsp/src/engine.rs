@@ -187,6 +187,8 @@ pub struct Engine {
     /// mirror of the saturator's band peak (see `Saturator::blk`); reset with the other block meters
     pub sat_blk: f64,
     pub sat_vz: f64,
+    /// Post-saturator peak since the shell last took it (no decay, so a clip between UI frames is never missed).
+    pub sat_pk: f64,
     pub fms: f64,
 }
 
@@ -267,6 +269,7 @@ impl Engine {
             mn_lv: 0.0,
             sat_blk: 0.0,
             sat_vz: 0.0,
+            sat_pk: 0.0,
             fms: 1e-9,
         };
         e.derive();
@@ -440,6 +443,7 @@ impl Engine {
         self.mn_lv = self.mn_blk.max(self.mn_lv * vz_d);
         self.mn_blk = 0.0;
         self.sat_vz = self.sat.blk.max(self.sat_vz * vz_d);
+        self.sat_pk = self.sat_pk.max(self.sat.blk);
         self.sat.blk = 0.0;
         self.sat_blk = 0.0;
     }

@@ -95,6 +95,11 @@ the same way when SatXComp needs them.
   `-- diff <dirA> <dirB>` reports max |diff| and differing samples. To compare against a release: `git archive <tag> rust/satcomp-dsp | tar -x -C <tmp>`,
   copy `tests/golden/scen.rs` and `examples/golden.rs` in (they only use the public `Engine`/`Params` API), render both, diff.
   Re-record (`-- record`) only when the sound is *meant* to change, and say so in the commit.
+  **Limiter note (0.5.2):** the fixture was re-recorded when the output limiter arrived, because it adds a constant delay (reported PDC)
+  even when off. The change was verified first: baseline renders from HEAD~ vs the new build, `-- diff <base> <new> <shift>` with the shift =
+  that rate's limiter latency (104 samples at 48 kHz, 98 at 44.1 kHz, 176 at 96 kHz, 65 at 22.05 kHz). Everything is bit-identical except
+  the first ~120 ms of delta / sidechain-solo and the bypass level tracking, whose *control* timing now runs 2 ms ahead of the audio.
+  `Params::default()` has `lim_on: false` (the plug-in's own default is on), so bare-engine scenarios do not limit.
 - **UI golden** (`satcomp-plugin/src/gui/golden.rs`, fixture `golden.txt`): runs the real frame function headless against a fake host,
   scripts 460 frames of mouse input and hashes each frame's draw commands plus the host parameter writes. Meters and the spectrum tap
   get deterministic fake telemetry. Limits: nih-plug keeps parameter setters crate-private, so values are not echoed back (params stay at
