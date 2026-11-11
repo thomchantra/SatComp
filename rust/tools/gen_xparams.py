@@ -93,7 +93,7 @@ for n, i, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{i}"]\n    pub {i}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
 o.append("}\n")
 o.append("impl Default for SatXCompParams {\n    fn default() -> Self {\n        Self {")
-o.append("            editor_state: EguiState::from_size(1020, 720),")
+o.append("            editor_state: EguiState::from_size(1020, 615),")
 o.append("            palette_v2: Arc::new(AtomicI32::new(0)),")
 o.append("            light: Arc::new(AtomicBool::new(false)),")
 o.append("            font: Arc::new(AtomicI32::new(0)),")
