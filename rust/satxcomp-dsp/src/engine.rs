@@ -71,6 +71,11 @@ pub struct XEngine {
     pub ims: f64,
     pub oms: f64,
     pub pms: f64,
+    /// mean squares into / out of the EQ stage (its dry/wet mix and gain included)
+    eis: f64,
+    eos: f64,
+    /// level change across the EQ stage, dB (for the EQ IN>OUT readout)
+    pub eq_diff: f64,
     pub diff_db: f64,
     pub diff_disp: f64,
     gate_open: bool,
@@ -132,6 +137,9 @@ impl XEngine {
             ims: 1e-9,
             oms: 1e-9,
             pms: 1e-9,
+            eis: 1e-9,
+            eos: 1e-9,
+            eq_diff: 0.0,
             diff_db: 0.0,
             diff_disp: 0.0,
             gate_open: false,
@@ -257,6 +265,9 @@ impl XEngine {
             self.diff_db = DB_POW * (self.oms.max(1e-12) / self.ims.max(1e-12)).ln();
             self.diff_disp = DB_POW * (self.pms.max(1e-12) / self.ims.max(1e-12)).ln();
         }
+        if self.eis > 0.000001 {
+            self.eq_diff = DB_POW * (self.eos.max(1e-12) / self.eis.max(1e-12)).ln();
+        }
         if self.out_m.active && self.gate_open {
             if let Some(avg) = self.out_m.step(self.diff_db, dt) {
                 self.match_trim = avg.clamp(-12.0, 12.0);
@@ -321,6 +332,8 @@ impl XEngine {
         // ---- EQ (post-sum) with its own dry/wet
         let ew = self.eq.tick(sum);
         let wet = [sum[0] + (ew[0] - sum[0]) * self.eq_mix, sum[1] + (ew[1] - sum[1]) * self.eq_mix];
+        ms_step(&mut self.eis, sum[0], sum[1], self.rmsg_c);
+        ms_step(&mut self.eos, wet[0], wet[1], self.rmsg_c);
 
         // ---- OUT
         let mut o = [0.0f64; 2];
@@ -525,6 +538,24 @@ mod tests {
         p.eq.pivot = 4000.0;
         let b = tone_db(200.0, &p, None);
         assert!((a - b).abs() > 2.0, "pivot has no effect: {a} vs {b}");
+    }
+
+    #[test]
+    fn eq_diff_reads_the_level_change_across_the_eq_stage_only() {
+        let tone: Vec<f64> = (0..96000).map(|i| 0.2 * (2.0 * PI * 5000.0 * i as f64 / SR).sin()).collect();
+        let mut p = neutral();
+        p.eq.bands[3].on = true;
+        p.eq.bands[3].freq = 5000.0;
+        p.eq.bands[3].gain = 6.0;
+        p.out_gain = -9.0; // output gain is outside the EQ stage and must not show up
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        run(&mut e, &tone);
+        assert!((e.eq_diff - 6.0).abs() < 0.5, "eq diff {}", e.eq_diff);
+        p.eq.mix = 0.0;
+        e.set_params(&p);
+        run(&mut e, &tone);
+        assert!(e.eq_diff.abs() < 0.5, "eq mix 0 should read 0 dB, got {}", e.eq_diff);
     }
 
     #[test]

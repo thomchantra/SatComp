@@ -25,6 +25,8 @@ pub struct Shared {
     pub gr_pk: [AtomicF32; 3],
     pub fms: AtomicF32,
     pub diff_disp: AtomicF32,
+    /// level change across the EQ stage, dB
+    pub eq_diff: AtomicF32,
     pub bg: AtomicF32,
     pub out_meas: AtomicBool,
     pub out_mt: AtomicF32,
@@ -47,6 +49,7 @@ impl Shared {
             gr_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             fms: AtomicF32::new(1e-9),
             diff_disp: AtomicF32::new(0.0),
+            eq_diff: AtomicF32::new(0.0),
             bg: AtomicF32::new(1.0),
             out_meas: AtomicBool::new(false),
             out_mt: AtomicF32::new(0.0),
@@ -166,6 +169,7 @@ impl Plugin for SatXComp {
         }
         sh.fms.store(e.fms as f32, Ordering::Relaxed);
         sh.diff_disp.store(e.diff_disp as f32, Ordering::Relaxed);
+        sh.eq_diff.store(e.eq_diff as f32, Ordering::Relaxed);
         sh.bg.store(e.bg_gain() as f32, Ordering::Relaxed);
         sh.out_meas.store(e.out_matching(), Ordering::Relaxed);
         sh.out_mt.store(e.out_match_progress() as f32, Ordering::Relaxed);
