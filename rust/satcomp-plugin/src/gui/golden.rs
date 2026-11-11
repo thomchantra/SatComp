@@ -79,7 +79,7 @@ impl Rig {
         let shared = Arc::new(Shared::new());
         let (pal, light) = super::ui::initial_palette(&params);
         let mut st = State::new(pal, light, 0, &params);
-        st.themes.clear(); // never depend on the machine's themes.json
+        st.app.themes.clear(); // never depend on the machine's themes.json
         Self {
             ctx,
             host: Arc::new(FakeHost::default()),

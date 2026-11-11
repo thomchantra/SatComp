@@ -51,7 +51,7 @@ pub(crate) fn run_frame(
     // Theme editor: the whole window is a static INIT page (default params, constant meter values); the real
     // params and shared state are not touched.
     let (dp, ds) = (st.dummy_params.clone(), st.dummy_shared.clone());
-    let editing = st.edit.is_some();
+    let editing = st.app.editing();
     if editing {
         st.fill_dummy();
     }

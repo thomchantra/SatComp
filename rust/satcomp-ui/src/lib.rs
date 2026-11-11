@@ -1,5 +1,6 @@
 //! Shared egui UI toolkit for the SatComp plug-in family.
 
+pub mod appearance;
 pub mod canvas;
 pub mod fft;
 pub mod kit;

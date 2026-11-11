@@ -25,7 +25,7 @@ fn fmt_db(db: i32) -> String {
 
 impl State {
     pub fn scope_on(&self) -> bool {
-        self.scope_cfg & 1 != 0 && self.edit.is_none()
+        self.scope_cfg & 1 != 0 && self.app.edit.is_none()
     }
 }
 

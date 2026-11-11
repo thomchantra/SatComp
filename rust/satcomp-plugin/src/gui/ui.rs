@@ -1,10 +1,10 @@
 //! Port of the JSFX `@gfx` section: widget kit (cell, btn, selector, ...), the sat / comp / EQ viewports,
 //! meters and the main layout. Immediate mode with the same `act` / `press` drag logic as the JSFX.
 
-use satcomp_ui::canvas::{Canvas, FONT_NAMES, PALETTES};
+use satcomp_ui::canvas::Canvas;
 use satcomp_ui::fft::fft;
 use satcomp_ui::kit::{Kit, Meta, Widgets};
-use theme::{ThemeEdit, UserTheme};
+use satcomp_ui::appearance::{self, AppState, AppearanceUi, CellGrid, Rect};
 use crate::params::{SatCompParams, TABLE};
 use crate::presets::{self, Preset};
 use crate::Shared;
@@ -16,13 +16,6 @@ use satcomp_dsp::GainComputer;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-
-/// One line of the scrolling About / Changelog text. Head = version title (+ rule), takes the next Pad row too.
-enum Row {
-    Text(f32, String),
-    Head(String),
-    Pad,
-}
 
 enum MenuKind {
     Shape,
@@ -63,7 +56,6 @@ pub enum Dlg {
 }
 
 mod scope;
-mod theme;
 
 pub struct State {
     /// widget interaction state (satcomp-ui); `State` derefs to it
@@ -72,20 +64,14 @@ pub struct State {
     scope_cfg: i32,
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
     scope_drag: (f32, f32, usize, usize),
-    pub themes: Vec<UserTheme>,
-    pub edit: Option<ThemeEdit>,
+    /// colour themes, theme editor and About-page state (satcomp-ui)
+    pub app: AppState,
     pub dummy_params: Arc<SatCompParams>,
     pub dummy_shared: Arc<Shared>,
-    real_in: (bool, bool, bool, i32, f32, f32),
-    del_arm: f64,
     pub pal: usize,
     pub light: bool,
     /// UI font index (FONT_NAMES)
     pub face: usize,
-    /// first visible scheme row in the Appearance list
-    ap_scroll: usize,
-    /// first visible row of the About / Changelog text box
-    about_scroll: usize,
     /// time of a logo click waiting out the double-click window (then it cycles the colour scheme)
     logo_pend: f64,
     // interaction
@@ -166,8 +152,6 @@ pub struct State {
     pending: u8,
     /// result slot of a file dialog running on a worker thread (never block the UI/host thread in a modal)
     dlg: Option<Arc<parking_lot::Mutex<Dlg>>>,
-    /// About page: 0 closed, 1 about, 2 changelog, 3 appearance
-    about: u8,
     /// preset the edit marker compares against (cached by name), and the post-load settle time
     base: Option<(String, Preset)>,
     hold_until: f64,
@@ -247,14 +231,9 @@ impl State {
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_drag: (0.0, 0.0, 0, 0),
-            themes: theme::load_themes(),
-            edit: None,
+            app: AppState::new(),
             dummy_params: Arc::new(SatCompParams::default()),
             dummy_shared: Arc::new(Shared::new()),
-            real_in: (false, false, false, 0, -1000.0, -1000.0),
-            del_arm: -10.0,
-            ap_scroll: 0,
-            about_scroll: 0,
             logo_pend: -1.0,
             vt1: 0,
             vt2: 0,
@@ -319,12 +298,42 @@ impl State {
             user: presets::scan_user(),
             pending: 0,
             dlg: None,
-            about: 0,
             base: None,
             hold_until: 0.0,
         };
         st.restore_custom(params);
         st
+    }
+}
+
+impl State {
+    /// Colours the canvas draws with: the editor preview while editing, else the active scheme.
+    pub fn colors(&self) -> [f32; 9] {
+        self.app.colors(self.pal, self.light)
+    }
+
+    /// A project that used a user theme: resolve it from the themes file or the project copy.
+    pub fn restore_custom(&mut self, params: &SatCompParams) {
+        let pal = self.app.restore_custom(self.pal, &params.custom_theme.lock());
+        if pal != self.pal || pal >= satcomp_ui::canvas::PALETTES.len() {
+            self.pal = pal;
+            params.palette_v2.store(pal as i32, Ordering::Relaxed);
+        }
+    }
+
+    /// Constant meter / readout values for the dummy page (set every frame, the draw code then settles on them).
+    pub fn fill_dummy(&self) {
+        let d = &self.dummy_shared;
+        d.gr_pk.store(3.5, Ordering::Relaxed);
+        d.opk[0].store(1.0, Ordering::Relaxed);
+        d.opk[1].store(0.5, Ordering::Relaxed);
+        d.clip.store(true, Ordering::Relaxed);
+        d.vz_lv.store(0.3, Ordering::Relaxed);
+        d.mn_lv.store(0.5, Ordering::Relaxed);
+        d.fms.store(0.05, Ordering::Relaxed);
+        d.diff_disp.store(2.0, Ordering::Relaxed);
+        d.sat_db.store(2.0, Ordering::Relaxed);
+        d.sat_vz.store(0.3, Ordering::Relaxed);
     }
 }
 
@@ -370,10 +379,58 @@ impl<'a> Widgets<'a> for Gui<'a> {
         self.env.setter.raw_context
     }
     fn masked(&self) -> bool {
-        self.s.edit.is_some()
+        self.s.app.edit.is_some()
     }
     fn fmt(&self, n: usize, v: f32) -> String {
         self.fmt_slot(n, v)
+    }
+}
+
+impl<'a> AppearanceUi<'a> for Gui<'a> {
+    fn app(&mut self) -> &mut AppState {
+        &mut self.s.app
+    }
+    fn app_ref(&self) -> &AppState {
+        &self.s.app
+    }
+    fn pal(&self) -> usize {
+        self.s.pal
+    }
+    fn light(&self) -> bool {
+        self.s.light
+    }
+    fn face(&self) -> usize {
+        self.s.face
+    }
+    fn commit_scheme(&mut self, pal: usize, encoded: String) {
+        self.s.pal = pal;
+        self.env.params.palette_v2.store(pal as i32, Ordering::Relaxed);
+        // a user theme is also stored in the project, so it survives a machine without the themes file
+        *self.env.params.custom_theme.lock() = encoded;
+        self.apply_pal();
+    }
+    fn commit_light(&mut self, light: bool) {
+        self.s.light = light;
+        self.env.params.light.store(light, Ordering::Relaxed);
+        self.apply_pal();
+    }
+    fn commit_face(&mut self, face: usize) {
+        self.s.face = face;
+        self.env.params.font.store(face as i32, Ordering::Relaxed);
+        self.cv.face = face;
+    }
+    fn about_paras(&self) -> &'static [&'static [&'static str]] {
+        ABOUT_TEXT
+    }
+    fn changelog(&self) -> &'static [(&'static str, &'static [&'static str])] {
+        CHANGELOG
+    }
+    fn draw_flow(&mut self, r: Rect, byp: bool) {
+        self.draw_flow_at(r.x, r.y, r.w, r.h, byp);
+    }
+    fn about_scroll_drag_start(&mut self) {
+        self.vt1 = 0;
+        self.vt2 = 0;
     }
 }
 
@@ -437,11 +494,17 @@ fn version_short() -> String {
     v.strip_suffix(".0").unwrap_or(v).to_string()
 }
 
-fn blink(t: f64) -> bool {
-    ((t * 4.0).floor() as i64) & 1 == 1
-}
+use appearance::blink;
 
 impl<'a> Gui<'a> {
+    /// Push the active scheme's colours into the canvas.
+    fn apply_pal(&mut self) {
+        let a = self.app.scheme_cols(self.pal, self.light);
+        self.cv.bk = [a[0], a[1], a[2]];
+        self.cv.fg = [a[3], a[4], a[5]];
+        self.cv.ac = [a[6], a[7], a[8]];
+    }
+
     // ------------------------------------------------------------------ params (slider-number addressing)
     fn refresh_dsp(&mut self) {
         self.env.dsp = self.env.params.to_dsp();
@@ -627,14 +690,14 @@ impl<'a> Gui<'a> {
         }
         if self.logo_pend >= 0.0 && self.now - self.logo_pend >= 0.3 {
             self.logo_pend = -1.0;
-            let n = self.n_schemes();
+            let n = self.app.n_schemes();
             self.set_pal((self.pal + 1) % n);
         }
         if hv && self.rpress {
             self.logo_pend = -1.0;
             let mut items = vec![MItem { label: format!("MODE: {}", if self.light { "LIGHT" } else { "DARK" }), kind: 0, id: 1000 }];
             items.push(MItem { label: String::new(), kind: 2, id: -1 });
-            items.extend((0..self.n_schemes()).map(|i| MItem { label: self.scheme_name(i), kind: 0, id: i as i32 }));
+            items.extend((0..self.app.n_schemes()).map(|i| MItem { label: self.app.scheme_name(i), kind: 0, id: i as i32 }));
             self.menu = Some(Menu { kind: MenuKind::Palette, x, y: y + 22.0, items, checked: self.pal as i32, scroll: 0 });
         }
         // plug-in icon in a square box: fill = BG, stroke = UI (so light mode inverts it with the scheme)
@@ -655,30 +718,6 @@ impl<'a> Gui<'a> {
         l(&self.cv, 0.5, 20.5, 0.5, 13.5);
         l(&self.cv, 6.5, 14.5, 0.5, 20.5);
         l(&self.cv, 14.5, 6.5, 20.5, 0.5);
-    }
-
-    fn set_pal(&mut self, p: usize) {
-        self.pal = p.min(self.n_schemes() - 1);
-        self.env.params.palette_v2.store(self.pal as i32, Ordering::Relaxed);
-        // a user theme is also stored in the project, so it survives a machine without the themes file
-        *self.env.params.custom_theme.lock() = match self.pal.checked_sub(PALETTES.len()) {
-            Some(i) => theme::encode(&self.themes[i]),
-            None => String::new(),
-        };
-        self.apply_pal();
-    }
-
-    fn set_light(&mut self, light: bool) {
-        self.light = light;
-        self.env.params.light.store(light, Ordering::Relaxed);
-        self.apply_pal();
-    }
-
-    fn apply_pal(&mut self) {
-        let a = self.scheme_cols(self.pal, self.light);
-        self.cv.bk = [a[0], a[1], a[2]];
-        self.cv.fg = [a[3], a[4], a[5]];
-        self.cv.ac = [a[6], a[7], a[8]];
     }
 
     fn diff_box(&mut self, x: f32, y: f32, w: f32, h: f32) {
@@ -1945,263 +1984,9 @@ impl<'a> Gui<'a> {
     }
 
     // ------------------------------------------------------------------ about page
-    /// Greedy word wrap at the current font.
-    fn wrap(&self, s: &str, w: f32) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut cur = String::new();
-        for word in s.split(' ') {
-            let t = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
-            if !cur.is_empty() && self.cv.text_w(&t) > w {
-                out.push(std::mem::take(&mut cur));
-                cur = word.to_string();
-            } else {
-                cur = t;
-            }
-        }
-        if !cur.is_empty() {
-            out.push(cur);
-        }
-        out
-    }
-
-    /// Replaces the left two thirds of the window (tab row, viz row, cells) while the About page is open.
-    fn draw_about(&mut self, byp: bool) {
-        for (x, w, l, id) in [(10.0, 114.0, "ABOUT", 1u8), (125.0, 114.0, "APPEARANCE", 3u8), (240.0, 114.0, "CHANGELOG", 2u8)] {
-            if self.btn(x, 34.0, w, 16.0, l, (self.about == id) as u8) {
-                self.about = id;
-                self.about_scroll = 0;
-                if id == 3 {
-                    self.ap_scroll = self.pal.saturating_sub(2);
-                }
-            }
-        }
-        if self.btn(356.0, 34.0, 62.0, 16.0, "X CLOSE", 0) {
-            self.about = 0;
-            self.about_scroll = 0;
-        }
-        self.setc(false);
-        self.cv.set_font(1);
-        if self.about == 3 {
-            self.draw_appearance();
-            return;
-        }
-        if self.about == 2 {
-            self.cv.boxr(10.0, 56.0, 408.0, 266.0);
-            let mut rows = Vec::new();
-            for (ver, lines) in CHANGELOG {
-                rows.push(Row::Head(ver.to_string()));
-                rows.push(Row::Pad);
-                for l in *lines {
-                    for (i, t) in self.wrap(l, 378.0).into_iter().enumerate() {
-                        rows.push(Row::Text(if i == 0 { 0.0 } else { 10.0 }, if i == 0 { format!("- {t}") } else { t }));
-                    }
-                }
-                rows.push(Row::Pad);
-            }
-            self.scroll_rows(10.0, 56.0, 408.0, 266.0, &rows);
-            return;
-        }
-        self.draw_flow(10.0, 56.0, 408.0, 114.0, byp);
-        self.setc(false);
-        self.cv.boxr(10.0, 176.0, 408.0, 146.0);
-        let mut rows = Vec::new();
-        for para in ABOUT_TEXT {
-            for l in *para {
-                for t in self.wrap(l, 378.0) {
-                    rows.push(Row::Text(0.0, t));
-                }
-            }
-            rows.push(Row::Pad);
-        }
-        self.scroll_rows(10.0, 176.0, 408.0, 129.0, &rows);
-        self.setc(false);
-        self.cv.text(16.0, 322.0 - 17.0, &format!("Font: {} (SIL OFL 1.1)", FONT_NAMES[self.face]));
-        self.cv.textr(10.0, 322.0 - 17.0, 408.0 - 6.0, "thomchantra");
-    }
-
-    fn set_face(&mut self, i: usize) {
-        self.face = i.min(FONT_NAMES.len() - 1);
-        self.env.params.font.store(self.face as i32, Ordering::Relaxed);
-        self.cv.face = self.face;
-    }
-
-    /// Appearance tab: colour mode switch, scrollable scheme list with swatches, font choice. Everything applies at once.
-    fn draw_appearance(&mut self) {
-        const ROWS: usize = 5;
-        const RH: f32 = 20.0;
-        self.cv.boxr(10.0, 56.0, 408.0, 266.0);
-        self.setc(false);
-        self.cv.set_font(1);
-        self.cv.text(18.0, 64.0, "COLOR MODE");
-        for (x, l, lt) in [(110.0, "DARK", false), (176.0, "LIGHT", true)] {
-            if self.btn(x, 60.0, 64.0, 16.0, l, (self.light == lt) as u8) {
-                self.set_light(lt);
-            }
-        }
-
-        // ---- scheme list
-        self.setc(false);
-        self.cv.text(18.0, 86.0, "COLOR SCHEME");
-        let user_sel = self.pal >= PALETTES.len();
-        if self.btn(248.0, 82.0, 82.0, 14.0, "NEW THEME", 0) {
-            self.begin_edit(None);
-            return;
-        }
-        let prev_dk = self.dk;
-        if !user_sel {
-            self.set_dk(0.5); // EDIT / DELETE only apply to a user theme
-        }
-        let armed = self.now - self.del_arm < 3.0;
-        let edit_hit = self.btn(332.0, 82.0, 38.0, 14.0, "EDIT", 0);
-        let del_hit = self.btn(372.0, 82.0, 38.0, 14.0, if armed && user_sel { "SURE?" } else { "DEL" }, (armed && user_sel) as u8 * 2);
-        self.set_dk(prev_dk);
-        if user_sel {
-            if edit_hit {
-                self.begin_edit(Some(self.pal - PALETTES.len()));
-                return;
-            }
-            if del_hit {
-                if armed {
-                    self.delete_user(self.pal - PALETTES.len());
-                    self.del_arm = -10.0;
-                } else {
-                    self.del_arm = self.now;
-                }
-            }
-        }
-        let (lx, ly, lw) = (18.0, 98.0, 392.0);
-        let lh = ROWS as f32 * RH + 2.0;
-        let n = self.n_schemes();
-        let max = n.saturating_sub(ROWS);
-        if self.hit(lx, ly, lw, lh) && self.wheel != 0 {
-            self.ap_scroll = (self.ap_scroll as i32 - self.wheel).clamp(0, max as i32) as usize;
-        }
-        let (tx, ty, th) = (lx + lw - 9.0, ly + 3.0, lh - 6.0);
-        let thumb = (th * ROWS as f32 / n as f32).floor().max(14.0).min(th);
-        if self.hit(tx - 3.0, ty, 11.0, th) && self.press && self.act == 0 {
-            self.act = 141;
-            self.press = false;
-        }
-        if self.act == 141 && self.down {
-            let f = ((self.my - ty - thumb * 0.5) / (th - thumb).max(1.0)).clamp(0.0, 1.0);
-            self.ap_scroll = (f * max as f32 + 0.5).floor() as usize;
-        }
-        self.ap_scroll = self.ap_scroll.min(max);
-        self.setc(false);
-        self.cv.boxr(lx, ly, lw, lh);
-        let rw = lw - 2.0 - 11.0;
-        for i in 0..ROWS.min(n) {
-            let idx = self.ap_scroll + i;
-            let y = ly + 1.0 + i as f32 * RH;
-            let sel = idx == self.pal;
-            if self.hit(lx + 1.0, y, rw, RH) && self.press && self.act == 0 {
-                self.set_pal(idx);
-                self.press = false;
-            }
-            if sel {
-                self.setc(false);
-                self.cv.fill(lx + 1.0, y, rw, RH);
-                self.cv.setbg();
-            } else {
-                self.setc(false);
-            }
-            let nm = self.scheme_name(idx);
-            self.cv.text(lx + 9.0, y + 6.0, &nm);
-            let a = self.scheme_cols(idx, self.light);
-            for (k, name) in ["BG", "UI", "ACCENT"].iter().enumerate() {
-                let _ = name;
-                let (cx, cy) = (lx + rw - 3.0 - (3 - k) as f32 * 22.0 + 4.0, y + 3.0);
-                if sel {
-                    self.cv.setbg();
-                } else {
-                    self.setc(false);
-                }
-                self.cv.fill(cx, cy, 20.0, RH - 6.0);
-                self.cv.setrgb([a[k * 3], a[k * 3 + 1], a[k * 3 + 2]]);
-                self.cv.fill(cx + 1.0, cy + 1.0, 18.0, RH - 8.0);
-            }
-        }
-        self.setc(false);
-        self.cv.fill(tx + 3.0, ty, 1.0, th); // track
-        let top = ty + (th - thumb) * self.ap_scroll as f32 / max as f32;
-        self.setc(self.act == 141);
-        self.cv.fill(tx + 1.0, top.floor(), 5.0, thumb);
-        self.setc(false);
-
-        // ---- font
-        self.cv.text(18.0, 208.0, "FONT");
-        for (i, name) in FONT_NAMES.iter().enumerate() {
-            let (x, y, w, h) = (18.0 + (i % 2) as f32 * 200.0, 220.0 + (i / 2) as f32 * 24.0, 192.0, 20.0);
-            let on = self.face == i;
-            if self.hit(x, y, w, h) && self.press && self.act == 0 {
-                self.set_face(i);
-                self.press = false;
-            }
-            self.setc(false);
-            if on {
-                self.cv.fill(x, y, w, h);
-                self.cv.setbg();
-            } else {
-                self.cv.boxr(x, y, w, h);
-            }
-            let keep = self.cv.face;
-            self.cv.face = i; // each name is drawn in its own typeface
-            self.cv.textc(x, y + 6.0, w, name);
-            self.cv.face = keep;
-        }
-        self.setc(false);
-        self.cv.text(18.0, 300.0, "Applies at once, saved with the project. Fonts: SIL OFL 1.1");
-    }
-
-    /// Text rows (11 units each) in a box whose frame the caller has drawn. Mouse wheel scrolls 3 rows per notch; when the
-    /// text overflows a thumb on the right edge shows the position and can be dragged. Rows are culled whole (no clipping).
-    fn scroll_rows(&mut self, x: f32, y: f32, w: f32, h: f32, rows: &[Row]) {
-        let vis = (((h - 10.0) / 11.0).floor() as usize).max(1);
-        let max = rows.len().saturating_sub(vis);
-        if self.hit(x, y, w, h) && self.wheel != 0 {
-            self.about_scroll = (self.about_scroll as i32 - self.wheel * 3).clamp(0, max as i32) as usize;
-        }
-        let (tx, ty, th) = (x + w - 8.0, y + 4.0, h - 8.0);
-        let thumb = (th * vis as f32 / rows.len().max(1) as f32).floor().max(14.0).min(th);
-        if max > 0 {
-            if self.hit(tx - 3.0, ty, 10.0, th) && self.press && self.act == 0 {
-                self.act = 140;
-                self.vt1 = 0;
-                self.vt2 = 0;
-                self.press = false;
-            }
-            if self.act == 140 && self.down {
-                let f = ((self.my - ty - thumb * 0.5) / (th - thumb).max(1.0)).clamp(0.0, 1.0);
-                self.about_scroll = (f * max as f32 + 0.5).floor() as usize;
-            }
-        }
-        self.about_scroll = self.about_scroll.min(max);
-        self.setc(false);
-        for (i, r) in rows.iter().skip(self.about_scroll).take(vis).enumerate() {
-            let yy = y + 7.0 + i as f32 * 11.0;
-            match r {
-                Row::Text(ind, t) => self.cv.text(x + 8.0 + ind, yy, t),
-                Row::Head(t) => {
-                    self.cv.text(x + 8.0, yy, t);
-                    if i + 1 < vis {
-                        self.cv.fill(x + 8.0, yy + 13.0, w - 16.0 - if max > 0 { 8.0 } else { 0.0 }, 1.0);
-                    }
-                }
-                Row::Pad => {}
-            }
-        }
-        if max > 0 {
-            self.cv.fill(tx + 3.0, ty, 1.0, th); // track
-            let top = ty + (th - thumb) * self.about_scroll as f32 / max as f32;
-            self.setc(self.act == 140);
-            self.cv.fill(tx + 1.0, top.floor(), 5.0, thumb);
-            self.setc(false);
-        }
-    }
-
     /// Signal-flow diagram: SAT > PRE EQ > COMP > MIX (dry path) > POST EQ > OUT. Dots move along the path; their size
     /// follows the live output level (pre-compressor segments add the gain reduction back, so they read hotter).
-    fn draw_flow(&mut self, x: f32, y: f32, w: f32, h: f32, byp: bool) {
+    fn draw_flow_at(&mut self, x: f32, y: f32, w: f32, h: f32, byp: bool) {
         let prev = self.dk;
         let sh = self.env.shared;
         self.setc(false);
@@ -2322,16 +2107,13 @@ impl<'a> Gui<'a> {
     pub fn frame(&mut self) {
         let sh = self.env.shared;
         // Theme editor: every widget draws as a dummy with the input masked; only the editor cells and the picker get it.
-        let editing = self.edit.is_some();
-        self.real_in = (self.press, self.down, self.rpress, self.wheel, self.mx, self.my);
+        let editing = self.app.editing();
+        self.begin_frame_editing();
         if editing {
-            self.mask_in();
-            self.act = 0;
             self.logo_pend = -1.0;
             self.eq_page = false;
             self.curve_edit = false;
             self.menu = None;
-            self.about = 0;
         }
         // readouts refresh ~8x/s
         self.rd_tick = self.now - self.rd_last >= 0.12;
@@ -2390,8 +2172,8 @@ impl<'a> Gui<'a> {
         let title = format!("SATCOMP {}", version_short());
         let tw = self.cv.text_w(&title);
         if self.hit(42.0, 5.0, tw + 4.0, 21.0) && self.press && self.act == 0 {
-            self.about = if self.about == 0 { 1 } else { 0 };
-            self.about_scroll = 0;
+            self.app.about = if self.app.about == 0 { 1 } else { 0 };
+            self.app.about_scroll = 0;
             self.press = false;
         }
         self.cv.text(44.0, 12.0, &title);
@@ -2404,10 +2186,10 @@ impl<'a> Gui<'a> {
         self.out_meter(464.0, 8.0, 86.0, 16.0);
 
         // ---------- tab row
-        let ab = self.about > 0;
+        let ab = self.app.about > 0;
         self.set_dk(if byp { 0.5 } else { 1.0 });
         if ab {
-            self.draw_about(byp);
+            self.draw_about(Rect::new(10.0, 56.0, 408.0, 266.0), byp);
         }
         if !ab {
         self.selector(1, 10.0, 34.0, 130.0, 16.0);
@@ -2488,7 +2270,7 @@ impl<'a> Gui<'a> {
             self.set_dk(if byp || eq_mod_byp || stage_byp { 0.5 } else { 1.0 });
             self.draw_eq_cells();
         } else if editing {
-            self.theme_cells();
+            self.theme_cells(CellGrid { x0: 152.0, y0: 196.0, cw: 62.0, ch: 38.0, px: 68.0, py: 44.0 });
         } else {
             self.cell(8, 152.0, 196.0, 62.0, 38.0, "THRESH");
             self.cell(9, 220.0, 196.0, 62.0, 38.0, "RATIO");
@@ -2569,14 +2351,14 @@ impl<'a> Gui<'a> {
         self.run_pending();
         if editing {
             self.unmask_in();
-            let osk = self.edit.as_ref().map(|e| e.osk.is_some()).unwrap_or(false);
+            let osk = self.app.osk_open();
             if osk {
                 self.mask_in(); // picker stays visible underneath but inert
             }
-            self.theme_picker();
+            self.theme_picker(Rect::new(152.0, 56.0, 266.0, 128.0));
             if osk {
                 self.unmask_in();
-                self.theme_osk();
+                self.theme_osk(Rect::new(152.0, 56.0, 266.0, 128.0));
             }
         }
     }
