@@ -470,6 +470,47 @@ mod tests {
         assert!((g - 6.0).abs() < 0.5, "sat gain +6 dB moved the level by {g}");
     }
 
+    fn tone_db(f: f64, p: &XParams, warm: Option<&XParams>) -> f64 {
+        let t: Vec<f64> = (0..48000).map(|i| 0.2 * (2.0 * PI * f * i as f64 / SR).sin()).collect();
+        let mut e = XEngine::new(SR);
+        if let Some(w) = warm {
+            e.set_params(w);
+            run(&mut e, &t);
+        }
+        e.set_params(p);
+        let y = run(&mut e, &t);
+        20.0 * (rms(&y[8000..]) / rms(&t[8000..])).log10()
+    }
+
+    #[test]
+    fn eq_gain_mix_and_pivot_act() {
+        // EQ GAIN on its own (no bands on)
+        let mut p = neutral();
+        p.eq.gain = 6.0;
+        let g = tone_db(1000.0, &p, None);
+        assert!((g - 6.0).abs() < 0.3, "eq gain {g}");
+        // ... also when changed after the engine has been running
+        let g = tone_db(1000.0, &p, Some(&neutral()));
+        assert!((g - 6.0).abs() < 0.3, "eq gain after warm-up {g}");
+        // EQ MIX 0 takes the whole EQ out
+        let mut p = neutral();
+        p.eq.bands[3].on = true;
+        p.eq.bands[3].freq = 5000.0;
+        p.eq.bands[3].gain = 9.0;
+        let full = tone_db(5000.0, &p, None);
+        p.eq.mix = 0.0;
+        let off = tone_db(5000.0, &p, None);
+        assert!(full > 8.0 && off.abs() < 0.3, "eq mix: full {full}, mix 0 {off}");
+        // pivot moves where the tilt crosses 0 dB
+        let mut p = neutral();
+        p.eq.tilt = 6.0;
+        p.eq.pivot = 200.0;
+        let a = tone_db(200.0, &p, None);
+        p.eq.pivot = 4000.0;
+        let b = tone_db(200.0, &p, None);
+        assert!((a - b).abs() > 2.0, "pivot has no effect: {a} vs {b}");
+    }
+
     #[test]
     fn saturation_and_all_modes_run_clean() {
         let x = noise(24000, 3);
