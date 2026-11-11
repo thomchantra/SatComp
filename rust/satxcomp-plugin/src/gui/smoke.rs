@@ -44,9 +44,16 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
+        Self::with_params(|_| {})
+    }
+
+    /// A rig whose parameters start from `tweak` (nih-plug's setters are sealed, so state is set before the params are shared).
+    fn with_params(tweak: impl FnOnce(&mut SatXCompParams)) -> Self {
         let ctx = egui::Context::default();
         satcomp_ui::init_ctx(&ctx);
-        let params = Arc::new(SatXCompParams::default());
+        let mut p = SatXCompParams::default();
+        tweak(&mut p);
+        let params = Arc::new(p);
         Self { ctx, host: Arc::new(FakeHost::default()), shared: Arc::new(Shared::new()), st: State::new(&params), params, t: 1.0, hash: 0xcbf29ce484222325 }
     }
 
@@ -226,7 +233,7 @@ fn main_page_controls_of_the_wide_layout_write_parameters() {
     }
 }
 
-/// Header: the preset bar and SIDECHAIN are layout only (no parameter writes), the scale button opens the size menu.
+/// Header: the preset bar is layout only (no parameter writes), SIDECHAIN toggles the key, the scale button opens the size menu.
 #[test]
 fn header_preset_layout_is_inert_and_scale_menu_opens() {
     let mut r = Rig::new();
@@ -234,10 +241,13 @@ fn header_preset_layout_is_inert_and_scale_menu_opens() {
         r.frame(vec![]);
     }
     let n0 = r.log().len();
-    for (x, y) in [(165.0, 16.0), (240.0, 16.0), (328.0, 16.0), (353.0, 16.0), (460.0, 16.0)] {
-        r.click(x, y); // save icon, name, prev, next, SIDECHAIN
+    for (x, y) in [(165.0, 16.0), (240.0, 16.0), (328.0, 16.0), (353.0, 16.0)] {
+        r.click(x, y); // save icon, name, prev, next
     }
-    assert!(r.log()[n0..].is_empty(), "preset bar / sidechain must not write parameters: {:?}", &r.log()[n0..]);
+    assert!(r.log()[n0..].is_empty(), "the preset bar must not write parameters: {:?}", &r.log()[n0..]);
+    r.click(460.0, 16.0); // SIDECHAIN
+    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Sidechain 1.000")), "SIDECHAIN click: {:?}", &r.log()[n0..]);
+    let n0 = r.log().len();
     // the scale button opens a menu; clicking an entry must not touch parameters and a click elsewhere closes it
     r.click(395.0, 16.0);
     r.click(400.0, 24.0 + 1.0 + 14.0 * 2.0 + 7.0);
@@ -343,4 +353,36 @@ fn spectrum_handle_drag_sets_the_band_threshold() {
     r.click(88.0, 41.0);
     r.click(88.0, 41.0);
     assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Thresh 1.000")), "double-click resets the threshold: {:?}", &r.log()[n0..]);
+}
+
+/// Sidechain on: the control row appears under the spectrum (SC gain, HP, LP writes; SOLO is a UI flag) and KEY MIX replaces
+/// FF>FB in the compressor cells.
+#[test]
+fn sidechain_row_and_key_mix_cell() {
+    let mut r = Rig::with_params(|p| p.sc_on = BoolParam::new("Sidechain", true));
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    // row y 167..184: SC gain x 10..170, HP 169..304, LP 303..438, SOLO 437..540
+    for (x, y, dy, name) in [(90.0, 175.0, -25.0, "SC Gain"), (230.0, 175.0, -25.0, "SC HP"), (370.0, 175.0, 25.0, "SC LP")] {
+        let n0 = r.log().len();
+        r.drag(x, y, x, y + dy);
+        let new: Vec<String> = r.log()[n0..].to_vec();
+        assert!(new.iter().any(|l| l.starts_with(name)) && new.iter().all(|l| l.starts_with(name)), "dragging {name}: {new:?}");
+    }
+    assert!(!r.shared.sc_solo.load(std::sync::atomic::Ordering::Relaxed));
+    r.click(490.0, 175.0);
+    assert!(r.shared.sc_solo.load(std::sync::atomic::Ordering::Relaxed), "SOLO click sets the monitor flag");
+    // KEY MIX sits where FF>FB is (third compressor column, second row) and defaults to its maximum
+    let n0 = r.log().len();
+    r.drag(500.0, 282.0, 500.0, 307.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(new.iter().any(|l| l.starts_with("Key Mix")) && new.iter().all(|l| l.starts_with("Key Mix")), "KEY MIX cell: {new:?}");
+    // sidechain off: solo is cleared by the next frame and the row is gone (no SC writes at its old spot)
+    let mut r = Rig::new();
+    r.shared.sc_solo.store(true, std::sync::atomic::Ordering::Relaxed);
+    r.frame(vec![]);
+    assert!(!r.shared.sc_solo.load(std::sync::atomic::Ordering::Relaxed), "solo never outlives the sidechain switch");
+    r.drag(90.0, 175.0, 90.0, 150.0);
+    assert!(!r.log().iter().any(|l| l.starts_with("SC Gain")), "no SC row while the sidechain is off: {:?}", r.log());
 }

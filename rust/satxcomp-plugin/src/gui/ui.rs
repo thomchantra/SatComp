@@ -51,6 +51,13 @@ const EQ_GAIN: usize = 118;
 const EQ_BYPASS: usize = 119;
 const X1_SLOPE: usize = 82;
 const X2_SLOPE: usize = 83;
+const SC_ON: usize = 84;
+const SC_GAIN: usize = 85;
+const SC_HP: usize = 86;
+const SC_LP: usize = 87;
+const SC_MIX: usize = 88;
+/// height of the sidechain control row under the spectrum
+const SC_ROW_H: f32 = 17.0;
 // ---- layout (logical units; the window is W x H = 680 x 480)
 /// viewport (spectrum / crossover / EQ curve)
 const VX: f32 = 10.0;
@@ -220,6 +227,10 @@ impl State {
             sp(o + 3, 1, 0, 0.01);
             sp(o + 4, 0, 0, 0.1);
         }
+        sp(SC_GAIN, 0, 0, 0.1);
+        sp(SC_HP, 1, 1, 1.0);
+        sp(SC_LP, 1, 2, 10.0);
+        sp(SC_MIX, 0, 0, 1.0);
         sp(EQ_TILT, 0, 0, 0.1);
         sp(EQ_PIVOT, 1, 0, 1.0);
         sp(EQ_GAIN, 0, 0, 0.1);
@@ -352,6 +363,12 @@ fn hz(v: f32) -> String {
 }
 
 fn fmt_slot(n: usize, v: f32) -> String {
+    match n {
+        SC_GAIN => return format!("{:+.1}dB", v),
+        SC_HP | SC_LP => return hz(v),
+        SC_MIX => return format!("{:.0}%", v),
+        _ => {}
+    }
     if n == X1_SLOPE || n == X2_SLOPE {
         return format!("{}dB", [12, 24, 48, 96][(v + 0.5).floor().clamp(0.0, 3.0) as usize]);
     }
@@ -1227,6 +1244,39 @@ impl<'a> Gui<'a> {
         self.cv.textr(x, y + h - 11.0, w - 3.0, &format!("{}/{} PTS", c.n, MAX_PTS));
     }
 
+    /// Sidechain control row under the spectrum: SC gain | HP | LP | SOLO (solo = hear the key as the detectors see it,
+    /// i.e. after gain / HP / LP). Global: the key is conditioned once, then split into the three bands.
+    fn sc_row(&mut self, x: f32, y: f32) {
+        let h = SC_ROW_H;
+        let cells = [(SC_GAIN, "SC", 160.0f32), (SC_HP, "HP", 135.0), (SC_LP, "LP", 135.0)];
+        let mut cx = x;
+        for (n, lbl, w) in cells {
+            let hv = self.hit(cx, y, w, h);
+            if hv && self.kit.press && self.kit.act == 0 {
+                self.begin_drag(n);
+            }
+            if hv && self.kit.wheel != 0 {
+                self.wheel_adj(n);
+            }
+            let act = self.kit.act == n as i32;
+            self.setc(act);
+            self.cv.boxr(cx, y, w, h);
+            self.cv.set_font(1);
+            self.cv.text(cx + 4.0, y + 5.0, lbl);
+            let v = self.sget(n);
+            let t = self.fmt(n, v);
+            self.cv.textr(cx, y + 5.0, w - 4.0, &t);
+            let tn = self.n2t(n, v);
+            self.cv.fill(cx + 2.0, y + h - 3.0, ((tn * (w - 4.0)).floor()).max(1.0), 1.0);
+            self.setc(false);
+            cx += w - 1.0;
+        }
+        let solo = self.env.shared.sc_solo.load(Ordering::Relaxed);
+        if self.btn(cx, y, x + VW - cx, h, "SOLO", if solo { 2 } else { 0 }) {
+            self.env.shared.sc_solo.store(!solo, Ordering::Relaxed);
+        }
+    }
+
     /// the four slope steps of a crossover as one button group (12 / 24 / 48 / 96 dB per octave)
     fn slope_buttons(&mut self, n: usize, x: f32, y: f32) {
         let cur = (self.sget(n) + 0.5).floor() as i32;
@@ -1326,6 +1376,9 @@ impl<'a> Gui<'a> {
             for (r, (off, lbl)) in col.iter().enumerate() {
                 if *off == COMP_GAIN {
                     self.cell_o(o + off, cx, rows[r], CELL_W, CELL_H, lbl);
+                } else if *off == FF_FB && self.sget(SC_ON) > 0.5 {
+                    // KEY MIX stands in for FF>FB while the sidechain is on (one global value for all bands)
+                    self.cell(SC_MIX, cx, rows[r], CELL_W, CELL_H, "KEY MIX");
                 } else {
                     self.cell(o + off, cx, rows[r], CELL_W, CELL_H, lbl);
                 }
@@ -1714,7 +1767,15 @@ impl<'a> Gui<'a> {
         let title = format!("SATXCOMP {}", version_short());
         self.cv.text(44.0, 12.0, &title);
         self.preset_bar();
-        let _ = self.btn(418.0, 8.0, 76.0, 16.0, "SIDECHAIN", 0);
+        // sidechain key: white = on and the host gave a bus, red = on but no bus
+        let sc_on = self.sget(SC_ON) > 0.5;
+        let sc_lit = if !sc_on { 0 } else if sh.sc_bus.load(Ordering::Relaxed) { 1 } else { 2 };
+        if self.btn(418.0, 8.0, 76.0, 16.0, "SIDECHAIN", sc_lit) {
+            self.click_set(SC_ON, if sc_on { 0.0 } else { 1.0 });
+        }
+        if !sc_on && sh.sc_solo.load(Ordering::Relaxed) {
+            sh.sc_solo.store(false, Ordering::Relaxed); // solo never outlives the sidechain switch
+        }
         {
             // EQ page toggle; the square in it bypasses the whole EQ module (X = bypassed, like SatComp)
             let eq = self.env.dsp.eq;
@@ -1748,8 +1809,14 @@ impl<'a> Gui<'a> {
         if self.eq_page {
             self.draw_eq(VX, VY, VW, VH);
         } else {
-            self.draw_spectrum(VX, VY, VW, VH);
-            self.draw_crossover(VX, VY, VW, VH);
+            // the sidechain controls take the bottom of the viewport while the key is on
+            let vh = if sc_on { VH - SC_ROW_H } else { VH };
+            self.draw_spectrum(VX, VY, VW, vh);
+            self.draw_crossover(VX, VY, VW, vh);
+            if sc_on {
+                self.set_dk(if byp { 0.5 } else { 1.0 });
+                self.sc_row(VX, VY + vh);
+            }
         }
         self.set_dk(1.0);
         self.cv.set_font(1);
