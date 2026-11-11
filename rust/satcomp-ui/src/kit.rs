@@ -324,6 +324,30 @@ pub trait Widgets<'c> {
         self.setc(false);
     }
 
+    /// one param in a single short row (label left, value right, value bar on the bottom edge)
+    fn cell1(&mut self, n: usize, x: f32, y: f32, w: f32, h: f32, lbl: &str) {
+        let hv = self.hit(x, y, w, h);
+        if hv && self.kit().press && self.kit().act == 0 {
+            self.begin_drag(n);
+        }
+        if hv && self.kit().wheel != 0 {
+            self.wheel_adj(n);
+        }
+        let v = self.sget(n);
+        let t = self.n2t(n, v);
+        let isact = self.kit().act == n as i32;
+        self.setc(isact);
+        let s = self.fmt(n, v);
+        let cv = self.cv();
+        cv.boxr(x, y, w, h);
+        cv.set_font(1);
+        let ty = y + ((h - 8.0) * 0.5).floor();
+        cv.text(x + 3.0, ty, lbl);
+        cv.textr(x, ty, w - 3.0, &s);
+        cv.fill(x + 2.0, y + h - 3.0, ((t * (w - 4.0)).floor()).max(1.0), 1.0);
+        self.setc(false);
+    }
+
     /// two stacked params in one cell (label left, value right)
     fn cell2(&mut self, na: usize, nb: usize, x: f32, y: f32, w: f32, h: f32, la: &str, lb: &str) {
         let hh = (h * 0.5).floor();
