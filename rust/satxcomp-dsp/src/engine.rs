@@ -8,6 +8,7 @@ use crate::xover::Crossover3;
 use satcomp_dsp::biquad::eq_coef;
 use satcomp_dsp::delay::StereoDelay;
 use satcomp_dsp::eq::{EqBank, EqSection};
+use satcomp_dsp::keyinput::KeyInput;
 use satcomp_dsp::level::{ms_step, one_pole, Matcher, DB_POW, LN10_20};
 use satcomp_dsp::{ScopeRing, TapRing, DENORM};
 use std::sync::Arc;
@@ -41,6 +42,14 @@ pub struct XEngine {
     first_set: bool,
 
     xo: Crossover3,
+    /// the external key: conditioned globally, then split by its own copy of the crossover into one slice per band
+    key: KeyInput,
+    key_xo: Crossover3,
+    /// the host gave a sidechain bus this block
+    pub sc_avail: bool,
+    /// monitor the conditioned key instead of the output (UI toggle)
+    pub sc_solo: bool,
+    sc_s: f64,
     pub strips: [Strip; 3],
     eq: EqSection<EQ_FILTERS>,
     eq_mix: f64,
@@ -114,6 +123,11 @@ impl XEngine {
             snap: true,
             first_set: true,
             xo: Crossover3::new(),
+            key: KeyInput::new(),
+            key_xo: Crossover3::new(),
+            sc_avail: false,
+            sc_solo: false,
+            sc_s: 0.0,
             strips: [Strip::new(), Strip::new(), Strip::new()],
             eq: EqSection::default(),
             eq_mix: 1.0,
@@ -222,8 +236,10 @@ impl XEngine {
         let snap = self.snap;
         self.la_s = ((p.lookahead_ms * 0.001 * sr + 0.5).floor().max(0.0) as usize).min(1900);
         self.xo.set(p.x1, p.x2, p.x1_slope.clamp(0, 3) as usize, p.x2_slope.clamp(0, 3) as usize, sr, snap);
+        self.key_xo.set(p.x1, p.x2, p.x1_slope.clamp(0, 3) as usize, p.x2_slope.clamp(0, 3) as usize, sr, snap);
+        self.key.derive(p.sc_gain, p.sc_hp, p.sc_lp, sr);
         for b in 0..3 {
-            self.strips[b].derive(&p.bands[b], p.os, self.la_s, sr, snap, self.smoothing);
+            self.strips[b].derive(&p.bands[b], p.os, self.la_s, p.key_mix, sr, snap, self.smoothing);
         }
         self.any_solo = p.bands.iter().any(|b| b.solo);
         let any = eq_setup(&mut self.eq.bank, &p.eq, sr);
@@ -260,6 +276,7 @@ impl XEngine {
             self.derive();
         }
         self.xo.begin_block(n);
+        self.key_xo.begin_block(n);
         for s in self.strips.iter_mut() {
             s.begin_block();
         }
@@ -296,10 +313,23 @@ impl XEngine {
     }
 
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        let n = left.len().min(right.len());
+        self.process_sc(left, right, None);
+    }
+
+    /// As `process`, with the host's sidechain bus (`None` = no bus: the compressors key off their own bands).
+    pub fn process_sc(&mut self, left: &mut [f32], right: &mut [f32], sc: Option<(&[f32], &[f32])>) {
+        let mut n = left.len().min(right.len());
+        if let Some((a, b)) = sc {
+            n = n.min(a.len()).min(b.len());
+        }
+        self.sc_avail = sc.is_some();
         self.begin_block(n);
         for i in 0..n {
-            let (l, r) = self.tick(left[i] as f64, right[i] as f64);
+            let (kl, kr) = match sc {
+                Some((a, b)) => (a[i] as f64, b[i] as f64),
+                None => (0.0, 0.0),
+            };
+            let (l, r) = self.tick_sc(left[i] as f64, right[i] as f64, kl, kr);
             left[i] = l as f32;
             right[i] = r as f32;
         }
@@ -307,6 +337,12 @@ impl XEngine {
 
     #[inline]
     pub fn tick(&mut self, in_l: f64, in_r: f64) -> (f64, f64) {
+        self.tick_sc(in_l, in_r, 0.0, 0.0)
+    }
+
+    /// One sample with a sidechain sample pair (ignored unless the sidechain is on and the host gave a bus).
+    #[inline]
+    pub fn tick_sc(&mut self, in_l: f64, in_r: f64, sc_l: f64, sc_r: f64) -> (f64, f64) {
         let inp = [in_l, in_r];
         ms_step(&mut self.ims, in_l, in_r, self.rmsg_c);
         if self.smoothing {
@@ -323,12 +359,16 @@ impl XEngine {
         // ---- split, process each band, sum with solo / delta weighting
         let bands = self.xo.tick(inp);
         let sgn = self.xo.signs();
+        // key: gain > HP > LP, delayed to line up with the saturator outputs, then split into bands by its own crossover
+        let sc_act = self.p.sc_on && self.sc_avail;
+        let scv = self.key.tick(if sc_act { Some([sc_l, sc_r]) } else { None }, self.strips[0].sat.latency());
+        let kb = if sc_act { Some(self.key_xo.tick(scv)) } else { None };
         let mut sum = [0.0f64; 2];
         let mut pre = [0.0f64; 2];
         let gdelta = if self.delta_on { 1.0 } else { 0.0 };
         self.gd_s += (gdelta - self.gd_s) * self.byp_c;
         for b in 0..3 {
-            let o = self.strips[b].tick(bands[b], self.smoothing);
+            let o = self.strips[b].tick(bands[b], self.smoothing, kb.map(|k| k[b]));
             let bp = &self.p.bands[b];
             let dtarget: f64 = if bp.delta { 1.0 } else { 0.0 };
             let d = self.d_s[b] + (dtarget.max(gdelta) - self.d_s[b]) * self.byp_c;
@@ -362,7 +402,14 @@ impl XEngine {
             self.bg_t = (self.pms / self.ims).sqrt().clamp(0.0631, 15.85);
         }
         self.bg += (self.bg_t - self.bg) * self.bg_c;
-        let out = [pp[0] + (dt[0] * self.bg - pp[0]) * self.byp_s, pp[1] + (dt[1] * self.bg - pp[1]) * self.byp_s];
+        let mut out = [pp[0] + (dt[0] * self.bg - pp[0]) * self.byp_s, pp[1] + (dt[1] * self.bg - pp[1]) * self.byp_s];
+        // solo: hear the conditioned key as the detectors get it
+        self.sc_s += ((if self.sc_solo && sc_act { 1.0 } else { 0.0 }) - self.sc_s) * self.byp_c;
+        if self.sc_s > 0.0001 {
+            for c in 0..2 {
+                out[c] += (scv[c] - out[c]) * self.sc_s;
+            }
+        }
 
         if self.tap_on {
             self.tap_out.push(((out[0] + out[1]) * 0.5) as f32);
@@ -625,6 +672,119 @@ mod tests {
         run(&mut e, &tone);
         assert!((e.sat_vz[0] - 0.4).abs() < 0.08, "low band sees the 50 Hz tone: {}", e.sat_vz[0]);
         assert!(e.sat_vz[1] < 0.02 && e.sat_vz[2] < 0.02, "other bands stay quiet: {:?}", e.sat_vz);
+    }
+
+    fn sine(n: usize, f: f64, amp: f64) -> Vec<f64> {
+        (0..n).map(|i| amp * (2.0 * PI * f * i as f64 / SR).sin()).collect()
+    }
+
+    fn run_sc(e: &mut XEngine, x: &[f64], key: Option<&[f64]>) -> Vec<f64> {
+        let mut l: Vec<f32> = x.iter().map(|v| *v as f32).collect();
+        let mut r = l.clone();
+        let kf: Option<Vec<f32>> = key.map(|k| k.iter().map(|v| *v as f32).collect());
+        for (i, (cl, cr)) in l.chunks_mut(256).zip(r.chunks_mut(256)).enumerate() {
+            match &kf {
+                Some(k) => {
+                    let ks = &k[i * 256..(i * 256 + cl.len()).min(k.len())];
+                    e.process_sc(cl, cr, Some((ks, ks)));
+                }
+                None => e.process_sc(cl, cr, None),
+            }
+        }
+        l.iter().map(|v| *v as f64).collect()
+    }
+
+    /// every band compresses hard at a low threshold, keyed (not by its own signal) with KEY MIX 100 %
+    fn sc_params() -> XParams {
+        let mut p = neutral();
+        for b in p.bands.iter_mut() {
+            b.thresh = -30.0;
+            b.ratio = 20.0;
+            b.attack = 0.5;
+            b.knee = 0.0;
+        }
+        p.sc_on = true;
+        p.key_mix = 100.0;
+        p
+    }
+
+    fn gain_db(y: &[f64], x: &[f64]) -> f64 {
+        20.0 * (rms(&y[12000..]) / rms(&x[12000..])).log10()
+    }
+
+    #[test]
+    fn a_low_key_only_ducks_the_low_band() {
+        let key = sine(48000, 60.0, 0.9);
+        // low main (60 Hz) is ducked by the low key ...
+        let low = sine(48000, 60.0, 0.1);
+        let mut e = XEngine::new(SR);
+        e.set_params(&sc_params());
+        let g_low = gain_db(&run_sc(&mut e, &low, Some(&key)), &low);
+        // ... a high main (5 kHz) is not: its band's slice of the key is silent, and the key replaces the band's own detector
+        let high = sine(48000, 5000.0, 0.1);
+        let mut e = XEngine::new(SR);
+        e.set_params(&sc_params());
+        let g_high = gain_db(&run_sc(&mut e, &high, Some(&key)), &high);
+        assert!(g_low < -6.0, "low band should be ducked by the low key: {g_low} dB");
+        assert!(g_high > -1.0, "high band must ignore a low key: {g_high} dB");
+    }
+
+    #[test]
+    fn key_is_ignored_when_off_or_when_the_host_has_no_bus() {
+        let main = sine(48000, 60.0, 0.1);
+        let key = sine(48000, 60.0, 0.9);
+        let mut p = sc_params();
+        p.sc_on = false;
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        // sidechain off: the key does nothing, so the quiet main keeps its own (key-free) detection: key_mix is moot
+        let g_off = gain_db(&run_sc(&mut e, &main, Some(&key)), &main);
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        let g_off_nokey = gain_db(&run_sc(&mut e, &main, None), &main);
+        assert!((g_off - g_off_nokey).abs() < 0.2, "key must not matter while the sidechain is off: {g_off} vs {g_off_nokey}");
+        // sidechain on but no bus: same as off
+        let mut e = XEngine::new(SR);
+        e.set_params(&sc_params());
+        let g_nobus = gain_db(&run_sc(&mut e, &main, None), &main);
+        assert!((g_nobus - g_off_nokey).abs() < 0.2, "no bus = no key: {g_nobus} vs {g_off_nokey}");
+    }
+
+    #[test]
+    fn key_hp_ignores_a_low_key_and_gain_scales_it() {
+        let main = sine(48000, 60.0, 0.1);
+        let key = sine(48000, 60.0, 0.9);
+        let mut p = sc_params();
+        p.sc_hp = 2000.0;
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        let g = gain_db(&run_sc(&mut e, &main, Some(&key)), &main);
+        assert!(g > -1.0, "a 60 Hz key behind a 2 kHz high-pass must not duck: {g} dB");
+        // key gain scales the ducking: the same key 40 dB lower ducks far less than at 0 dB
+        let g0 = {
+            let mut e = XEngine::new(SR);
+            e.set_params(&sc_params());
+            gain_db(&run_sc(&mut e, &main, Some(&key)), &main)
+        };
+        let mut p = sc_params();
+        p.sc_gain = -40.0;
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        let g40 = gain_db(&run_sc(&mut e, &main, Some(&key)), &main);
+        assert!(g0 < -6.0 && g40 > g0 + 5.0, "gain -40 dB should duck much less: {g0} dB vs {g40} dB");
+    }
+
+    #[test]
+    fn sidechain_solo_outputs_the_conditioned_key() {
+        let mut p = sc_params();
+        p.sc_gain = -6.0;
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        e.sc_solo = true;
+        let key = sine(48000, 1000.0, 0.5);
+        let y = run_sc(&mut e, &sine(48000, 440.0, 0.1), Some(&key));
+        let want = rms(&key[24000..]) * 0.5012; // -6 dB
+        assert!((rms(&y[24000..]) - want).abs() < want * 0.1, "solo should be the key at -6 dB: {} vs {want}", rms(&y[24000..]));
     }
 
     #[test]

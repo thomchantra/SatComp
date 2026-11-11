@@ -66,7 +66,7 @@ impl Strip {
         SatParams { shape: p.shape, curve: p.curve, drive: p.drive, bias: p.bias, hp: 20.0, lp: 20000.0, tone: p.tone, os, mix: p.sat_mix, out_db: p.sat_gain }
     }
 
-    pub fn comp_params(p: &BandParams) -> CompParams {
+    pub fn comp_params(p: &BandParams, key_mix: f64) -> CompParams {
         CompParams {
             thresh: p.thresh,
             ratio: p.ratio,
@@ -79,7 +79,7 @@ impl Strip {
             det_hp: 0.0,
             ff_fb: p.ff_fb,
             gr_dist: p.gr_dist,
-            key_mix: 100.0,
+            key_mix,
         }
     }
 
@@ -87,11 +87,11 @@ impl Strip {
         self.sat.latency() + self.la_s
     }
 
-    pub fn derive(&mut self, p: &BandParams, os: i32, la_s: usize, sr: f64, snap: bool, smoothing: bool) {
+    pub fn derive(&mut self, p: &BandParams, os: i32, la_s: usize, key_mix: f64, sr: f64, snap: bool, smoothing: bool) {
         self.sat.derive(&Self::sat_params(p, os), sr, snap, smoothing);
         // Saturator::derive only latches SAT OUT on a snap; the target has to follow the parameter every time
         self.sat.set_out_db(p.sat_gain);
-        self.comp.derive(&Self::comp_params(p), sr);
+        self.comp.derive(&Self::comp_params(p, key_mix), sr);
         self.la_s = la_s;
         self.cmix_t = p.comp_mix * 0.01;
         self.cg_t = (p.comp_gain * LN10_20).exp();
@@ -110,7 +110,9 @@ impl Strip {
     }
 
     #[inline]
-    pub fn tick(&mut self, inp: [f64; 2], smoothing: bool) -> StripOut {
+    /// `key` = this band's slice of the external key while the sidechain is active (replaces the band's own detector signal
+    /// according to KEY MIX), aligned with the saturator output.
+    pub fn tick(&mut self, inp: [f64; 2], smoothing: bool, key: Option<[f64; 2]>) -> StripOut {
         self.dry.advance();
         self.dry.put(inp);
         let dd = self.dry.tap(self.latency());
@@ -119,7 +121,7 @@ impl Strip {
         self.lk.advance();
         self.lk.put(cc);
         let cd = if self.la_s > 0 { self.lk.tap(self.la_s) } else { cc };
-        let co = self.comp.tick(cc, cd, None);
+        let co = self.comp.tick(cc, cd, key);
         if smoothing {
             self.cmix += (self.cmix_t - self.cmix) * self.sm_c;
             self.cg += (self.cg_t - self.cg) * self.sm_c;

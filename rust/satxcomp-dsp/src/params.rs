@@ -115,6 +115,13 @@ pub struct XParams {
     /// saturator oversampling: 0 off, 1 x2, 2 x4
     pub os: i32,
     pub lookahead_ms: f64,
+    /// external key for the compressors (the sidechain bus); gain / HP / LP condition it before it is split into bands
+    pub sc_on: bool,
+    pub sc_gain: f64,
+    pub sc_hp: f64,
+    pub sc_lp: f64,
+    /// 0..100 %: how much of every band's detector level comes from the key instead of the band's own signal
+    pub key_mix: f64,
     pub bands: [BandParams; 3],
     pub eq: EqParams,
     /// 0..100 % dry/wet of the whole plug-in
@@ -133,6 +140,11 @@ impl Default for XParams {
             x2_slope: 1,
             os: 0,
             lookahead_ms: 0.0,
+            sc_on: false,
+            sc_gain: 0.0,
+            sc_hp: 20.0,
+            sc_lp: 20000.0,
+            key_mix: 100.0,
             bands: [BandParams::default(); 3],
             eq: EqParams::default(),
             mix: 100.0,
