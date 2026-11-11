@@ -25,6 +25,8 @@ pub struct Shared {
     pub gr_pk: [AtomicF32; 3],
     /// per band: decaying peak of the saturator input
     pub sat_vz: [AtomicF32; 3],
+    /// per band: post-saturator peak since the UI last took it (fetch_max / swap(0))
+    pub sat_out_pk: [AtomicF32; 3],
     pub fms: AtomicF32,
     pub diff_disp: AtomicF32,
     /// level change across the EQ stage, dB
@@ -50,6 +52,7 @@ impl Shared {
             clip: AtomicBool::new(false),
             gr_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             sat_vz: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
+            sat_out_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             fms: AtomicF32::new(1e-9),
             diff_disp: AtomicF32::new(0.0),
             eq_diff: AtomicF32::new(0.0),
@@ -172,6 +175,8 @@ impl Plugin for SatXComp {
         }
         for b in 0..3 {
             sh.sat_vz[b].store(e.sat_vz[b] as f32, Ordering::Relaxed);
+            sh.sat_out_pk[b].fetch_max(e.sat_out[b] as f32, Ordering::Relaxed);
+            e.sat_out[b] = 0.0;
         }
         sh.fms.store(e.fms as f32, Ordering::Relaxed);
         sh.diff_disp.store(e.diff_disp as f32, Ordering::Relaxed);

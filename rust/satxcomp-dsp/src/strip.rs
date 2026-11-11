@@ -31,6 +31,8 @@ pub struct Strip {
     on_c: f64,
     /// gain reduction of the loudest channel in the current block, dB (the owner resets it)
     pub gr_blk: f64,
+    /// peak of the saturator output (before the compressor) since the owner last reset it
+    pub sat_pk: f64,
 }
 
 impl Default for Strip {
@@ -56,6 +58,7 @@ impl Strip {
             sm_c: 0.0,
             on_c: 0.0,
             gr_blk: 0.0,
+            sat_pk: 0.0,
         }
     }
 
@@ -112,6 +115,7 @@ impl Strip {
         self.dry.put(inp);
         let dd = self.dry.tap(self.latency());
         let cc = self.sat.tick(inp, smoothing);
+        self.sat_pk = self.sat_pk.max(cc[0].abs().max(cc[1].abs()));
         self.lk.advance();
         self.lk.put(cc);
         let cd = if self.la_s > 0 { self.lk.tap(self.la_s) } else { cc };

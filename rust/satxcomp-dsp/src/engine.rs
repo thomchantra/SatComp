@@ -98,6 +98,8 @@ pub struct XEngine {
     pub gr_pk: [f64; 3],
     /// decaying peak of each band's saturator input (for the live marker on the transfer plot)
     pub sat_vz: [f64; 3],
+    /// per band peak of the saturator output, accumulated until the plug-in wrapper takes it (like `gr_pk`)
+    pub sat_out: [f64; 3],
     pub fms: f64,
 }
 
@@ -159,6 +161,7 @@ impl XEngine {
             gr_blk: [0.0; 3],
             gr_pk: [0.0; 3],
             sat_vz: [0.0; 3],
+            sat_out: [0.0; 3],
             fms: 1e-9,
         };
         e.derive();
@@ -287,6 +290,8 @@ impl XEngine {
         for b in 0..3 {
             self.sat_vz[b] = self.strips[b].sat.blk.max(self.sat_vz[b] * vz_d);
             self.strips[b].sat.blk = 0.0;
+            self.sat_out[b] = self.sat_out[b].max(self.strips[b].sat_pk);
+            self.strips[b].sat_pk = 0.0;
         }
     }
 
@@ -589,6 +594,23 @@ mod tests {
         e.set_params(&p);
         run(&mut e, &tone);
         assert!(e.eq_diff.abs() < 0.5, "eq mix 0 should read 0 dB, got {}", e.eq_diff);
+    }
+
+    #[test]
+    fn sat_out_is_the_post_saturator_peak_per_band() {
+        let tone: Vec<f64> = (0..48000).map(|i| 0.5 * (2.0 * PI * 50.0 * i as f64 / SR).sin()).collect();
+        let mut e = XEngine::new(SR);
+        e.set_params(&neutral());
+        run(&mut e, &tone);
+        assert!((e.sat_out[0] - 0.5).abs() < 0.1, "low band peak: {}", e.sat_out[0]);
+        assert!(e.sat_out[1] < 0.1 && e.sat_out[2] < 0.05, "other bands only see leakage: {:?}", e.sat_out);
+        // hot sat gain pushes the post-sat peak over full scale (what the clip indicator watches)
+        let mut p = neutral();
+        p.bands[0].sat_gain = 12.0;
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        run(&mut e, &tone);
+        assert!(e.sat_out[0] > 1.5, "+12 dB sat gain on a 0.5 peak: {}", e.sat_out[0]);
     }
 
     #[test]
