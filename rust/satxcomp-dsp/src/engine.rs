@@ -617,7 +617,11 @@ mod tests {
     fn sat_vz_follows_each_bands_saturator_input() {
         let tone: Vec<f64> = (0..48000).map(|i| 0.4 * (2.0 * PI * 50.0 * i as f64 / SR).sin()).collect();
         let mut e = XEngine::new(SR);
-        e.set_params(&XParams::default()); // default drive: the saturator only measures while it is active
+        let mut p = XParams::default();
+        for b in p.bands.iter_mut() {
+            b.drive = 25.0; // the saturator only measures while it is active
+        }
+        e.set_params(&p);
         run(&mut e, &tone);
         assert!((e.sat_vz[0] - 0.4).abs() < 0.08, "low band sees the 50 Hz tone: {}", e.sat_vz[0]);
         assert!(e.sat_vz[1] < 0.02 && e.sat_vz[2] < 0.02, "other bands stay quiet: {:?}", e.sat_vz);

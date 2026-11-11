@@ -213,7 +213,7 @@ fn main_page_controls_of_the_wide_layout_write_parameters() {
     assert!(r.log()[n0..].iter().any(|l| l.starts_with("Sat Oversampling")));
     // band cells: THRESH of the selected (low) band, SAT GAIN, and the OUT column
     for (x, y, dy, name) in [
-        (343.0, 234.0, -25.0, "Lo Thresh"),
+        (343.0, 234.0, 25.0, "Lo Thresh"),
         (193.0, 378.0, -25.0, "Lo Sat Gain"),
         (610.0, 378.0, -25.0, "Out Gain"),
         (610.0, 330.0, 25.0, "Mix"),
@@ -234,7 +234,7 @@ fn header_preset_layout_is_inert_and_scale_menu_opens() {
         r.frame(vec![]);
     }
     let n0 = r.log().len();
-    for (x, y) in [(165.0, 16.0), (240.0, 16.0), (330.0, 16.0), (355.0, 16.0), (460.0, 16.0)] {
+    for (x, y) in [(165.0, 16.0), (240.0, 16.0), (328.0, 16.0), (353.0, 16.0), (460.0, 16.0)] {
         r.click(x, y); // save icon, name, prev, next, SIDECHAIN
     }
     assert!(r.log()[n0..].is_empty(), "preset bar / sidechain must not write parameters: {:?}", &r.log()[n0..]);
@@ -329,18 +329,18 @@ fn spectrum_handle_drag_sets_the_band_threshold() {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    // default threshold -18 dB on the -100..-5 dB axis of the 150-high viewport (y 34..184): handle centre y ~55; the low band's
-    // handle sits at its centre frequency (~55 Hz): x ~88
+    // default threshold 0 dB: the handle sits at the top of the 150-high viewport (y 34..184, centre clamped to y 41); the low
+    // band's handle sits at its centre frequency (~55 Hz): x ~88
     let n0 = r.log().len();
-    r.drag(88.0, 55.0, 88.0, 85.0);
+    r.drag(88.0, 41.0, 88.0, 85.0);
     let new: Vec<String> = r.log()[n0..].to_vec();
     assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("Lo Thresh")), "handle drag: {new:?}");
-    // lower on screen = lower level: the last write must be below the default -18 dB (normalised (-18+40)/40 = 0.55)
+    // lower on screen = lower level: the last write must be below the default 0 dB (normalised 1.0)
     let last: f32 = new.last().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
-    assert!(last < 0.55, "dragging the handle down must lower the threshold: {new:?}");
-    // double-click on the handle writes the default back (the rig does not echo values, so the handle stays at y 55)
+    assert!(last < 0.9, "dragging the handle down must lower the threshold: {new:?}");
+    // double-click on the handle writes the default back (the rig does not echo values, so the handle stays at y 41)
     let n0 = r.log().len();
-    r.click(88.0, 55.0);
-    r.click(88.0, 55.0);
-    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Thresh 0.550")), "double-click resets the threshold: {:?}", &r.log()[n0..]);
+    r.click(88.0, 41.0);
+    r.click(88.0, 41.0);
+    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Thresh 1.000")), "double-click resets the threshold: {:?}", &r.log()[n0..]);
 }

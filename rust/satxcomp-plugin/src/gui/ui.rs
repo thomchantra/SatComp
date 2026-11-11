@@ -497,11 +497,11 @@ impl<'a> Gui<'a> {
         self.cv.fill(163.0, y + 3.0, 4.0, 3.0);
         self.cv.boxr(162.0, y + 8.0, 6.0, 5.0);
         self.setc(false);
-        self.cv.boxr(178.0, y, 144.0, h);
+        self.cv.boxr(178.0, y, 138.0, h);
         self.cv.set_font(2);
-        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 144.0, "-- INIT --");
+        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 138.0, "-- INIT --");
         for (i, dir) in [(0, -1), (1, 1)] {
-            let x = 322.0 + i as f32 * 25.0;
+            let x = 316.0 + i as f32 * 25.0;
             let _ = self.btn(x, y, 25.0, h, "", 0);
             self.setc(false);
             let (cx, cy) = (x + 12.5, y + h * 0.5);
@@ -512,8 +512,8 @@ impl<'a> Gui<'a> {
             }
         }
         let label = format!("{:.0}%", self.cur_scale() * 100.0);
-        if self.btn(378.0, y, 42.0, h, &label, 0) {
-            self.open_size_menu(378.0, y + h);
+        if self.btn(372.0, y, 42.0, h, &label, 0) {
+            self.open_size_menu(372.0, y + h);
         }
     }
 
@@ -850,7 +850,7 @@ impl<'a> Gui<'a> {
             let tw = self.cv.text_w(&txt);
             let tx = if bx + bw + 3.0 + tw > x + w - 2.0 { bx - 3.0 - tw } else { bx + bw + 3.0 };
             self.setc(g > 0.05 && on);
-            self.cv.text(tx, by + 2.0, &txt);
+            self.cv.text(tx, by + 12.0, &txt);
             self.setc(false);
         }
     }
@@ -1276,7 +1276,7 @@ impl<'a> Gui<'a> {
             let on = self.sget(base + ON) > 0.5;
             self.sq_tog(base + ON, x + 7.0, y + 4.0, 8.0);
             let label = format!("{} {}-{}", BAND_NAMES[b], hz(ranges[b].0), hz(ranges[b].1));
-            self.set_dk(1.0);
+            self.set_dk(if self.sget(8) > 0.5 { 0.5 } else { 1.0 });
             if self.btn(x, y, tw, 16.0, &label, (b == sel) as u8) {
                 self.select_band(b);
             }
@@ -1608,11 +1608,13 @@ impl<'a> Gui<'a> {
     }
 
     fn eq_cells(&mut self, y0: f32) {
+        // the whole page dims while the EQ (or the plug-in) is bypassed
+        let page_dk = if self.sget(EQ_BYPASS) > 0.5 || self.sget(8) > 0.5 { 0.5 } else { 1.0 };
         for b in 0..5 {
             let x = VX + EQ_P * b as f32;
             let o = eq_base(b);
             let on = self.sget(o) > 0.5;
-            self.set_dk(if on { 1.0 } else { 0.5 });
+            self.set_dk(page_dk * if on { 1.0 } else { 0.5 });
             // type glyph grid (2 x 3)
             let ty = (self.sget(o + 1) + 0.5).floor() as i32;
             self.setc(false);
@@ -1645,7 +1647,7 @@ impl<'a> Gui<'a> {
                 self.cv.textc(x, y0 + 3.0 * CELL_P + (CELL_H * 0.4 + 1.0).floor(), EQ_W, "---");
             }
         }
-        self.set_dk(1.0);
+        self.set_dk(page_dk);
         let x = VX + EQ_P * 5.0;
         self.cell(EQ_PIVOT, x, y0, EQ_PW, CELL_H, "PIVOT");
         self.cell(EQ_TILT, x, y0 + CELL_P, EQ_PW, CELL_H, "TILT");
@@ -1712,16 +1714,25 @@ impl<'a> Gui<'a> {
         let title = format!("SATXCOMP {}", version_short());
         self.cv.text(44.0, 12.0, &title);
         self.preset_bar();
-        let _ = self.btn(424.0, 8.0, 76.0, 16.0, "SIDECHAIN", 0);
+        let _ = self.btn(418.0, 8.0, 76.0, 16.0, "SIDECHAIN", 0);
         {
             // EQ page toggle; the square in it bypasses the whole EQ module (X = bypassed, like SatComp)
             let eq = self.env.dsp.eq;
             let eq_any = eq.bands.iter().any(|b| b.on) || eq.tilt != 0.0 || eq.gain != 0.0;
-            self.sq_tog(EQ_BYPASS, 507.0, 12.0, 8.0);
-            if self.btn(500.0, 8.0, 40.0, 16.0, "EQ", self.eq_page as u8) {
+            self.sq_tog(EQ_BYPASS, 502.0, 12.0, 8.0);
+            if self.btn(494.0, 8.0, 46.0, 16.0, "", self.eq_page as u8) {
                 self.eq_page = !self.eq_page;
             }
-            self.sqind(507.0, 12.0, 8.0, eq_any, self.eq_page, eq_byp);
+            self.sqind(502.0, 12.0, 8.0, eq_any, self.eq_page, eq_byp);
+            // label drawn by hand so it keeps a clear gap from the square
+            if self.eq_page {
+                self.cv.setbg();
+            } else {
+                self.setc(false);
+            }
+            self.cv.set_font(1);
+            self.cv.text(517.0, 12.0, "EQ");
+            self.setc(false);
         }
         self.out_meter(RX, 8.0, RW, 16.0);
 
@@ -1760,7 +1771,7 @@ impl<'a> Gui<'a> {
         self.slope_buttons(X1_SLOPE, RX, x1_y + 16.0);
         self.cell1(2, RX, x2_y, RW, 16.0, "X-OVR2");
         self.slope_buttons(X2_SLOPE, RX, x2_y + 16.0);
-        self.set_dk(if byp { 0.5 } else { 1.0 });
+        self.set_dk(1.0); // oversampling stays lit while bypassed
         let os_i = (self.sget(3) + 0.5).floor() as i32;
         for i in 0..3 {
             let l = ["x1", "x2", "x4"][i as usize];
