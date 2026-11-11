@@ -283,6 +283,12 @@ impl State {
         }
     }
 
+    /// last published GR number of band `b` (tests)
+    #[cfg(test)]
+    pub fn gr_text(&self, b: usize) -> f32 {
+        self.gr_txt[b]
+    }
+
     pub fn set_input(&mut self, mx: f32, my: f32, down: bool, rdown: bool, scroll: f32, shift: bool, now: f64) {
         if self.kit.set_input(mx, my, down, rdown, scroll, shift, now) {
             // the egui clock restarts when the editor window is reopened: re-base every stored timestamp
@@ -290,6 +296,9 @@ impl State {
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = [now; 3];
+            self.gr_txt_t = now;
+            self.vu_hold_t = [now; 3];
+            self.vu_clip_t = [-10.0; 3];
             self.spec_out.rebase(now);
             self.spec_dry.rebase(now);
         }

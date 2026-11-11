@@ -94,6 +94,11 @@ impl Rig {
         self.frame(vec![]);
     }
 
+    /// the host closed and reopened the editor: egui's clock restarts from zero while the UI state lives on
+    fn reopen_editor(&mut self) {
+        self.t = 0.0;
+    }
+
     fn rclick(&mut self, x: f32, y: f32) {
         let p = Self::at(x, y);
         self.frame(vec![Event::PointerMoved(p)]);
@@ -385,4 +390,23 @@ fn sidechain_row_and_key_mix_cell() {
     assert!(!r.shared.sc_solo.load(std::sync::atomic::Ordering::Relaxed), "solo never outlives the sidechain switch");
     r.drag(90.0, 175.0, 90.0, 150.0);
     assert!(!r.log().iter().any(|l| l.starts_with("SC Gain")), "no SC row while the sidechain is off: {:?}", r.log());
+}
+
+/// Reopening the editor restarts egui's clock; the slow GR number and the VU hold / clip timers must keep working afterwards
+/// (they froze at 0 when their timestamps were not re-based).
+#[test]
+fn gr_number_and_meter_timers_survive_an_editor_reopen() {
+    let mut r = Rig::new();
+    for _ in 0..40 {
+        r.shared.gr_pk[0].store(6.0, std::sync::atomic::Ordering::Relaxed);
+        r.frame(vec![]);
+    }
+    assert!(r.st.gr_text(0) > 5.0, "GR number follows the engine before the reopen: {}", r.st.gr_text(0));
+    r.reopen_editor();
+    r.frame(vec![]);
+    r.shared.gr_pk[0].store(0.0, std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..80 {
+        r.frame(vec![]); // ~2.4 s on the restarted clock, no more GR
+    }
+    assert!(r.st.gr_text(0) < 0.5, "GR number must refresh after a reopen, not stay frozen: {}", r.st.gr_text(0));
 }
