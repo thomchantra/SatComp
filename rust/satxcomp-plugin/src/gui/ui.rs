@@ -5,7 +5,7 @@ use crate::params::{SatXCompParams, SLOTS, TABLE};
 use crate::Shared;
 use nih_plug::prelude::*;
 use satcomp_dsp::biquad::{eq_coef, mag_db};
-use satcomp_dsp::shapers::{ShaperLut, CUSTOM, SHAPER_NAMES};
+use satcomp_dsp::shapers::{Curve, ShaperLut, CUSTOM, MAX_PTS, MIN_GAP, SHAPER_NAMES};
 use satcomp_ui::canvas::{Canvas, PALETTES};
 use satcomp_ui::kit::{Kit, Meta, Widgets};
 use satcomp_ui::spectrum::{freq_to_x, x_to_freq, Spectrum};
@@ -77,6 +77,22 @@ const ACT_NODE: i32 = VIEW_ACT + 3;
 /// EQ viewport: drag the dashed pivot line / drag empty space sideways for tilt
 const ACT_PIVOT: i32 = VIEW_ACT + 10;
 const ACT_TILT: i32 = VIEW_ACT + 11;
+/// custom-curve point drag in the draw view
+const ACT_CURVE: i32 = VIEW_ACT + 20;
+const MENU_ROWS: usize = 18;
+const MENU_ROW_H: f32 = 14.0;
+
+/// popup list (shaper dropdown): plain label rows, one checked
+struct Menu {
+    x: f32,
+    y: f32,
+    items: Vec<String>,
+    checked: i32,
+    scroll: usize,
+    /// band whose shaper the menu sets
+    band: usize,
+}
+
 const KIND_NAMES: [&str; 8] = ["HPF", "LPF", "LO SHELF", "HI SHELF", "BAND", "ALLPASS", "BANDPASS", "NOTCH"];
 
 const BAND_NAMES: [&str; 3] = ["LOW", "MID", "HI"];
@@ -108,6 +124,11 @@ pub struct State {
     lut: ShaperLut,
     eq_page: bool,
     eq_sel: usize,
+    /// custom-curve draw view of the selected band (pencil), and the point being dragged
+    curve_edit: bool,
+    edit_seen: bool,
+    cpt: usize,
+    menu: Option<Menu>,
     /// EQ viewport drags: tilt accumulator, last pointer x, pivot grab offset
     tacc: f32,
     tlast: f32,
@@ -199,6 +220,10 @@ impl State {
             lut: ShaperLut::new(0),
             eq_page: false,
             eq_sel: 0,
+            curve_edit: false,
+            edit_seen: false,
+            cpt: 0,
+            menu: None,
             tacc: 0.0,
             tlast: 0.0,
             gdx: 0.0,
@@ -366,6 +391,9 @@ impl<'a> Gui<'a> {
     }
 
     fn select_band(&mut self, b: usize) {
+        if b != self.sel() {
+            self.curve_edit = false; // the draw view belongs to one band
+        }
         self.env.params.sel_band.store(b as i32, Ordering::Relaxed);
     }
 
@@ -639,6 +667,7 @@ impl<'a> Gui<'a> {
     }
 
     // ------------------------------------------------------------------ band modules
+    /// shape selector: [<] NAME [>]; click the name or right-click anywhere for the full list
     fn shape_selector(&mut self, n: usize, x: f32, y: f32, w: f32, h: f32) {
         let aw = 16.0;
         let cy = y + h * 0.5;
@@ -648,11 +677,22 @@ impl<'a> Gui<'a> {
             let d = if self.kit.wheel > 0 { -1 } else { 1 };
             self.click_set(n, (sel + d).clamp(0, CUSTOM) as f32);
         }
+        let open = |s: &mut Self| {
+            let items = SHAPER_NAMES.iter().map(|s| s.to_string()).collect();
+            let band = s.sel();
+            s.menu = Some(Menu { x, y: y + h, items, checked: sel, scroll: 0, band });
+        };
+        if hv && self.kit.rpress {
+            open(self);
+            self.kit.rpress = false;
+        }
         if hv && self.kit.press && self.kit.act == 0 {
             if self.kit.mx < x + aw {
                 self.click_set(n, if sel <= 0 { CUSTOM as f32 } else { (sel - 1) as f32 });
-            } else {
+            } else if self.kit.mx >= x + w - aw {
                 self.click_set(n, if sel >= CUSTOM { 0.0 } else { (sel + 1) as f32 });
+            } else {
+                open(self);
             }
             self.kit.press = false;
         }
@@ -668,33 +708,295 @@ impl<'a> Gui<'a> {
         self.cv.textc(x + aw, y + ((h - 8.0) * 0.5).floor(), w - 2.0 * aw, &name);
     }
 
-    /// transfer curve of the selected band's saturator at its current drive and bias
-    fn draw_sat_plot(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let b = self.sel();
-        let bp = self.env.dsp.bands[b];
-        self.lut.sync(bp.shape, &bp.curve);
-        let pre = (bp.drive * 0.01 * 36.0 * 0.11512925).exp();
-        let bias = bp.bias * 0.01;
-        self.setc(false);
-        self.cv.boxr(x, y, w, h);
-        let (cx, cy) = (x + (w * 0.5).floor(), y + (h * 0.5).floor());
-        self.cv.fill(x + 1.0, cy, w - 2.0, 1.0);
-        self.cv.fill(cx, y + 1.0, 1.0, h - 2.0);
+    // ------------------------------------------------------------------ popup menu
+    /// (x, y, w, h, visible rows) of the open menu, clamped to the canvas.
+    fn menu_geom(&mut self) -> Option<(f32, f32, f32, f32, usize)> {
         self.cv.set_font(1);
-        self.cv.text(x + 3.0, y + 3.0, "SAT");
-        self.setc(true);
-        let n = (w - 3.0) as i32;
-        let mut last: Option<(f32, f32)> = None;
-        for i in 0..=n {
-            let xin = (i as f64 / n as f64) * 2.0 - 1.0;
-            let yo = self.lut.eval(xin * pre + bias).clamp(-1.0, 1.0) as f32;
-            let p = (x + 1.0 + i as f32, cy - yo * (h * 0.5 - 2.0));
-            if let Some(l) = last {
-                self.cv.line(l.0, l.1, p.0, p.1);
+        let m = self.menu.as_ref()?;
+        let tw = m.items.iter().map(|i| self.cv.text_w(i)).fold(0.0, f32::max);
+        let rows = m.items.len().min(MENU_ROWS);
+        let (mw, mh) = (tw + 26.0, MENU_ROW_H * rows as f32 + 2.0);
+        Some((m.x.min(super::W - mw).max(0.0), m.y.min(super::H - mh).max(0.0), mw, mh, rows))
+    }
+
+    fn menu_frame(&mut self) {
+        let Some((x, y, mw, mh, rows)) = self.menu_geom() else { return };
+        let inside = self.hit(x, y, mw, mh);
+        let row = ((self.kit.my - y - 1.0) / MENU_ROW_H).floor() as i32;
+        let mut chosen: Option<(usize, i32)> = None;
+        let mut close = false;
+        let (wheel, press, rpress) = (self.kit.wheel, self.kit.press, self.kit.rpress);
+        if let Some(m) = self.menu.as_mut() {
+            if wheel != 0 && m.items.len() > rows {
+                let max = m.items.len() - rows;
+                m.scroll = (m.scroll as i32 - wheel).clamp(0, max as i32) as usize;
             }
-            last = Some(p);
+            if press {
+                if inside && row >= 0 && (row as usize) < rows {
+                    chosen = Some((m.band, (m.scroll + row as usize) as i32));
+                }
+                close = true;
+            }
+            if rpress {
+                close = true;
+            }
+        }
+        if close || chosen.is_some() {
+            self.menu = None;
+            if let Some((band, id)) = chosen {
+                self.click_set(band_base(band) + SHAPE, id as f32);
+            }
+        }
+        // a menu swallows every click and wheel turn while it is open
+        self.kit.press = false;
+        self.kit.rpress = false;
+        self.kit.wheel = 0;
+    }
+
+    fn menu_draw(&mut self) {
+        let Some((x, y, mw, mh, rows)) = self.menu_geom() else { return };
+        let Some(m) = self.menu.as_ref() else { return };
+        let items: Vec<String> = m.items.iter().skip(m.scroll).take(rows).cloned().collect();
+        let checked = m.checked - m.scroll as i32;
+        let (more_up, more_down) = (m.scroll > 0, m.scroll + rows < m.items.len());
+        self.cv.dk = 1.0;
+        self.cv.setbg();
+        self.cv.fill(x, y, mw, mh);
+        self.setc(false);
+        self.cv.boxr(x, y, mw, mh);
+        self.cv.set_font(1);
+        let hov = ((self.kit.my - y - 1.0) / MENU_ROW_H).floor() as i32;
+        let inside = self.hit(x, y, mw, mh);
+        for (i, label) in items.iter().enumerate() {
+            let iy = y + 1.0 + i as f32 * MENU_ROW_H;
+            self.setc(false);
+            if inside && hov == i as i32 {
+                self.cv.fill(x + 1.0, iy, mw - 2.0, MENU_ROW_H);
+                self.cv.setbg();
+            }
+            if i as i32 == checked {
+                self.cv.fill(x + 5.0, iy + 5.0, 4.0, 4.0);
+            }
+            self.cv.text(x + 14.0, iy + 1.0, label);
         }
         self.setc(false);
+        if more_up {
+            self.cv.tri((x + mw - 10.0, y + 7.0), (x + mw - 4.0, y + 7.0), (x + mw - 7.0, y + 3.0));
+        }
+        if more_down {
+            self.cv.tri((x + mw - 10.0, y + mh - 7.0), (x + mw - 4.0, y + mh - 7.0), (x + mw - 7.0, y + mh - 3.0));
+        }
+    }
+
+    /// 12x12 pencil icon; lit while the draw view is open, bright on hover.
+    fn pencil_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
+        let prev = self.kit.dk; // keep the bypass dimming of the surrounding module
+        self.set_dk(prev * if on || hover { 1.0 } else { 0.6 });
+        self.setc(on);
+        let l = |s: &Self, a: f32, b: f32, c: f32, d: f32| s.cv.line(x + a, y + b, x + c, y + d);
+        l(self, 8.0, 1.0, 10.0, 3.0); // eraser cap
+        l(self, 8.0, 1.0, 1.0, 8.0); // body
+        l(self, 10.0, 3.0, 3.0, 10.0);
+        l(self, 1.0, 8.0, 0.0, 11.0); // tip
+        l(self, 3.0, 10.0, 0.0, 11.0);
+        self.set_dk(prev);
+        self.setc(false);
+    }
+
+    /// Transfer curve of the selected band's saturator at its current drive and bias. Drag in the plot = SAT GAIN (marker on
+    /// the left edge), pencil (top right) = draw the band's custom curve, live input peak marked on the curve.
+    fn draw_sat_plot(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let b = self.sel();
+        let o = band_base(b);
+        let gain_n = o + SAT_GAIN;
+        let sh = self.env.shared;
+        let bp = self.env.dsp.bands[b];
+        let sat_on = bp.drive > 0.0 || bp.bias != 0.0;
+        let pre = (bp.drive * 0.01 * 36.0 * 0.11512925).exp();
+        let bias = bp.bias * 0.01;
+        self.lut.sync(bp.shape, &bp.curve);
+        // pencil: toggles the draw view; entering selects the Custom shaper so edits are audible
+        let pen = self.hit(x + w - 14.0, y + 2.0, 12.0, 12.0);
+        if pen && self.kit.press && self.kit.act == 0 {
+            self.curve_edit = !self.curve_edit;
+            self.edit_seen = false;
+            if self.curve_edit {
+                self.click_set(o + SHAPE, CUSTOM as f32);
+            }
+            self.kit.press = false;
+        }
+        if self.curve_edit {
+            if (self.sget(o + SHAPE) + 0.5).floor() as i32 == CUSTOM {
+                self.edit_seen = true;
+            } else if self.edit_seen {
+                self.curve_edit = false; // another shaper was chosen
+            }
+        }
+        let hv = self.hit(x, y, w, h) && !self.curve_edit;
+        if hv && self.kit.press && self.kit.act == 0 {
+            self.begin_drag(gain_n);
+        }
+        if hv && self.kit.wheel != 0 {
+            self.wheel_adj(gain_n);
+        }
+        let gain_act = self.kit.act == gain_n as i32;
+        self.setc(gain_act);
+        self.cv.boxr(x, y, w, h);
+        for i in 0..(w / 2.0).floor() as i32 {
+            self.cv.fill(x + i as f32 * 2.0, y + (h / 2.0).floor(), 1.0, 1.0);
+        }
+        for i in 0..(h / 2.0).floor() as i32 {
+            self.cv.fill(x + (w / 2.0).floor(), y + i as f32 * 2.0, 1.0, 1.0);
+        }
+        self.pencil_glyph(x + w - 14.0, y + 2.0, self.curve_edit, pen);
+        if self.curve_edit {
+            self.draw_curve_edit(x, y, w, h);
+            return;
+        }
+        let pk = sh.sat_vz[b].load(Ordering::Relaxed).min(1.0);
+        let n = 64;
+        let (mut lx, mut ly) = (0.0, 0.0);
+        for i in 0..=n {
+            let vx = -1.0 + 2.0 * i as f64 / n as f64;
+            let mut vy = if sat_on { self.lut.eval(vx * pre + bias) } else { vx };
+            vy = vy.clamp(-1.0, 1.0);
+            let px = x + ((vx + 1.0) * 0.5) as f32 * (w - 1.0);
+            let py = y + (1.0 - ((vy + 1.0) * 0.5) as f32) * (h - 1.0);
+            self.setc(sat_on && pk > 0.002 && vx.abs() <= pk as f64);
+            if i > 0 {
+                self.cv.line(lx, ly, px, py);
+            }
+            lx = px;
+            ly = py;
+        }
+        if sat_on && pk > 0.002 {
+            self.setc(true);
+            for sgn in [1.0f64, -1.0] {
+                let vy = self.lut.eval(sgn * pk as f64 * pre + bias).clamp(-1.0, 1.0) as f32;
+                let vx = sgn as f32 * pk;
+                self.cv.fill(x + (vx + 1.0) * 0.5 * (w - 1.0) - 1.0, y + (1.0 - (vy + 1.0) * 0.5) * (h - 1.0) - 1.0, 3.0, 3.0);
+            }
+            self.setc(false);
+        }
+        // SAT GAIN level marker on the left edge (-24..+12 dB)
+        let tot = self.sget(gain_n);
+        let ty = y + (1.0 - (tot.clamp(-24.0, 12.0) + 24.0) / 36.0) * (h - 3.0);
+        self.setc(gain_act);
+        self.cv.fill(x + 1.0, ty, 7.0, 2.0);
+        if gain_act {
+            for i in 0..(w / 3.0).floor() as i32 {
+                self.cv.fill(x + i as f32 * 3.0, ty, 1.0, 1.0);
+            }
+        }
+        self.setc(false);
+        self.cv.set_font(1);
+        self.cv.text(x + 3.0, y + 3.0, &format!("OUT {:+.1}dB", tot));
+    }
+
+    /// Draw view of the selected band's custom curve (unity input, independent of drive/bias).
+    /// Left click empty space = add a point (and drag it), drag = move, double click = remove.
+    /// The two end points are fixed in x and cannot be removed.
+    fn draw_curve_edit(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let b = self.sel();
+        let mut c = self.env.params.curve_snapshot(b);
+        let before = c;
+        // domain [-1,1]^2 is inset so end points and the pencil never collide (symmetric margins keep the centre cross true)
+        let (ex, ey, ew, eh) = (x + 9.0, y + 14.0, w - 18.0, h - 28.0);
+        let (px, py) = (|vx: f32| ex + (vx + 1.0) * 0.5 * (ew - 1.0), |vy: f32| ey + (1.0 - (vy + 1.0) * 0.5) * (eh - 1.0));
+        let to_v = |mx: f32, my: f32| (((mx - ex) / (ew - 1.0)) * 2.0 - 1.0, 1.0 - ((my - ey) / (eh - 1.0)) * 2.0);
+        let pick = |s: &Self, c: &Curve| -> Option<usize> {
+            let mut best: Option<(usize, f32)> = None;
+            for (i, &(vx, vy)) in c.pts().iter().enumerate() {
+                let d = ((s.kit.mx - px(vx)).powi(2) + (s.kit.my - py(vy)).powi(2)).sqrt();
+                if d <= 6.0 && best.map_or(true, |b| d < b.1) {
+                    best = Some((i, d));
+                }
+            }
+            best.map(|b| b.0)
+        };
+        let in_box = self.hit(x, y, w, h) && !self.hit(x + w - 14.0, y + 2.0, 12.0, 12.0);
+        if in_box && self.kit.press && self.kit.act == 0 {
+            if let Some(i) = pick(self, &c) {
+                let interior = i > 0 && i + 1 < c.n;
+                if self.dbl(200 + i as i32) && interior {
+                    for k in i..c.n - 1 {
+                        c.p[k] = c.p[k + 1];
+                    }
+                    c.n -= 1;
+                    self.kit.last_clk_n = 0;
+                } else {
+                    self.kit.act = ACT_CURVE;
+                    self.cpt = i;
+                }
+            } else if c.n < MAX_PTS {
+                let (vx, vy) = to_v(self.kit.mx, self.kit.my);
+                let at = (1..c.n).find(|&k| c.p[k].0 > vx).unwrap_or(c.n - 1);
+                let room = vx - c.p[at - 1].0 >= MIN_GAP && c.p[at].0 - vx >= MIN_GAP;
+                if room {
+                    for k in (at..c.n).rev() {
+                        c.p[k + 1] = c.p[k];
+                    }
+                    c.p[at] = (vx, vy.clamp(-1.0, 1.0));
+                    c.n += 1;
+                    self.kit.act = ACT_CURVE;
+                    self.cpt = at;
+                    self.kit.last_clk_n = 0; // a creating click never counts towards a double click
+                }
+            }
+            self.kit.press = false;
+        }
+        if self.kit.act == ACT_CURVE && self.kit.down && self.cpt < c.n {
+            let (vx, vy) = to_v(self.kit.mx, self.kit.my);
+            let i = self.cpt;
+            if i > 0 && i + 1 < c.n {
+                c.p[i].0 = vx.clamp(c.p[i - 1].0 + MIN_GAP, c.p[i + 1].0 - MIN_GAP);
+            }
+            c.p[i].1 = vy.clamp(-1.0, 1.0);
+        }
+        if c != before {
+            let cell = match b {
+                0 => &self.env.params.curve_lo,
+                1 => &self.env.params.curve_mid,
+                _ => &self.env.params.curve_hi,
+            };
+            *cell.lock() = c.pts().to_vec();
+        }
+        // identity reference (dotted), the curve, then the points
+        let prev = self.kit.dk;
+        self.set_dk(prev * 0.5);
+        self.setc(false);
+        for i in 0..(ew / 3.0).floor() as i32 {
+            let vx = -1.0 + 2.0 * i as f32 / (ew / 3.0).floor();
+            self.cv.fill(px(vx), py(vx), 1.0, 1.0); // identity
+            self.cv.fill(px(vx), py(1.0), 1.0, 1.0); // domain frame (+-1)
+            self.cv.fill(px(vx), py(-1.0), 1.0, 1.0);
+            self.cv.fill(px(1.0), py(vx), 1.0, 1.0);
+            self.cv.fill(px(-1.0), py(vx), 1.0, 1.0);
+        }
+        self.set_dk(prev);
+        let n = 96;
+        let (mut lx, mut ly) = (px(-1.0), py(c.eval(-1.0) as f32));
+        for i in 1..=n {
+            let vx = -1.0 + 2.0 * i as f32 / n as f32;
+            let (qx, qy) = (px(vx), py(c.eval(vx as f64) as f32));
+            self.cv.line(lx, ly, qx, qy);
+            lx = qx;
+            ly = qy;
+        }
+        let hot = if self.kit.act == ACT_CURVE { Some(self.cpt) } else { pick(self, &c) };
+        for (i, &(vx, vy)) in c.pts().iter().enumerate() {
+            let (qx, qy) = (px(vx).round(), py(vy).round());
+            self.setc(hot == Some(i));
+            if i == 0 || i + 1 == c.n {
+                self.cv.boxr(qx - 2.0, qy - 2.0, 5.0, 5.0); // y-only end points
+            } else {
+                self.cv.fill(qx - 2.0, qy - 2.0, 5.0, 5.0);
+            }
+        }
+        self.setc(false);
+        self.cv.set_font(1);
+        self.cv.text(x + 3.0, y + 3.0, "DRAW");
+        self.cv.textr(x, y + h - 11.0, w - 3.0, &format!("{}/{} PTS", c.n, MAX_PTS));
     }
 
     /// the four slope steps of a crossover as one button group (12 / 24 / 48 / 96 dB per octave)
@@ -1135,6 +1437,7 @@ impl<'a> Gui<'a> {
         }
         self.env.dsp = self.env.params.to_dsp();
         self.update_gr();
+        self.menu_frame();
 
         // drag update (single active widget): slots (vertical drag) below VIEW_ACT, viewport drags from VIEW_ACT
         if self.kit.act != 0 && self.kit.act < VIEW_ACT {
@@ -1244,5 +1547,6 @@ impl<'a> Gui<'a> {
         self.set_dk(1.0);
         self.cell1(4, RX, BAND_Y, RW, 16.0, "L.AHEAD");
         self.out_column(CELLS_Y);
+        self.menu_draw();
     }
 }

@@ -87,6 +87,14 @@ impl Rig {
         self.frame(vec![]);
     }
 
+    fn rclick(&mut self, x: f32, y: f32) {
+        let p = Self::at(x, y);
+        self.frame(vec![Event::PointerMoved(p)]);
+        self.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE }]);
+        self.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+        self.frame(vec![]);
+    }
+
     fn drag(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
         let p0 = Self::at(x0, y0);
         self.frame(vec![Event::PointerMoved(p0)]);
@@ -239,4 +247,53 @@ fn eq_viewport_pivot_tilt_and_band_reset() {
     for p in ["EQ4 On", "EQ4 Type", "EQ4 Freq", "EQ4 Q", "EQ4 Gain"] {
         assert!(new.iter().any(|l| l.starts_with(p)), "double-click reset should write {p}: {new:?}");
     }
+}
+
+/// Saturator module: shaper dropdown (name click or right-click), drag in the plot = SAT GAIN, pencil + draw view per band.
+#[test]
+fn saturator_module_dropdown_plot_gain_and_curve_drawing() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    // the selector is y 212..234 (x 10..164), the plot y 260..400; the 15-entry menu is clamped to the 410-high canvas, so its
+    // top is at y 198 and each entry is 14 high
+    let n0 = r.log().len();
+    r.rclick(80.0, 223.0);
+    r.click(30.0, 198.0 + 1.0 + 3.0 * 14.0 + 7.0); // 4th entry
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(new.len() == 1 && new[0].starts_with("Lo Shape 0.214"), "right-click dropdown should pick shaper 3: {new:?}");
+    let n0 = r.log().len();
+    r.click(80.0, 223.0); // the name opens it as well
+    r.click(30.0, 198.0 + 1.0 + 5.0 * 14.0 + 7.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(new.len() == 1 && new[0].starts_with("Lo Shape 0.357"), "name click dropdown should pick shaper 5: {new:?}");
+    // a click outside closes the menu without writing, and is swallowed
+    let n0 = r.log().len();
+    r.click(80.0, 223.0);
+    r.click(400.0, 100.0);
+    assert!(r.log()[n0..].is_empty(), "a click outside the open menu must only close it: {:?}", &r.log()[n0..]);
+    // dragging the plot adjusts the band's SAT GAIN
+    let n0 = r.log().len();
+    r.drag(80.0, 330.0, 80.0, 305.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("Lo Sat Gain")), "plot drag: {new:?}");
+    // pencil: selects Custom and opens the draw view; a click adds a point, three clicks on it remove it again
+    let n0 = r.log().len();
+    r.click(156.0, 268.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(new.len() == 1 && new[0].starts_with("Lo Shape 1.000"), "pencil should select the Custom shaper: {new:?}");
+    assert_eq!(r.params.curve_lo.lock().len(), 2);
+    r.click(80.0, 330.0);
+    assert_eq!(r.params.curve_lo.lock().len(), 3, "a click in the draw view adds a point");
+    assert_eq!(r.params.curve_mid.lock().len(), 2, "other bands keep their own curve");
+    r.click(80.0, 330.0);
+    r.click(80.0, 330.0);
+    assert_eq!(r.params.curve_lo.lock().len(), 2, "double-click removes the point");
+    // the draw view edits the band that is selected
+    r.click(200.0, 198.0); // MID tab
+    r.click(156.0, 268.0);
+    r.click(80.0, 330.0);
+    assert_eq!(r.params.curve_mid.lock().len(), 3);
+    assert_eq!(r.params.curve_lo.lock().len(), 2);
 }
