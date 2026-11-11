@@ -22,6 +22,11 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (8, "bypass", 0.0, 1.0, 0.0),
     (82, "x1_slope", 0.0, 3.0, 1.0),
     (83, "x2_slope", 0.0, 3.0, 1.0),
+    (84, "sc_on", 0.0, 1.0, 0.0),
+    (85, "sc_gain", -24.0, 24.0, 0.0),
+    (86, "sc_hp", 20.0, 2000.0, 20.0),
+    (87, "sc_lp", 200.0, 20000.0, 20000.0),
+    (88, "sc_mix", 0.0, 100.0, 100.0),
     (10, "lo_on", 0.0, 1.0, 1.0),
     (11, "lo_solo", 0.0, 1.0, 0.0),
     (12, "lo_delta", 0.0, 1.0, 0.0),
@@ -165,6 +170,16 @@ pub struct SatXCompParams {
     pub x1_slope: IntParam,
     #[id = "x2_slope"]
     pub x2_slope: IntParam,
+    #[id = "sc_on"]
+    pub sc_on: BoolParam,
+    #[id = "sc_gain"]
+    pub sc_gain: FloatParam,
+    #[id = "sc_hp"]
+    pub sc_hp: FloatParam,
+    #[id = "sc_lp"]
+    pub sc_lp: FloatParam,
+    #[id = "sc_mix"]
+    pub sc_mix: FloatParam,
     #[id = "lo_on"]
     pub lo_on: BoolParam,
     #[id = "lo_solo"]
@@ -376,6 +391,11 @@ impl Default for SatXCompParams {
             bypass: BoolParam::new("Bypass", false),
             x1_slope: IntParam::new("X-Slope 1", 1, IntRange::Linear { min: 0, max: 3 }),
             x2_slope: IntParam::new("X-Slope 2", 1, IntRange::Linear { min: 0, max: 3 }),
+            sc_on: BoolParam::new("Sidechain", false),
+            sc_gain: FloatParam::new("SC Gain", 0.0, FloatRange::Linear { min: -24.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
+            sc_hp: FloatParam::new("SC HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
+            sc_lp: FloatParam::new("SC LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            sc_mix: FloatParam::new("Key Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             lo_on: BoolParam::new("Lo On", true),
             lo_solo: BoolParam::new("Lo Solo", false),
             lo_delta: BoolParam::new("Lo Delta", false),
@@ -502,6 +522,7 @@ impl SatXCompParams {
         let eq = EqParams { bands: [EqBandParams { on: self.eq1_on.value(), ty: self.eq1_type.value(), freq: self.eq1_freq.value() as f64, q: self.eq1_q.value() as f64, gain: self.eq1_gain.value() as f64 }, EqBandParams { on: self.eq2_on.value(), ty: self.eq2_type.value(), freq: self.eq2_freq.value() as f64, q: self.eq2_q.value() as f64, gain: self.eq2_gain.value() as f64 }, EqBandParams { on: self.eq3_on.value(), ty: self.eq3_type.value(), freq: self.eq3_freq.value() as f64, q: self.eq3_q.value() as f64, gain: self.eq3_gain.value() as f64 }, EqBandParams { on: self.eq4_on.value(), ty: self.eq4_type.value(), freq: self.eq4_freq.value() as f64, q: self.eq4_q.value() as f64, gain: self.eq4_gain.value() as f64 }, EqBandParams { on: self.eq5_on.value(), ty: self.eq5_type.value(), freq: self.eq5_freq.value() as f64, q: self.eq5_q.value() as f64, gain: self.eq5_gain.value() as f64 }], tilt: self.eq_tilt.value() as f64, pivot: self.eq_pivot.value() as f64, mix: self.eq_mix.value() as f64, gain: self.eq_gain.value() as f64, bypass: self.eq_bypass.value() };
         XParams {
             x1: self.x1.value() as f64, x2: self.x2.value() as f64, x1_slope: self.x1_slope.value(), x2_slope: self.x2_slope.value(), os: self.os.value(), lookahead_ms: self.lookahead.value() as f64,
+            sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64, key_mix: self.sc_mix.value() as f64,
             bands: [lo, mid, hi], eq, mix: self.mix.value() as f64, out_gain: self.out_gain.value() as f64,
             gain_match: self.gain_match.value(), bypass: self.bypass.value(),
         }
@@ -520,6 +541,11 @@ impl SatXCompParams {
             8 => self.bypass.as_ptr(),
             82 => self.x1_slope.as_ptr(),
             83 => self.x2_slope.as_ptr(),
+            84 => self.sc_on.as_ptr(),
+            85 => self.sc_gain.as_ptr(),
+            86 => self.sc_hp.as_ptr(),
+            87 => self.sc_lp.as_ptr(),
+            88 => self.sc_mix.as_ptr(),
             10 => self.lo_on.as_ptr(),
             11 => self.lo_solo.as_ptr(),
             12 => self.lo_delta.as_ptr(),

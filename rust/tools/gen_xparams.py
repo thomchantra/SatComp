@@ -2,7 +2,7 @@
 """Generates satxcomp-plugin/src/params.rs (SatXComp parameters). Run from rust/: python3 tools/gen_xparams.py
 
 Parameter ids are permanent once released. Slot numbers are the UI's addressing scheme (like SatComp's slider numbers):
-globals 1-8 (+ crossover slopes 82-83), band b (lo, mid, hi) starts at 10 + 24*b, EQ band i starts at 90 + 5*i, EQ globals 115-119.
+globals 1-8 (+ crossover slopes 82-83, sidechain 84-88), band b (lo, mid, hi) starts at 10 + 24*b, EQ band i starts at 90 + 5*i, EQ globals 115-119.
 """
 P = []  # (slot, id, display name, kind, min, max, default, step, unit)
 def add(n, i, name, kind, mn, mx, df, step=None, unit=""):
@@ -19,6 +19,12 @@ add(8, "bypass", "Bypass", "bool", 0, 1, 0)
 # crossover slope per split: 0 = 12, 1 = 24, 2 = 48, 3 = 96 dB/oct (slots 82/83 are free between the bands and the EQ)
 add(82, "x1_slope", "X-Slope 1", "int", 0, 3, 1)
 add(83, "x2_slope", "X-Slope 2", "int", 0, 3, 1)
+# sidechain: on, key gain / HP / LP (global, applied before the key is split into bands) and KEY MIX (slots 84-88 are free)
+add(84, "sc_on", "Sidechain", "bool", 0, 1, 0)
+add(85, "sc_gain", "SC Gain", "f", -24, 24, 0, 0.1, " dB")
+add(86, "sc_hp", "SC HP", "f", 20, 2000, 20, 1, " Hz")
+add(87, "sc_lp", "SC LP", "f", 200, 20000, 20000, 1, " Hz")
+add(88, "sc_mix", "Key Mix", "f", 0, 100, 100, 1, " %")
 
 BANDS = [("lo", "Lo"), ("mid", "Mid"), ("hi", "Hi")]
 BAND_FIELDS = [  # offset, field, name, kind, min, max, default, step, unit
@@ -127,7 +133,7 @@ for b, (bid, _) in enumerate(BANDS):
     o.append(f"        let {bid} = BandParams {{ curve: curves[{b}], {fl} }};")
 eqb = ", ".join(f"EqBandParams {{ on: self.eq{i}_on.value(), ty: self.eq{i}_type.value(), freq: self.eq{i}_freq.value() as f64, q: self.eq{i}_q.value() as f64, gain: self.eq{i}_gain.value() as f64 }}" for i in range(1, 6))
 o.append(f"        let eq = EqParams {{ bands: [{eqb}], tilt: self.eq_tilt.value() as f64, pivot: self.eq_pivot.value() as f64, mix: self.eq_mix.value() as f64, gain: self.eq_gain.value() as f64, bypass: self.eq_bypass.value() }};")
-o.append("        XParams {\n            x1: self.x1.value() as f64, x2: self.x2.value() as f64, x1_slope: self.x1_slope.value(), x2_slope: self.x2_slope.value(), os: self.os.value(), lookahead_ms: self.lookahead.value() as f64,\n            bands: [lo, mid, hi], eq, mix: self.mix.value() as f64, out_gain: self.out_gain.value() as f64,\n            gain_match: self.gain_match.value(), bypass: self.bypass.value(),\n        }\n    }\n")
+o.append("        XParams {\n            x1: self.x1.value() as f64, x2: self.x2.value() as f64, x1_slope: self.x1_slope.value(), x2_slope: self.x2_slope.value(), os: self.os.value(), lookahead_ms: self.lookahead.value() as f64,\n            sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64, key_mix: self.sc_mix.value() as f64,\n            bands: [lo, mid, hi], eq, mix: self.mix.value() as f64, out_gain: self.out_gain.value() as f64,\n            gain_match: self.gain_match.value(), bypass: self.bypass.value(),\n        }\n    }\n")
 o.append("    /// Parameter by UI slot number.\n    pub fn ptr(&self, n: usize) -> Option<ParamPtr> {\n        Some(match n {")
 for n, i, *_ in P:
     o.append(f"            {n} => self.{i}.as_ptr(),")
