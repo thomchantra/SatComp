@@ -96,6 +96,8 @@ pub struct XEngine {
     /// per band: gain reduction (dB) of the current block / peak since the owner last cleared it
     pub gr_blk: [f64; 3],
     pub gr_pk: [f64; 3],
+    /// decaying peak of each band's saturator input (for the live marker on the transfer plot)
+    pub sat_vz: [f64; 3],
     pub fms: f64,
 }
 
@@ -156,6 +158,7 @@ impl XEngine {
             clip_f: false,
             gr_blk: [0.0; 3],
             gr_pk: [0.0; 3],
+            sat_vz: [0.0; 3],
             fms: 1e-9,
         };
         e.derive();
@@ -279,6 +282,11 @@ impl XEngine {
             self.gr_blk[b] = self.strips[b].gr_blk;
             self.gr_pk[b] = self.gr_pk[b].max(self.gr_blk[b]);
             self.strips[b].gr_blk = 0.0;
+        }
+        let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
+        for b in 0..3 {
+            self.sat_vz[b] = self.strips[b].sat.blk.max(self.sat_vz[b] * vz_d);
+            self.strips[b].sat.blk = 0.0;
         }
     }
 
@@ -556,6 +564,16 @@ mod tests {
         e.set_params(&p);
         run(&mut e, &tone);
         assert!(e.eq_diff.abs() < 0.5, "eq mix 0 should read 0 dB, got {}", e.eq_diff);
+    }
+
+    #[test]
+    fn sat_vz_follows_each_bands_saturator_input() {
+        let tone: Vec<f64> = (0..48000).map(|i| 0.4 * (2.0 * PI * 50.0 * i as f64 / SR).sin()).collect();
+        let mut e = XEngine::new(SR);
+        e.set_params(&XParams::default()); // default drive: the saturator only measures while it is active
+        run(&mut e, &tone);
+        assert!((e.sat_vz[0] - 0.4).abs() < 0.08, "low band sees the 50 Hz tone: {}", e.sat_vz[0]);
+        assert!(e.sat_vz[1] < 0.02 && e.sat_vz[2] < 0.02, "other bands stay quiet: {:?}", e.sat_vz);
     }
 
     #[test]
