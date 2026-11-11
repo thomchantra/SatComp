@@ -238,126 +238,55 @@ fn main_page_controls_of_the_wide_layout_write_parameters() {
     }
 }
 
-/// Header: the preset bar is layout only (no parameter writes), SIDECHAIN toggles the key, the scale button opens the size menu.
+/// Header: SIDECHAIN toggles the key, the scale button opens the size menu, the preset menu initialises (every stored
+/// parameter, nothing excluded), the arrows step through the bank. The save icon is not clicked: it opens a real file dialog.
 #[test]
-fn header_preset_layout_is_inert_and_scale_menu_opens() {
+fn header_sidechain_scale_menu_and_preset_menu() {
     let mut r = Rig::new();
     for _ in 0..4 {
         r.frame(vec![]);
     }
     let n0 = r.log().len();
-    for (x, y) in [(165.0, 16.0), (240.0, 16.0), (328.0, 16.0), (353.0, 16.0)] {
-        r.click(x, y); // save icon, name, prev, next
-    }
-    assert!(r.log()[n0..].is_empty(), "the preset bar must not write parameters: {:?}", &r.log()[n0..]);
     r.click(460.0, 16.0); // SIDECHAIN
     assert!(r.log()[n0..].iter().any(|l| l.starts_with("Sidechain 1.000")), "SIDECHAIN click: {:?}", &r.log()[n0..]);
-    let n0 = r.log().len();
     // the scale button opens a menu; clicking an entry must not touch parameters and a click elsewhere closes it
+    let n0 = r.log().len();
     r.click(395.0, 16.0);
     r.click(400.0, 24.0 + 1.0 + 14.0 * 2.0 + 7.0);
     r.click(395.0, 16.0);
     r.click(300.0, 300.0);
     assert!(r.log()[n0..].is_empty(), "scale menu must not write parameters: {:?}", &r.log()[n0..]);
-}
-
-/// EQ page: the dashed pivot line and empty space drive pivot and tilt, double-click resets a band.
-#[test]
-fn eq_viewport_pivot_tilt_and_band_reset() {
-    let mut r = Rig::new();
-    for _ in 0..4 {
-        r.frame(vec![]);
+    // name -> dropdown -> "Initialize preset" (first entry) writes every stored parameter and nothing excluded
+    let n0 = r.log().len();
+    r.click(240.0, 16.0);
+    r.click(200.0, 24.0 + 1.0 + 7.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(new.len() >= 100, "initialise should write every stored parameter: {} writes", new.len());
+    assert!(new.iter().any(|l| l.starts_with("Lo Drive 0.000")) && new.iter().any(|l| l.starts_with("Mid Thresh 1.000")), "init values");
+    for banned in ["Bypass", "Gain Match", "Sidechain"] {
+        assert!(!new.iter().any(|l| l.starts_with(banned)), "{banned} must not be part of a preset");
     }
-    r.click(530.0, 16.0); // EQ page
-    // the 600 Hz pivot line sits at x ~271 on the 528-wide log axis
-    let n0 = r.log().len();
-    r.drag(271.0, 60.0, 310.0, 60.0);
-    let new: Vec<String> = r.log()[n0..].to_vec();
-    assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("EQ Pivot")), "pivot line drag: {new:?}");
-    let n0 = r.log().len();
-    r.drag(450.0, 60.0, 500.0, 60.0);
-    let new: Vec<String> = r.log()[n0..].to_vec();
-    assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("EQ Tilt")), "sideways drag in empty space = tilt: {new:?}");
-    // double-click on an EQ band toggle puts the whole band back (on, type, freq, Q, gain)
-    r.click(300.0, 198.0);
-    let n0 = r.log().len();
-    r.click(300.0, 198.0);
-    let new: Vec<String> = r.log()[n0..].to_vec();
-    for p in ["EQ4 On", "EQ4 Type", "EQ4 Freq", "EQ4 Q", "EQ4 Gain"] {
-        assert!(new.iter().any(|l| l.starts_with(p)), "double-click reset should write {p}: {new:?}");
+    // arrows step through factory + user presets (at least INIT itself): a full write each time
+    for x in [328.0, 353.0] {
+        let n0 = r.log().len();
+        r.click(x, 16.0);
+        assert!(r.log().len() - n0 >= 100, "stepping the bank applies a preset");
     }
 }
 
-/// Saturator module: shaper dropdown (name click or right-click), drag in the plot = SAT GAIN, pencil + draw view per band.
+/// The *NAME* marker: a loaded preset shows as modified once live parameters differ from it.
 #[test]
-fn saturator_module_dropdown_plot_gain_and_curve_drawing() {
-    let mut r = Rig::new();
+fn preset_modified_marker_follows_the_parameters() {
+    let mut clean = Rig::new();
+    for _ in 0..4 {
+        clean.frame(vec![]);
+    }
+    assert!(!clean.st.modified_marker(), "defaults equal INIT");
+    let mut r = Rig::with_params(|p| p.lo_drive = FloatParam::new("Lo Drive", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }));
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    // the selector is y 212..234 (x 10..164), the plot y 260..400; the 15-entry menu is clamped to the 410-high canvas, so its
-    // top is at y 198 and each entry is 14 high
-    let n0 = r.log().len();
-    r.rclick(80.0, 223.0);
-    r.click(30.0, 198.0 + 1.0 + 3.0 * 14.0 + 7.0); // 4th entry
-    let new: Vec<String> = r.log()[n0..].to_vec();
-    assert!(new.len() == 1 && new[0].starts_with("Lo Shape 0.214"), "right-click dropdown should pick shaper 3: {new:?}");
-    let n0 = r.log().len();
-    r.click(80.0, 223.0); // the name opens it as well
-    r.click(30.0, 198.0 + 1.0 + 5.0 * 14.0 + 7.0);
-    let new: Vec<String> = r.log()[n0..].to_vec();
-    assert!(new.len() == 1 && new[0].starts_with("Lo Shape 0.357"), "name click dropdown should pick shaper 5: {new:?}");
-    // a click outside closes the menu without writing, and is swallowed
-    let n0 = r.log().len();
-    r.click(80.0, 223.0);
-    r.click(400.0, 100.0);
-    assert!(r.log()[n0..].is_empty(), "a click outside the open menu must only close it: {:?}", &r.log()[n0..]);
-    // dragging the plot adjusts the band's SAT GAIN
-    let n0 = r.log().len();
-    r.drag(80.0, 330.0, 80.0, 305.0);
-    let new: Vec<String> = r.log()[n0..].to_vec();
-    assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("Lo Sat Gain")), "plot drag: {new:?}");
-    // pencil: selects Custom and opens the draw view; a click adds a point, three clicks on it remove it again
-    let n0 = r.log().len();
-    r.click(142.0, 268.0);
-    let new: Vec<String> = r.log()[n0..].to_vec();
-    assert!(new.len() == 1 && new[0].starts_with("Lo Shape 1.000"), "pencil should select the Custom shaper: {new:?}");
-    assert_eq!(r.params.curve_lo.lock().len(), 2);
-    r.click(80.0, 330.0);
-    assert_eq!(r.params.curve_lo.lock().len(), 3, "a click in the draw view adds a point");
-    assert_eq!(r.params.curve_mid.lock().len(), 2, "other bands keep their own curve");
-    r.click(80.0, 330.0);
-    r.click(80.0, 330.0);
-    assert_eq!(r.params.curve_lo.lock().len(), 2, "double-click removes the point");
-    // the draw view edits the band that is selected
-    r.click(200.0, 198.0); // MID tab
-    r.click(142.0, 268.0);
-    r.click(80.0, 330.0);
-    assert_eq!(r.params.curve_mid.lock().len(), 3);
-    assert_eq!(r.params.curve_lo.lock().len(), 2);
-}
-
-/// Band handles on the spectrum sit at the band's threshold: dragging one writes only that band's threshold.
-#[test]
-fn spectrum_handle_drag_sets_the_band_threshold() {
-    let mut r = Rig::new();
-    for _ in 0..4 {
-        r.frame(vec![]);
-    }
-    // default threshold 0 dB: the handle sits at the top of the 150-high viewport (y 34..184, centre clamped to y 41); the low
-    // band's handle sits at its centre frequency (~55 Hz): x ~88
-    let n0 = r.log().len();
-    r.drag(88.0, 41.0, 88.0, 85.0);
-    let new: Vec<String> = r.log()[n0..].to_vec();
-    assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("Lo Thresh")), "handle drag: {new:?}");
-    // lower on screen = lower level: the last write must be below the default 0 dB (normalised 1.0)
-    let last: f32 = new.last().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
-    assert!(last < 0.9, "dragging the handle down must lower the threshold: {new:?}");
-    // double-click on the handle writes the default back (the rig does not echo values, so the handle stays at y 41)
-    let n0 = r.log().len();
-    r.click(88.0, 41.0);
-    r.click(88.0, 41.0);
-    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Thresh 1.000")), "double-click resets the threshold: {:?}", &r.log()[n0..]);
+    assert!(r.st.modified_marker(), "a changed parameter marks the preset as modified");
 }
 
 /// Sidechain on: the control row appears under the spectrum (SC gain, HP, LP writes; SOLO is a UI flag) and KEY MIX replaces

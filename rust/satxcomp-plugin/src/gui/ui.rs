@@ -2,6 +2,7 @@
 //! cells, and the output column. Widgets (cells, buttons, drag logic) come from `satcomp_ui::kit`.
 
 use crate::params::{SatXCompParams, SLOTS, TABLE};
+use crate::presets::{self, Preset};
 use crate::Shared;
 use nih_plug::prelude::*;
 use satcomp_dsp::biquad::{eq_coef, mag_db};
@@ -12,6 +13,7 @@ use satcomp_ui::spectrum::{freq_to_x, x_to_freq, Spectrum};
 use satxcomp_dsp::{eq_kind, XParams, EQ_KINDS};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 /// First UI slot of band `b` (see tools/gen_xparams.py).
 pub const fn band_base(b: usize) -> usize {
@@ -105,15 +107,33 @@ enum MenuKind {
     /// shaper list of band `b`
     Shape(usize),
     Size,
+    Preset,
+}
+
+/// kind: 0 selectable item, 1 header (dim, not selectable), 2 separator
+#[derive(Clone)]
+struct MItem {
+    label: String,
+    kind: u8,
+    id: i32,
 }
 
 struct Menu {
     kind: MenuKind,
     x: f32,
     y: f32,
-    items: Vec<String>,
+    items: Vec<MItem>,
+    /// id of the checked item
     checked: i32,
     scroll: usize,
+}
+
+/// Outcome of a file dialog on its worker thread.
+pub enum Dlg {
+    Pending,
+    Cancelled,
+    Loaded(Preset),
+    Saved(String),
 }
 
 const KIND_NAMES: [&str; 8] = ["HPF", "LPF", "LO SHELF", "HI SHELF", "BAND", "ALLPASS", "BANDPASS", "NOTCH"];
@@ -152,6 +172,15 @@ pub struct State {
     edit_seen: bool,
     cpt: usize,
     menu: Option<Menu>,
+    /// presets: factory bank, user folder listing, the loaded preset as reference for the modified marker, pending dialog
+    factory: Vec<Preset>,
+    user: Vec<(String, std::path::PathBuf)>,
+    base: Option<(String, Preset)>,
+    hold_until: f64,
+    /// what the preset bar last showed (the *NAME* marker)
+    shown_modified: bool,
+    pending: u8,
+    dlg: Option<Arc<parking_lot::Mutex<Dlg>>>,
     /// gain-reduction readouts refresh slowly (peak over the last interval) so the numbers stay readable
     gr_txt: [f32; 3],
     gr_txt_pk: [f32; 3],
@@ -265,6 +294,13 @@ impl State {
             edit_seen: false,
             cpt: 0,
             menu: None,
+            factory: presets::factory(),
+            user: presets::scan_user(),
+            base: None,
+            hold_until: 0.0,
+            shown_modified: false,
+            pending: 0,
+            dlg: None,
             gr_txt: [0.0; 3],
             gr_txt_pk: [0.0; 3],
             gr_txt_t: 0.0,
@@ -283,6 +319,12 @@ impl State {
         }
     }
 
+    /// the preset bar's modified marker (tests)
+    #[cfg(test)]
+    pub fn modified_marker(&self) -> bool {
+        self.shown_modified
+    }
+
     /// last published GR number of band `b` (tests)
     #[cfg(test)]
     pub fn gr_text(&self, b: usize) -> f32 {
@@ -297,6 +339,7 @@ impl State {
             self.hl_r_t = now;
             self.gr_hold_t = [now; 3];
             self.gr_txt_t = now;
+            self.hold_until = now;
             self.vu_hold_t = [now; 3];
             self.vu_clip_t = [-10.0; 3];
             self.spec_out.rebase(now);
@@ -471,7 +514,7 @@ impl<'a> Gui<'a> {
     }
 
     fn open_size_menu(&mut self, x: f32, y: f32) {
-        let items = SIZES.iter().map(|v| format!("{:.0}%", v * 100.0)).collect();
+        let items = SIZES.iter().enumerate().map(|(i, v)| MItem { label: format!("{:.0}%", v * 100.0), kind: 0, id: i as i32 }).collect();
         let cur = SIZES.iter().position(|v| (v - self.cur_scale()).abs() < 0.13).unwrap_or(0);
         self.menu = Some(Menu { kind: MenuKind::Size, x, y, items, checked: cur as i32, scroll: 0 });
     }
@@ -513,22 +556,272 @@ impl<'a> Gui<'a> {
         self.setc(false);
     }
 
-    /// Header preset bar (save icon | name | prev next) and the window-scale button. Layout only for now: the preset
-    /// controls are drawn but not wired.
+    // ------------------------------------------------------------------ presets
+    fn preset_name(&self) -> String {
+        self.env.params.preset_name.lock().clone()
+    }
+
+    fn set_preset_name(&mut self, n: &str) {
+        *self.env.params.preset_name.lock() = n.to_string();
+    }
+
+    /// Write every stored parameter of `p` (missing ids -> default) and the three curves (missing = linear, so a preset never
+    /// keeps the previous one's curve). Bypass / Gain Match / the sidechain switch are left alone.
+    fn apply_preset(&mut self, p: &Preset) {
+        for &(n, id, mn, mx, df) in TABLE {
+            if presets::EXCLUDED.contains(&id) {
+                continue;
+            }
+            let v = p.params.get(id).copied().unwrap_or(df).clamp(mn, mx);
+            self.click_set(n, v);
+        }
+        for b in 0..3 {
+            let c = Curve::from_points(p.curve(b));
+            self.curve_cell(b).lock().clone_from(&c.pts().to_vec());
+        }
+        self.set_preset_name(&p.name);
+        self.base = None;
+        self.hold_until = self.kit.now + 0.6;
+    }
+
+    fn curve_cell(&self, b: usize) -> &Arc<parking_lot::Mutex<Vec<(f32, f32)>>> {
+        match b {
+            0 => &self.env.params.curve_lo,
+            1 => &self.env.params.curve_mid,
+            _ => &self.env.params.curve_hi,
+        }
+    }
+
+    /// True when the live parameters differ from the loaded preset (drives the *NAME* marker).
+    fn is_modified(&mut self) -> bool {
+        if self.kit.now < self.hold_until {
+            return false; // host parameter writes land a few frames late after a load
+        }
+        let cur = self.preset_name();
+        let key = if cur.is_empty() { "INIT".to_string() } else { cur };
+        if self.base.as_ref().map(|b| b.0 != key).unwrap_or(true) {
+            let p = if key == "INIT" && self.factory.iter().all(|f| f.name != "INIT") {
+                Some(Preset::init())
+            } else {
+                self.preset_index().and_then(|i| self.preset_at(i))
+            };
+            self.base = p.map(|p| (key, p));
+        }
+        let Some((_, b)) = &self.base else { return false };
+        for &(n, id, mn, mx, df) in TABLE {
+            if presets::EXCLUDED.contains(&id) {
+                continue;
+            }
+            let want = b.params.get(id).copied().unwrap_or(df).clamp(mn, mx);
+            let have = self.sget(n);
+            if (want - have).abs() > 2e-4 * want.abs().max(have.abs()) + 1e-4 {
+                return true;
+            }
+        }
+        (0..3).any(|c| Curve::from_points(b.curve(c)) != self.env.params.curve_snapshot(c))
+    }
+
+    fn capture(&self, name: &str) -> Preset {
+        let params = TABLE
+            .iter()
+            .filter(|e| !presets::EXCLUDED.contains(&e.1))
+            .map(|e| (e.1.to_string(), self.sget(e.0)))
+            .collect();
+        let mut p = Preset::new(name, params);
+        let curves: Vec<Curve> = (0..3).map(|b| self.env.params.curve_snapshot(b)).collect();
+        if curves.iter().any(|c| *c != Curve::linear()) {
+            p.curves = curves.iter().map(|c| c.pts().to_vec()).collect();
+        }
+        p
+    }
+
+    fn preset_count(&self) -> usize {
+        self.factory.len() + self.user.len()
+    }
+
+    fn preset_at(&self, i: usize) -> Option<Preset> {
+        if i < self.factory.len() {
+            Some(self.factory[i].clone())
+        } else {
+            let (name, path) = self.user.get(i - self.factory.len())?;
+            presets::load_file(path).map(|mut p| {
+                p.name = name.clone();
+                p
+            })
+        }
+    }
+
+    fn preset_index(&self) -> Option<usize> {
+        let cur = self.preset_name();
+        let cur = if cur.is_empty() { "INIT".to_string() } else { cur };
+        self.factory
+            .iter()
+            .position(|p| p.name == cur)
+            .or_else(|| self.user.iter().position(|u| u.0 == cur).map(|i| i + self.factory.len()))
+    }
+
+    fn step_preset(&mut self, dir: i32) {
+        self.user = presets::scan_user();
+        let n = self.preset_count() as i32;
+        let next = match self.preset_index() {
+            Some(i) => (i as i32 + dir).rem_euclid(n),
+            None => {
+                if dir > 0 {
+                    0
+                } else {
+                    n - 1
+                }
+            }
+        };
+        if let Some(p) = self.preset_at(next as usize) {
+            self.apply_preset(&p);
+        }
+    }
+
+    fn open_preset_menu(&mut self, x: f32, y: f32) {
+        self.user = presets::scan_user();
+        let mut items = vec![
+            MItem { label: "Initialize preset".into(), kind: 0, id: 1 },
+            MItem { label: "Load preset...".into(), kind: 0, id: 0 },
+        ];
+        // factory[0] is the built-in INIT: it is the "Initialize preset" entry above, so not listed twice
+        if self.factory.len() > 1 {
+            items.push(MItem { label: String::new(), kind: 2, id: -1 });
+            items.push(MItem { label: "FACTORY".into(), kind: 1, id: -1 });
+            for (i, p) in self.factory.iter().enumerate().skip(1) {
+                items.push(MItem { label: p.name.clone(), kind: 0, id: 1000 + i as i32 });
+            }
+        }
+        if !self.user.is_empty() {
+            items.push(MItem { label: String::new(), kind: 2, id: -1 });
+            items.push(MItem { label: "USER".into(), kind: 1, id: -1 });
+            for (i, u) in self.user.iter().enumerate() {
+                items.push(MItem { label: u.0.clone(), kind: 0, id: 2000 + i as i32 });
+            }
+        }
+        let checked = match self.preset_index() {
+            Some(0) => 1,
+            Some(i) if i < self.factory.len() => 1000 + i as i32,
+            Some(i) => 2000 + (i - self.factory.len()) as i32,
+            None => -1,
+        };
+        self.menu = Some(Menu { kind: MenuKind::Preset, x, y, items, checked, scroll: 0 });
+    }
+
+    fn preset_action(&mut self, id: i32) {
+        match id {
+            0 => self.pending = 1,
+            1 => self.apply_preset(&Preset::init()),
+            1000..=1999 => {
+                if let Some(p) = self.preset_at((id - 1000) as usize) {
+                    self.apply_preset(&p);
+                }
+            }
+            2000.. => {
+                if let Some(p) = self.preset_at(self.factory.len() + (id - 2000) as usize) {
+                    self.apply_preset(&p);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// File dialogs run on a worker thread: a modal NSSavePanel started inside our frame callback re-enters the host window's
+    /// event handling (resign-key) while the editor state is borrowed, which aborted REAPER. rfd dispatches the panel to the
+    /// main thread itself; the result is picked up by `poll_dialog`.
+    fn run_pending(&mut self) {
+        let what = std::mem::take(&mut self.pending);
+        if what == 0 || self.dlg.is_some() {
+            return;
+        }
+        let slot = Arc::new(parking_lot::Mutex::new(Dlg::Pending));
+        self.dlg = Some(slot.clone());
+        match what {
+            1 => {
+                std::thread::spawn(move || {
+                    let r = presets::open_dialog().and_then(|path| {
+                        presets::load_file(&path).map(|mut p| {
+                            if let Some(stem) = path.file_stem() {
+                                p.name = stem.to_string_lossy().into_owned();
+                            }
+                            p
+                        })
+                    });
+                    *slot.lock() = r.map_or(Dlg::Cancelled, Dlg::Loaded);
+                });
+            }
+            2 => {
+                let cur = self.preset_name();
+                let def = if cur.is_empty() || cur == "INIT" { "My preset".to_string() } else { cur };
+                let snapshot = self.capture(&def); // parameters as of the click
+                std::thread::spawn(move || {
+                    let r = presets::save_dialog(&def).and_then(|path| {
+                        let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(def);
+                        let mut p = snapshot;
+                        p.name = name.clone();
+                        presets::save_file(&path, &p).ok().map(|_| name)
+                    });
+                    *slot.lock() = r.map_or(Dlg::Cancelled, Dlg::Saved);
+                });
+            }
+            _ => self.dlg = None,
+        }
+    }
+
+    /// Apply the outcome of a finished file dialog (called every frame).
+    fn poll_dialog(&mut self) {
+        let Some(slot) = self.dlg.clone() else { return };
+        let r = std::mem::replace(&mut *slot.lock(), Dlg::Pending);
+        match r {
+            Dlg::Pending => return,
+            Dlg::Loaded(p) => self.apply_preset(&p),
+            Dlg::Saved(name) => {
+                self.set_preset_name(&name);
+                self.base = None;
+                self.user = presets::scan_user();
+            }
+            Dlg::Cancelled => {}
+        }
+        self.dlg = None;
+    }
+
+    /// Header preset bar (save icon | name | prev next) and the window-scale button.
     fn preset_bar(&mut self) {
         let (y, h) = (8.0, 16.0);
-        let _ = self.btn(152.0, y, 26.0, h, "", 0);
+        if self.btn(152.0, y, 26.0, h, "", 0) {
+            self.pending = 2;
+        }
         self.setc(false);
         self.cv.boxr(160.0, y + 3.0, 10.0, 10.0);
         self.cv.fill(163.0, y + 3.0, 4.0, 3.0);
         self.cv.boxr(162.0, y + 8.0, 6.0, 5.0);
+        // name -> dropdown
+        let name = self.preset_name();
+        let shown = if name.is_empty() || name == "INIT" { "-- INIT --".to_string() } else { name };
+        let hv = self.hit(178.0, y, 138.0, h);
+        if hv && self.kit.press && self.kit.act == 0 {
+            self.open_preset_menu(178.0, y + h);
+            self.kit.press = false;
+        }
         self.setc(false);
         self.cv.boxr(178.0, y, 138.0, h);
         self.cv.set_font(2);
-        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 138.0, "-- INIT --");
+        let modified = self.is_modified();
+        self.shown_modified = modified;
+        let mut t = shown;
+        while self.cv.text_w(&t) > if modified { 120.0 } else { 132.0 } && t.chars().count() > 3 {
+            t.pop();
+        }
+        if modified {
+            t = format!("*{t}*");
+        }
+        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 138.0, &t);
+        // prev / next
         for (i, dir) in [(0, -1), (1, 1)] {
             let x = 316.0 + i as f32 * 25.0;
-            let _ = self.btn(x, y, 25.0, h, "", 0);
+            if self.btn(x, y, 25.0, h, "", 0) {
+                self.step_preset(dir);
+            }
             self.setc(false);
             let (cx, cy) = (x + 12.5, y + h * 0.5);
             if dir < 0 {
@@ -537,6 +830,7 @@ impl<'a> Gui<'a> {
                 self.cv.tri((cx - 2.0, cy - 3.0), (cx - 2.0, cy + 3.0), (cx + 2.0, cy));
             }
         }
+        // window scale
         let label = format!("{:.0}%", self.cur_scale() * 100.0);
         if self.btn(372.0, y, 42.0, h, &label, 0) {
             self.open_size_menu(372.0, y + h);
@@ -929,7 +1223,7 @@ impl<'a> Gui<'a> {
             self.click_set(n, (sel + d).clamp(0, CUSTOM) as f32);
         }
         let open = |s: &mut Self| {
-            let items = SHAPER_NAMES.iter().map(|s| s.to_string()).collect();
+            let items = SHAPER_NAMES.iter().enumerate().map(|(i, n)| MItem { label: n.to_string(), kind: 0, id: i as i32 }).collect();
             let band = s.sel();
             s.menu = Some(Menu { kind: MenuKind::Shape(band), x, y: y + h, items, checked: sel, scroll: 0 });
         };
@@ -964,7 +1258,7 @@ impl<'a> Gui<'a> {
     fn menu_geom(&mut self) -> Option<(f32, f32, f32, f32, usize)> {
         self.cv.set_font(1);
         let m = self.menu.as_ref()?;
-        let tw = m.items.iter().map(|i| self.cv.text_w(i)).fold(0.0, f32::max);
+        let tw = m.items.iter().map(|i| self.cv.text_w(&i.label)).fold(0.0, f32::max);
         let rows = m.items.len().min(MENU_ROWS);
         let (mw, mh) = (tw + 26.0, MENU_ROW_H * rows as f32 + 2.0);
         Some((m.x.min(super::W - mw).max(0.0), m.y.min(super::H - mh).max(0.0), mw, mh, rows))
@@ -984,7 +1278,17 @@ impl<'a> Gui<'a> {
             }
             if press {
                 if inside && row >= 0 && (row as usize) < rows {
-                    chosen = Some((m.kind, (m.scroll + row as usize) as i32));
+                    if let Some(it) = m.items.get(m.scroll + row as usize) {
+                        if it.kind == 0 {
+                            chosen = Some((m.kind, it.id));
+                        } else {
+                            // header / separator: swallow the click, keep the menu open
+                            self.kit.press = false;
+                            self.kit.rpress = false;
+                            self.kit.wheel = 0;
+                            return;
+                        }
+                    }
                 }
                 close = true;
             }
@@ -998,6 +1302,7 @@ impl<'a> Gui<'a> {
                 match kind {
                     MenuKind::Shape(band) => self.click_set(band_base(band) + SHAPE, id as f32),
                     MenuKind::Size => self.request_scale(SIZES[(id as usize).min(SIZES.len() - 1)]),
+                    MenuKind::Preset => self.preset_action(id),
                 }
             }
         }
@@ -1010,8 +1315,8 @@ impl<'a> Gui<'a> {
     fn menu_draw(&mut self) {
         let Some((x, y, mw, mh, rows)) = self.menu_geom() else { return };
         let Some(m) = self.menu.as_ref() else { return };
-        let items: Vec<String> = m.items.iter().skip(m.scroll).take(rows).cloned().collect();
-        let checked = m.checked - m.scroll as i32;
+        let items: Vec<MItem> = m.items.iter().skip(m.scroll).take(rows).cloned().collect();
+        let checked = m.checked;
         let (more_up, more_down) = (m.scroll > 0, m.scroll + rows < m.items.len());
         self.cv.dk = 1.0;
         self.cv.setbg();
@@ -1021,17 +1326,31 @@ impl<'a> Gui<'a> {
         self.cv.set_font(1);
         let hov = ((self.kit.my - y - 1.0) / MENU_ROW_H).floor() as i32;
         let inside = self.hit(x, y, mw, mh);
-        for (i, label) in items.iter().enumerate() {
+        for (i, it) in items.iter().enumerate() {
             let iy = y + 1.0 + i as f32 * MENU_ROW_H;
-            self.setc(false);
-            if inside && hov == i as i32 {
-                self.cv.fill(x + 1.0, iy, mw - 2.0, MENU_ROW_H);
-                self.cv.setbg();
+            match it.kind {
+                2 => {
+                    self.setc(false);
+                    self.cv.fill(x + 4.0, iy + 6.0, mw - 8.0, 1.0);
+                }
+                1 => {
+                    self.cv.dk = 0.5;
+                    self.setc(false);
+                    self.cv.text(x + 6.0, iy + 1.0, &it.label);
+                    self.cv.dk = 1.0;
+                }
+                _ => {
+                    self.setc(false);
+                    if inside && hov == i as i32 {
+                        self.cv.fill(x + 1.0, iy, mw - 2.0, MENU_ROW_H);
+                        self.cv.setbg();
+                    }
+                    if it.id == checked {
+                        self.cv.fill(x + 5.0, iy + 5.0, 4.0, 4.0);
+                    }
+                    self.cv.text(x + 14.0, iy + 1.0, &it.label);
+                }
             }
-            if i as i32 == checked {
-                self.cv.fill(x + 5.0, iy + 5.0, 4.0, 4.0);
-            }
-            self.cv.text(x + 14.0, iy + 1.0, label);
         }
         self.setc(false);
         if more_up {
@@ -1872,5 +2191,7 @@ impl<'a> Gui<'a> {
         self.cell1(4, RX, BAND_Y, RW, 16.0, "L.AHEAD");
         self.out_column(CELLS_Y);
         self.menu_draw();
+        self.poll_dialog();
+        self.run_pending();
     }
 }

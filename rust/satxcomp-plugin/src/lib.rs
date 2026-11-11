@@ -2,6 +2,7 @@
 
 mod gui;
 mod params;
+mod presets;
 
 use nih_plug::prelude::*;
 use params::SatXCompParams;
