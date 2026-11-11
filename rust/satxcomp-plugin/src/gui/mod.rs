@@ -40,7 +40,15 @@ pub(crate) fn run_frame(ctx: &egui::Context, setter: &nih_plug::prelude::ParamSe
     let painter = ctx.layer_painter(LayerId::background());
     let cv = Canvas::new(&painter, ppp, ox, oy, s, st.colors(), st.face);
     painter.rect_filled(screen, 0.0, cv.bg_color());
-    let env = Env { params, setter, shared, dsp: params.to_dsp() };
+    // Theme editor: the whole window is a static page (default params, constant meter values); the real params and
+    // shared state are not touched.
+    let (dp, ds) = (st.dummy_params.clone(), st.dummy_shared.clone());
+    let editing = st.app.editing();
+    if editing {
+        st.fill_dummy();
+    }
+    let (pr, sr): (&SatXCompParams, &Shared) = if editing { (&*dp, &*ds) } else { (params, shared) };
+    let env = Env { params: pr, setter, shared: sr, dsp: pr.to_dsp() };
     let mut g = Gui { s: st, cv, env };
     g.frame();
     ctx.request_repaint_after(Duration::from_millis(16));

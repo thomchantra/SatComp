@@ -134,6 +134,9 @@ pub struct SatXCompParams {
     /// UI font index; UI-only.
     #[persist = "ui-font"]
     pub font: Arc<AtomicI32>,
+    /// Active user colour theme (`name|` + 36 hex digits) so a project keeps its look on a machine without the themes file.
+    #[persist = "custom-theme"]
+    pub custom_theme: Arc<parking_lot::Mutex<String>>,
     #[persist = "preset-name"]
     pub preset_name: Arc<parking_lot::Mutex<String>>,
     /// Band shown on the main page (0 lo, 1 mid, 2 hi); UI-only.
@@ -375,6 +378,7 @@ impl Default for SatXCompParams {
             palette_v2: Arc::new(AtomicI32::new(0)),
             light: Arc::new(AtomicBool::new(false)),
             font: Arc::new(AtomicI32::new(0)),
+            custom_theme: Arc::new(parking_lot::Mutex::new(String::new())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             sel_band: Arc::new(AtomicI32::new(0)),
             curve_lo: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),

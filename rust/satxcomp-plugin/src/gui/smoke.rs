@@ -339,3 +339,75 @@ fn gr_number_and_meter_timers_survive_an_editor_reopen() {
     }
     assert!(r.st.gr_text(0) < 0.5, "GR number must refresh after a reopen, not stay frozen: {}", r.st.gr_text(0));
 }
+
+/// About page: opens from the title, the Appearance tab switches scheme / mode and nothing reaches the host as a parameter.
+#[test]
+fn about_and_appearance_pages_work() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    r.click(80.0, 15.0); // title -> About
+    assert_eq!(r.st.app.about, 1);
+    r.frame(vec![]);
+    r.click(135.0, 42.0); // APPEARANCE tab
+    assert_eq!(r.st.app.about, 3);
+    r.click(80.0, 125.0); // second scheme row
+    assert_eq!(r.params.palette_v2.load(Relaxed), 1);
+    r.click(186.0, 68.0); // LIGHT
+    assert!(r.params.light.load(Relaxed));
+    r.click(135.0 + 115.0, 42.0); // CHANGELOG tab
+    assert_eq!(r.st.app.about, 2);
+    r.click(498.0, 42.0); // X CLOSE
+    assert_eq!(r.st.app.about, 0);
+    assert!(r.log().is_empty(), "the About pages must not write parameters: {:?}", r.log());
+}
+
+/// Theme editor: NEW THEME shows the dummy page with the editor cells, the picker opens on a swatch, and the real parameters are
+/// never touched while it is open. (Saving would write the user's themes file, so the test cancels.)
+#[test]
+fn theme_editor_opens_edits_and_cancels_without_touching_parameters() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    r.click(80.0, 15.0);
+    r.click(135.0, 42.0);
+    r.click(380.0, 89.0); // NEW THEME
+    assert!(r.st.app.editing());
+    r.frame(vec![]);
+    r.click(226.0 + 30.0, 212.0 + 20.0); // DARK BG swatch -> colour picker
+    r.click(200.0, 100.0); // inside the saturation / value square
+    r.drag(290.0, 70.0, 290.0, 110.0); // hue strip
+    r.click(380.0, 157.0); // picker CANCEL
+    r.click(500.0, 330.0); // editor cancel icon
+    assert!(!r.st.app.editing());
+    assert_eq!(r.st.app.about, 3, "cancel returns to the Appearance tab");
+    assert!(r.log().is_empty(), "the editor must not write parameters: {:?}", r.log());
+}
+
+/// Icon: a double click toggles light / dark, a right click opens the scheme list.
+#[test]
+fn icon_double_click_toggles_light_and_right_click_lists_schemes() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    r.click(20.0, 12.0);
+    r.click(20.0, 12.0);
+    assert!(r.params.light.load(Relaxed));
+    for _ in 0..12 {
+        r.frame(vec![]); // wait out the single-click window: the double click must not also cycle the scheme
+    }
+    assert_eq!(r.params.palette_v2.load(Relaxed), 0);
+    r.rclick(20.0, 12.0);
+    r.click(40.0, 12.0 + 22.0 + 2.0 + 14.0 * 3.0); // third schemes row: Furnace is index 1, rows: MODE, rule, Mono, Furnace
+    assert_eq!(r.params.palette_v2.load(Relaxed), 1);
+    r.click(20.0, 12.0); // single click: next scheme after the window
+    for _ in 0..12 {
+        r.frame(vec![]);
+    }
+    assert_eq!(r.params.palette_v2.load(Relaxed), 2);
+}

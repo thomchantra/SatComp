@@ -7,6 +7,7 @@ use crate::Shared;
 use nih_plug::prelude::*;
 use satcomp_dsp::biquad::{eq_coef, mag_db};
 use satcomp_dsp::shapers::{Curve, ShaperLut, CUSTOM, MAX_PTS, MIN_GAP, SHAPER_NAMES};
+use satcomp_ui::appearance::{self, AppState, AppearanceUi, CellGrid, Rect};
 use satcomp_ui::canvas::{Canvas, PALETTES};
 use satcomp_ui::kit::{Kit, Meta, Widgets};
 use satcomp_ui::spectrum::{freq_to_x, x_to_freq, Spectrum};
@@ -108,6 +109,8 @@ enum MenuKind {
     Shape(usize),
     Size,
     Preset,
+    /// colour scheme list (the icon's right-click menu)
+    Palette,
 }
 
 /// kind: 0 selectable item, 1 header (dim, not selectable), 2 separator
@@ -143,6 +146,12 @@ const BAND_LETTERS: [&str; 3] = ["L", "M", "H"];
 
 pub struct State {
     pub kit: Kit,
+    /// colour themes, theme editor and About-page state (satcomp-ui)
+    pub app: AppState,
+    pub dummy_params: Arc<SatXCompParams>,
+    pub dummy_shared: Arc<Shared>,
+    /// time of an icon click waiting out the double-click window (then it cycles the colour scheme)
+    logo_pend: f64,
     pub pal: usize,
     pub light: bool,
     pub face: usize,
@@ -263,9 +272,16 @@ impl State {
         sp(EQ_TILT, 0, 0, 0.1);
         sp(EQ_PIVOT, 1, 0, 1.0);
         sp(EQ_GAIN, 0, 0, 0.1);
-        let pal = (params.palette_v2.load(Ordering::Relaxed).max(0) as usize).min(PALETTES.len() - 1);
+        let pal = params.palette_v2.load(Ordering::Relaxed).max(0) as usize;
+        let mut app = AppState::new();
+        let pal = app.restore_custom(pal, &params.custom_theme.lock());
+        params.palette_v2.store(pal as i32, Ordering::Relaxed);
         Self {
             kit,
+            app,
+            dummy_params: Arc::new(SatXCompParams::default()),
+            dummy_shared: Arc::new(Shared::new()),
+            logo_pend: -1.0,
             pal,
             light: params.light.load(Ordering::Relaxed),
             face: (params.font.load(Ordering::Relaxed).max(0) as usize).min(satcomp_ui::canvas::FONT_NAMES.len() - 1),
@@ -344,17 +360,42 @@ impl State {
             self.vu_clip_t = [-10.0; 3];
             self.spec_out.rebase(now);
             self.spec_dry.rebase(now);
+            self.app.rebase();
+            self.logo_pend = -1.0;
         }
     }
 
-    /// [BG rgb, UI rgb, ACCENT rgb] of the active scheme and mode.
+    /// Colours the canvas draws with: the editor preview while editing, else the active scheme.
     pub fn colors(&self) -> [f32; 9] {
-        let e = &PALETTES[self.pal.min(PALETTES.len() - 1)];
-        if self.light {
-            e.2
-        } else {
-            e.1
+        self.app.colors(self.pal, self.light)
+    }
+
+    /// Constant meter / readout values and a synthetic spectrum for the theme editor's dummy page.
+    pub fn fill_dummy(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let d = &self.dummy_shared;
+        d.opk[0].store(1.0, Relaxed);
+        d.opk[1].store(0.5, Relaxed);
+        d.clip.store(true, Relaxed);
+        for b in 0..3 {
+            d.gr_pk[b].store(2.0 + b as f32 * 2.0, Relaxed);
+            d.sat_vz[b].store(0.3, Relaxed);
+            d.sat_out_pk[b].store(0.3 + 0.35 * b as f32, Relaxed);
         }
+        d.fms.store(0.05, Relaxed);
+        d.diff_disp.store(2.0, Relaxed);
+        d.eq_diff.store(1.0, Relaxed);
+        // out: a pink-ish stack of sines; dry: the same, louder in the highs (the gap between them shows both accents)
+        let w0 = d.tap_out.w.load(Relaxed);
+        for i in 0..satcomp_dsp::TapRing::LEN {
+            let t = (i + w0) as f32 * 0.001;
+            let lo = 0.3 * (t * 211.0).sin() + 0.2 * (t * 1733.0).sin();
+            let hi = 0.1 * (t * 7919.0).sin() + 0.05 * (t * 13007.0).sin();
+            d.tap_out.buf[i].store((lo + hi * 0.5).to_bits(), Relaxed);
+            d.tap_dry.buf[i].store((lo * 0.8 + hi * 2.0).to_bits(), Relaxed);
+        }
+        d.tap_out.w.store(satcomp_dsp::TapRing::LEN * 3, Relaxed);
+        d.tap_dry.w.store(satcomp_dsp::TapRing::LEN * 3, Relaxed);
     }
 }
 
@@ -399,9 +440,82 @@ impl<'a> Widgets<'a> for Gui<'a> {
     fn host(&self) -> &dyn GuiContext {
         self.env.setter.raw_context
     }
+    fn masked(&self) -> bool {
+        self.s.app.edit.is_some()
+    }
     fn fmt(&self, n: usize, v: f32) -> String {
         fmt_slot(n, v)
     }
+}
+
+impl<'a> Gui<'a> {
+    /// Push the active scheme's colours into the canvas.
+    fn apply_pal(&mut self) {
+        let a = self.app.scheme_cols(self.pal, self.light);
+        self.cv.bk = [a[0], a[1], a[2]];
+        self.cv.fg = [a[3], a[4], a[5]];
+        self.cv.ac = [a[6], a[7], a[8]];
+    }
+}
+
+/// About page copy (docs/abouttextcopy.md). Each inner slice is one paragraph, each string one source line.
+const ABOUT_TEXT: &[&[&str]] = &[
+    &["A 3-band compressor with waveshaping saturator and 5-band EQ", "For surgical baking intentions :3"],
+    &["Set crossover range with X-OVR sliders with 12dB, 24dB, 48dB, and 96dB slope options, then drive each band to taste."],
+    &["Use sidechain mode for dynamic EQ style ducking, then cook hard with waveshaping distortion.", "Left-click on the top-right pencil icon to enter custom draw mode."],
+    &["Refine tone with post-compressor 5-band EQ, or sculpt with notch, bandpass and allpass with dry signal blending."],
+    &["Double-click slider to reset parameter to its default value", "Left/Right-click top-left icon for more color ways", "Double-click top-left icon to switch between dark and light mode"],
+];
+
+/// Changelog, newest first. Keep each entry to two short sentences or fewer.
+const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &["First release: three bands with 12 to 96 dB crossovers, a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.", "Colour schemes with light mode, custom themes and fonts under About > Appearance."])];
+
+impl<'a> AppearanceUi<'a> for Gui<'a> {
+    fn app(&mut self) -> &mut AppState {
+        &mut self.s.app
+    }
+    fn app_ref(&self) -> &AppState {
+        &self.s.app
+    }
+    fn pal(&self) -> usize {
+        self.s.pal
+    }
+    fn light(&self) -> bool {
+        self.s.light
+    }
+    fn face(&self) -> usize {
+        self.s.face
+    }
+    fn commit_scheme(&mut self, pal: usize, encoded: String) {
+        self.s.pal = pal;
+        self.env.params.palette_v2.store(pal as i32, Ordering::Relaxed);
+        // a user theme is also stored in the project, so it survives a machine without the themes file
+        *self.env.params.custom_theme.lock() = encoded;
+        self.apply_pal();
+    }
+    fn commit_light(&mut self, light: bool) {
+        self.s.light = light;
+        self.env.params.light.store(light, Ordering::Relaxed);
+        self.apply_pal();
+    }
+    fn commit_face(&mut self, face: usize) {
+        self.s.face = face;
+        self.env.params.font.store(face as i32, Ordering::Relaxed);
+        self.cv.face = face;
+    }
+    fn about_paras(&self) -> &'static [&'static [&'static str]] {
+        ABOUT_TEXT
+    }
+    fn changelog(&self) -> &'static [(&'static str, &'static [&'static str])] {
+        CHANGELOG
+    }
+    fn draw_flow(&mut self, r: Rect, byp: bool) {
+        self.draw_flow_at(r, byp);
+    }
+    fn flow_h(&self) -> f32 {
+        150.0
+    }
+    fn about_scroll_drag_start(&mut self) {}
 }
 
 fn hz(v: f32) -> String {
@@ -844,27 +958,31 @@ impl<'a> Gui<'a> {
         self.env.params.sel_band.store(b as i32, Ordering::Relaxed);
     }
 
-    fn cycle_scheme(&mut self) {
-        self.pal = (self.pal + 1) % PALETTES.len();
-        self.env.params.palette_v2.store(self.pal as i32, Ordering::Relaxed);
-    }
-
-    fn toggle_light(&mut self) {
-        self.light = !self.light;
-        self.env.params.light.store(self.light, Ordering::Relaxed);
-    }
-
     // ------------------------------------------------------------------ header
-    /// plug-in icon: left click = next colour scheme, right click = light / dark
+    /// plug-in icon: click = next colour scheme, double click = light / dark, right click = scheme dropdown
     fn logo(&mut self, x: f32, y: f32) {
-        if self.hit(x - 3.0, y - 3.0, 27.0, 27.0) && self.kit.act == 0 {
-            if self.kit.press {
-                self.cycle_scheme();
-                self.kit.press = false;
+        let hv = self.hit(x - 3.0, y - 3.0, 27.0, 27.0);
+        if hv && self.kit.press && self.kit.act == 0 {
+            // single click = next scheme (after the double-click window), double click = light/dark
+            if self.logo_pend >= 0.0 && self.kit.now - self.logo_pend < 0.3 {
+                self.logo_pend = -1.0;
+                self.set_light(!self.light);
+            } else {
+                self.logo_pend = self.kit.now;
             }
-            if self.kit.rpress {
-                self.toggle_light();
-            }
+            self.kit.press = false;
+        }
+        if self.logo_pend >= 0.0 && self.kit.now - self.logo_pend >= 0.3 {
+            self.logo_pend = -1.0;
+            let n = self.app.n_schemes();
+            self.set_pal((self.pal + 1) % n);
+        }
+        if hv && self.kit.rpress {
+            self.logo_pend = -1.0;
+            let mut items = vec![MItem { label: format!("MODE: {}", if self.light { "LIGHT" } else { "DARK" }), kind: 0, id: 1000 }];
+            items.push(MItem { label: String::new(), kind: 2, id: -1 });
+            items.extend((0..self.app.n_schemes()).map(|i| MItem { label: self.app.scheme_name(i), kind: 0, id: i as i32 }));
+            self.menu = Some(Menu { kind: MenuKind::Palette, x, y: y + 22.0, items, checked: self.pal as i32, scroll: 0 });
         }
         self.setc(false);
         if self.light {
@@ -1253,6 +1371,114 @@ impl<'a> Gui<'a> {
         self.cv.textc(x + aw, y + ((h - 8.0) * 0.5).floor(), w - 2.0 * aw, &name);
     }
 
+    // ------------------------------------------------------------------ About page: signal flow
+    /// IN > crossover > three SAT + COMP bands > sum > EQ > OUT. A band is lit while it takes gain reduction, dim when switched
+    /// off; the EQ is lit when it does something and dim when bypassed; the sidechain key drops into the compressors.
+    fn draw_flow_at(&mut self, r: Rect, _byp: bool) {
+        let prev = self.kit.dk;
+        self.setc(false);
+        self.cv.boxr(r.x, r.y, r.w, r.h);
+        self.cv.set_font(1);
+        self.cv.text(r.x + 6.0, r.y + 5.0, "SIGNAL FLOW");
+        let eq = self.env.dsp.eq;
+        let eq_any = eq.bands.iter().any(|b| b.on) || eq.tilt != 0.0 || eq.gain != 0.0;
+        let eq_byp = self.sget(EQ_BYPASS) > 0.5;
+        let sc_on = self.sget(SC_ON) > 0.5;
+        let cy = r.y + 82.0;
+        let (bh, bw_band) = (22.0, 92.0);
+        let bx = |i: usize| -> (f32, f32) {
+            // (x, w) of the main-line blocks: IN, X-OVER, [bands], SUM, EQ, OUT
+            match i {
+                0 => (r.x + 12.0, 24.0),
+                1 => (r.x + 62.0, 58.0),
+                2 => (r.x + 172.0, bw_band),
+                3 => (r.x + 172.0 + bw_band + 50.0, 34.0),
+                4 => (r.x + 172.0 + bw_band + 50.0 + 34.0 + 30.0, 30.0),
+                _ => (r.x + 172.0 + bw_band + 50.0 + 34.0 + 30.0 + 30.0 + 30.0, 30.0),
+            }
+        };
+        let names = ["IN", "X-OVER", "", "SUM", "EQ", "OUT"];
+        let ys = [cy - 40.0, cy, cy + 40.0];
+        // lines
+        self.setc(false);
+        let arrow = |c: &mut Canvas, x0: f32, x1: f32, y: f32| {
+            c.fill(x0, y, x1 - x0 - 3.0, 1.0);
+            c.tri((x1 - 4.0, y - 3.0), (x1 - 4.0, y + 4.0), (x1, y + 0.5));
+        };
+        let (inx, inw) = bx(0);
+        let (xx, xw) = bx(1);
+        arrow(&mut self.cv, inx + inw, xx, cy);
+        let (b0, _) = bx(2);
+        let fork = b0 - 24.0;
+        self.cv.fill(xx + xw, cy, fork - xx - xw, 1.0);
+        self.cv.fill(fork, ys[0], 1.0, ys[2] - ys[0] + 1.0);
+        for y in ys {
+            arrow(&mut self.cv, fork, b0, y + bh * 0.5 - 0.0);
+        }
+        let (sx, sw) = bx(3);
+        let join = b0 + bw_band + 14.0;
+        for y in ys {
+            self.cv.fill(b0 + bw_band, y + bh * 0.5, join - b0 - bw_band, 1.0);
+        }
+        self.cv.fill(join, ys[0] + bh * 0.5, 1.0, ys[2] - ys[0] + 1.0);
+        arrow(&mut self.cv, join, sx, cy + bh * 0.5);
+        let (ex, ew) = bx(4);
+        arrow(&mut self.cv, sx + sw, ex, cy + bh * 0.5);
+        let (ox, _) = bx(5);
+        arrow(&mut self.cv, ex + ew, ox, cy + bh * 0.5);
+        // the main-line blocks sit on the middle band's height
+        let main_y = cy;
+        for i in [0usize, 1, 3, 4, 5] {
+            let (x, w) = bx(i);
+            let dim = i == 4 && (eq_byp || !eq_any);
+            self.set_dk(if dim { prev * 0.5 } else { prev });
+            let lit = i == 4 && eq_any && !eq_byp;
+            self.setc(false);
+            if lit {
+                self.cv.fill(x, main_y, w, bh);
+                self.cv.setbg();
+            } else {
+                self.cv.setbg();
+                self.cv.fill(x + 1.0, main_y + 1.0, w - 2.0, bh - 2.0);
+                self.setc(false);
+                self.cv.boxr(x, main_y, w, bh);
+            }
+            self.cv.textc(x, main_y + 7.0, w, names[i]);
+            self.setc(false);
+        }
+        // the three bands
+        for b in 0..3 {
+            let on = self.sget(band_base(b) + ON) > 0.5;
+            let lit = on && self.gr_disp[b] > 0.1;
+            self.set_dk(if on { prev } else { prev * 0.5 });
+            self.setc(false);
+            if lit {
+                self.cv.fill(b0, ys[b], bw_band, bh);
+                self.cv.setbg();
+            } else {
+                self.cv.setbg();
+                self.cv.fill(b0 + 1.0, ys[b] + 1.0, bw_band - 2.0, bh - 2.0);
+                self.setc(false);
+                self.cv.boxr(b0, ys[b], bw_band, bh);
+            }
+            self.cv.textc(b0, ys[b] + 7.0, bw_band, &format!("{} SAT>COMP", BAND_NAMES[b]));
+            self.setc(false);
+        }
+        self.set_dk(prev);
+        // sidechain key: SIDECHAIN box above, dropping into the compressor column
+        if sc_on {
+            let (kx, kw) = (b0 + 20.0, 78.0);
+            let ky = r.y + 4.0;
+            self.setc(false);
+            self.cv.boxr(kx, ky, kw, 20.0);
+            self.cv.textc(kx, ky + 6.0, kw, "SIDECHAIN");
+            self.cv.fill(kx + kw * 0.5, ky + 20.0, 1.0, ys[0] - ky - 20.0 - 3.0);
+            self.cv.tri((kx + kw * 0.5 - 3.0, ys[0] - 4.0), (kx + kw * 0.5 + 4.0, ys[0] - 4.0), (kx + kw * 0.5 + 0.5, ys[0]));
+            self.cv.text(kx + kw + 8.0, ky + 6.0, "KEY > COMP");
+        }
+        self.cv.text(r.x + 6.0, r.y + r.h - 15.0, "EACH BAND: SAT > COMP, THEN THE SUM GOES THROUGH THE POST EQ");
+    }
+
     // ------------------------------------------------------------------ popup menu
     /// (x, y, w, h, visible rows) of the open menu, clamped to the canvas.
     fn menu_geom(&mut self) -> Option<(f32, f32, f32, f32, usize)> {
@@ -1303,6 +1529,8 @@ impl<'a> Gui<'a> {
                     MenuKind::Shape(band) => self.click_set(band_base(band) + SHAPE, id as f32),
                     MenuKind::Size => self.request_scale(SIZES[(id as usize).min(SIZES.len() - 1)]),
                     MenuKind::Preset => self.preset_action(id),
+                    MenuKind::Palette if id >= 1000 => self.set_light(!self.light),
+                    MenuKind::Palette => self.set_pal(id as usize),
                 }
             }
         }
@@ -1693,6 +1921,11 @@ impl<'a> Gui<'a> {
         self.draw_vu(sat_x + CELL_W + 8.0, y0, 24.0, ph);
         // gain reduction meter
         self.draw_gr_meter(meter_x, y0, 30.0, ph);
+        if self.app.editing() {
+            // theme editor: its cells take the compressor section (4 x 3 grid)
+            self.theme_cells(CellGrid { x0: VX + VW - (3.0 * CELL_W + 12.0) - (CELL_W + 6.0), y0, cw: CELL_W, ch: CELL_H, px: CELL_W + 6.0, py: CELL_P });
+            return;
+        }
         // compressor: 3 columns x 4 rows
         let cells = [
             [(THRESH, "THRESH"), (RATIO, "RATIO"), (ATTACK, "ATTACK"), (RELEASE, "RELEASE")],
@@ -2047,6 +2280,15 @@ impl<'a> Gui<'a> {
             self.rd_diff = sh.diff_disp.load(Ordering::Relaxed);
             self.rd_eq_diff = sh.eq_diff.load(Ordering::Relaxed);
         }
+        // Theme editor: every widget draws as a dummy with the input masked; only the editor cells and the picker get it.
+        let editing = self.app.editing();
+        self.begin_frame_editing();
+        if editing {
+            self.logo_pend = -1.0;
+            self.eq_page = false;
+            self.curve_edit = false;
+            self.menu = None;
+        }
         self.env.dsp = self.env.params.to_dsp();
         self.update_gr();
         self.menu_frame();
@@ -2093,6 +2335,12 @@ impl<'a> Gui<'a> {
         self.setc(false);
         self.cv.set_font(2);
         let title = format!("SATXCOMP {}", version_short());
+        let tw = self.cv.text_w(&title);
+        if self.hit(42.0, 5.0, tw + 4.0, 21.0) && self.kit.press && self.kit.act == 0 {
+            self.app.about = if self.app.about == 0 { 1 } else { 0 };
+            self.app.about_scroll = 0;
+            self.kit.press = false;
+        }
         self.cv.text(44.0, 12.0, &title);
         self.preset_bar();
         // sidechain key: white = on and the host gave a bus, red = on but no bus
@@ -2133,8 +2381,13 @@ impl<'a> Gui<'a> {
         if self.btn(RX + RW * 0.5, VY, RW * 0.5, 16.0, "BYPASS", byp as u8) {
             self.click_set(8, if byp { 0.0 } else { 1.0 });
         }
+        let ab = self.app.about > 0;
         self.set_dk(if byp || (self.eq_page && eq_byp) { 0.5 } else { 1.0 });
-        if self.eq_page {
+        if ab {
+            // About / Appearance / Changelog replace the viewport and the band section (the right column stays)
+            self.set_dk(if byp { 0.5 } else { 1.0 });
+            self.draw_about(Rect::new(VX, VY + 22.0, VW, CELLS_Y + 3.0 * CELL_P + CELL_H - VY - 22.0), byp);
+        } else if self.eq_page {
             self.draw_eq(VX, VY, VW, VH);
         } else {
             // the sidechain controls take the bottom of the viewport while the key is on
@@ -2177,7 +2430,8 @@ impl<'a> Gui<'a> {
         self.set_dk(1.0);
 
         // ---------- band row, band cells, output column
-        if self.eq_page {
+        if ab {
+        } else if self.eq_page {
             self.set_dk(if byp || eq_byp { 0.5 } else { 1.0 });
             self.eq_row(BAND_Y);
             self.eq_cells(CELLS_Y);
@@ -2193,5 +2447,19 @@ impl<'a> Gui<'a> {
         self.menu_draw();
         self.poll_dialog();
         self.run_pending();
+        if editing {
+            // the colour picker / on-screen keyboard sit over the viewport, live on top of the masked dummy page
+            let over = Rect::new(VX + ((VW - 266.0) * 0.5).floor(), VY + ((VH - 128.0) * 0.5).floor(), 266.0, 128.0);
+            self.unmask_in();
+            let osk = self.app.osk_open();
+            if osk {
+                self.mask_in(); // picker stays visible underneath but inert
+            }
+            self.theme_picker(over);
+            if osk {
+                self.unmask_in();
+                self.theme_osk(over);
+            }
+        }
     }
 }

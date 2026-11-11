@@ -334,6 +334,8 @@ impl State {
         d.diff_disp.store(2.0, Ordering::Relaxed);
         d.sat_db.store(2.0, Ordering::Relaxed);
         d.sat_vz.store(0.3, Ordering::Relaxed);
+        d.sat_pk.store(0.4, Ordering::Relaxed);
+        d.lim_gr_pk.store(1.5, Ordering::Relaxed);
     }
 }
 
@@ -449,7 +451,7 @@ impl<'a> DerefMut for Gui<'a> {
 /// About page copy (docs/abouttextcopy.md). Each inner slice is one paragraph, each string one source line.
 const ABOUT_TEXT: &[&[&str]] = &[
     &["A waveshaping saturator with compressor and 2-stage 3-band EQ", "Made with bricking intentions (:"],
-    &["Use saturator module to give compressor more spice to squash.", "Left-click top-right pencil icon to enter custom draw mode."],
+    &["Use saturator module to give compressor more spice to squash.", "Left-click on the top-right pencil icon to enter custom draw mode."],
     &["Refine tone with pre/post-compressor 3-band EQ, then dial in the desired gain in the output module."],
     &["Double-click slider to reset parameter to its default value", "Left/Right-click top-left icon for more color ways", "Double-click top-left icon to switch between dark and light mode"],
 ];
