@@ -207,7 +207,7 @@ impl XEngine {
         self.dirty = false;
         let snap = self.snap;
         self.la_s = ((p.lookahead_ms * 0.001 * sr + 0.5).floor().max(0.0) as usize).min(1900);
-        self.xo.set(p.x1, p.x2, sr, snap);
+        self.xo.set(p.x1, p.x2, p.x1_slope.clamp(0, 3) as usize, p.x2_slope.clamp(0, 3) as usize, sr, snap);
         for b in 0..3 {
             self.strips[b].derive(&p.bands[b], p.os, self.la_s, sr, snap, self.smoothing);
         }
@@ -298,6 +298,7 @@ impl XEngine {
 
         // ---- split, process each band, sum with solo / delta weighting
         let bands = self.xo.tick(inp);
+        let sgn = self.xo.signs();
         let mut sum = [0.0f64; 2];
         let mut pre = [0.0f64; 2];
         let gdelta = if self.delta_on { 1.0 } else { 0.0 };
@@ -312,8 +313,8 @@ impl XEngine {
             let sg = self.solo_s[b] + (stgt - self.solo_s[b]) * self.byp_c;
             self.solo_s[b] = sg;
             for c in 0..2 {
-                sum[c] += (o.y[c] + (o.removed[c] - o.y[c]) * d) * sg;
-                pre[c] += o.pre[c];
+                sum[c] += (o.y[c] + (o.removed[c] - o.y[c]) * d) * sg * sgn[b];
+                pre[c] += o.pre[c] * sgn[b];
             }
         }
 
@@ -399,6 +400,21 @@ mod tests {
         let y = run(&mut e, &x);
         let (a, b) = (rms(&x[4000..]), rms(&y[4000..]));
         assert!((20.0 * (b / a).log10()).abs() < 0.1, "{a} vs {b}");
+    }
+
+    #[test]
+    fn neutral_engine_stays_flat_at_every_crossover_slope() {
+        let x = noise(48000, 5);
+        for (s1, s2) in [(0, 0), (0, 3), (2, 1), (3, 3)] {
+            let mut p = neutral();
+            p.x1_slope = s1;
+            p.x2_slope = s2;
+            let mut e = XEngine::new(SR);
+            e.set_params(&p);
+            let y = run(&mut e, &x);
+            let g = 20.0 * (rms(&y[6000..]) / rms(&x[6000..])).log10();
+            assert!(g.abs() < 0.1, "slopes {s1}/{s2}: {g} dB");
+        }
     }
 
     #[test]

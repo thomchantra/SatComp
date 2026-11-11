@@ -109,6 +109,9 @@ pub struct XParams {
     /// crossover frequencies, Hz (x2 is kept above x1)
     pub x1: f64,
     pub x2: f64,
+    /// crossover slopes: 0 = 12, 1 = 24, 2 = 48, 3 = 96 dB/oct
+    pub x1_slope: i32,
+    pub x2_slope: i32,
     /// saturator oversampling: 0 off, 1 x2, 2 x4
     pub os: i32,
     pub lookahead_ms: f64,
@@ -126,6 +129,8 @@ impl Default for XParams {
         Self {
             x1: 150.0,
             x2: 2500.0,
+            x1_slope: 1,
+            x2_slope: 1,
             os: 0,
             lookahead_ms: 0.0,
             bands: [BandParams::default(); 3],
