@@ -1,0 +1,207 @@
+//! Headless smoke test of the editor: drives the page with a scripted mouse against a recording fake host and checks that
+//! it neither panics nor behaves non-deterministically, and that the expected parameter writes happen.
+//! (nih-plug keeps its parameter setters crate-private, so values are not echoed back; the host write log is what is checked.)
+
+use super::ui::State;
+use crate::params::SatLimParams;
+use crate::Shared;
+use nih_plug::prelude::*;
+use nih_plug_egui::egui::{self, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+use std::sync::Arc;
+
+#[derive(Default)]
+struct FakeHost {
+    log: parking_lot::Mutex<Vec<String>>,
+}
+
+impl GuiContext for FakeHost {
+    fn plugin_api(&self) -> PluginApi {
+        PluginApi::Vst3
+    }
+    fn request_resize(&self) -> bool {
+        true
+    }
+    unsafe fn raw_begin_set_parameter(&self, _p: ParamPtr) {}
+    unsafe fn raw_set_parameter_normalized(&self, p: ParamPtr, n: f32) {
+        self.log.lock().push(format!("{} {:.3}", p.name(), n));
+    }
+    unsafe fn raw_end_set_parameter(&self, _p: ParamPtr) {}
+    fn get_state(&self) -> nih_plug::wrapper::state::PluginState {
+        nih_plug::wrapper::state::PluginState { version: String::new(), params: Default::default(), fields: Default::default() }
+    }
+    fn set_state(&self, _s: nih_plug::wrapper::state::PluginState) {}
+}
+
+struct Rig {
+    ctx: egui::Context,
+    host: Arc<FakeHost>,
+    params: Arc<SatLimParams>,
+    shared: Arc<Shared>,
+    st: State,
+    t: f64,
+    hash: u64,
+}
+
+impl Rig {
+    fn new() -> Self {
+        Self::with_params(|_| {})
+    }
+
+    /// A rig whose parameters start from `tweak` (nih-plug's setters are sealed, so state is set before the params are shared).
+    fn with_params(tweak: impl FnOnce(&mut SatLimParams)) -> Self {
+        let ctx = egui::Context::default();
+        satcomp_ui::init_ctx(&ctx);
+        let mut p = SatLimParams::default();
+        tweak(&mut p);
+        let params = Arc::new(p);
+        Self { ctx, host: Arc::new(FakeHost::default()), shared: Arc::new(Shared::new()), st: State::new(0, false, 0, &params), params, t: 1.0, hash: 0xcbf29ce484222325 }
+    }
+
+    fn frame(&mut self, events: Vec<Event>) {
+        self.t += 0.03;
+        // some audio-side telemetry so meters and the scope draw
+        let n = (self.t * 10.0) as f32;
+        let ord = std::sync::atomic::Ordering::Relaxed;
+        self.shared.opk[0].store(0.5 + 0.3 * n.sin(), ord);
+        self.shared.opk[1].store(0.4 + 0.3 * n.cos(), ord);
+        self.shared.tpk.store(0.6 + 0.3 * n.sin(), ord);
+        self.shared.gr_pk.store(2.0 + n.cos().abs() * 3.0, ord);
+        self.shared.sat_pk.store(0.5, ord);
+        self.shared.sat_vz.store(0.4, ord);
+        self.shared.fms.store(0.05, ord);
+        for i in 0..400 {
+            let v = 0.3 + 0.2 * ((i as f32 + n * 5.0) * 0.1).sin();
+            self.shared.scope.push(v, v * 1.5);
+        }
+        let raw = RawInput { time: Some(self.t), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(510.0, 744.0))), events, ..Default::default() };
+        let setter = ParamSetter::new(&*self.host);
+        let (p, sh) = (self.params.clone(), self.shared.clone());
+        let st = &mut self.st;
+        let full = self.ctx.run(raw, |ctx| super::run_frame(ctx, &setter, st, &p, &sh));
+        for b in format!("{:?}", full.shapes).bytes() {
+            self.hash ^= b as u64;
+            self.hash = self.hash.wrapping_mul(0x100000001b3);
+        }
+    }
+
+    /// logical (1.5 px per unit) position
+    fn at(x: f32, y: f32) -> Pos2 {
+        Pos2::new(x * 1.5, y * 1.5)
+    }
+
+    fn click(&mut self, x: f32, y: f32) {
+        let p = Self::at(x, y);
+        self.frame(vec![Event::PointerMoved(p)]);
+        self.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        self.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        self.frame(vec![]);
+    }
+
+    /// the host closed and reopened the editor: egui's clock restarts from zero while the UI state lives on
+    fn reopen_editor(&mut self) {
+        self.t = 0.0;
+    }
+
+    fn rclick(&mut self, x: f32, y: f32) {
+        let p = Self::at(x, y);
+        self.frame(vec![Event::PointerMoved(p)]);
+        self.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE }]);
+        self.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+        self.frame(vec![]);
+    }
+
+    fn drag(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        let p0 = Self::at(x0, y0);
+        self.frame(vec![Event::PointerMoved(p0)]);
+        self.frame(vec![Event::PointerButton { pos: p0, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        for i in 1..=5 {
+            let f = i as f32 / 5.0;
+            self.frame(vec![Event::PointerMoved(Self::at(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f))]);
+        }
+        let p1 = Self::at(x1, y1);
+        self.frame(vec![Event::PointerButton { pos: p1, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        self.frame(vec![]);
+    }
+
+    fn log(&self) -> Vec<String> {
+        self.host.log.lock().clone()
+    }
+}
+
+fn script() -> (u64, Vec<String>) {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    r.click(318.0, 38.0); // oversampling x8
+    r.drag(41.0, 380.0, 41.0, 350.0); // DRIVE
+    r.click(281.0, 260.0); // L.AHD off
+    r.drag(281.0, 295.0, 281.0, 280.0); // CEILING
+    r.drag(281.0, 337.0, 281.0, 322.0); // THRESHOLD
+    r.drag(281.0, 421.0, 281.0, 405.0); // CLIP
+    r.drag(281.0, 463.0, 281.0, 450.0); // OUT GAIN
+    r.click(247.0, 14.0); // DELTA
+    r.click(247.0, 14.0);
+    r.click(300.0, 14.0); // BYPASS on
+    r.click(300.0, 14.0); // and off
+    r.click(80.0, 197.0); // shaper selector menu
+    r.click(80.0, 197.0);
+    r.click(110.0, 171.0); // scope row: SRC
+    r.drag(150.0, 80.0, 190.0, 100.0); // scope: window / ceiling drag
+    r.click(197.0, 38.0); // preset dropdown
+    r.click(197.0, 38.0);
+    r.click(60.0, 12.0); // About page on
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(60.0, 12.0); // and off
+    r.rclick(330.0, 480.0); // grip: size menu
+    r.rclick(330.0, 480.0);
+    r.reopen_editor();
+    r.frame(vec![]);
+    (r.hash, r.log())
+}
+
+#[test]
+fn the_editor_runs_scripted_input_and_is_deterministic() {
+    let (h1, _) = script();
+    let (h2, log) = script();
+    assert_eq!(h1, h2, "frames differ between two identical runs");
+    for want in ["Oversampling", "Drive", "Lookahead", "Ceiling", "Threshold", "Clip", "Out Gain", "Bypass"] {
+        assert!(log.iter().any(|l| l.starts_with(want)), "no write to {want}: {log:?}");
+    }
+}
+
+#[test]
+fn the_oversampling_buttons_write_x8() {
+    let mut r = Rig::new();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(318.0, 38.0);
+    let log = r.log();
+    // x8 = 3 of 0..3 -> normalised 1.0
+    assert!(log.iter().any(|l| l.starts_with("Oversampling") && l.ends_with("1.000")), "{log:?}");
+}
+
+#[test]
+fn the_look_ahead_button_switches_it_off() {
+    let mut r = Rig::new();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(281.0, 260.0);
+    assert!(r.log().iter().any(|l| l.starts_with("Lookahead") && l.ends_with("0.000")), "{:?}", r.log());
+}
+
+#[test]
+fn the_about_page_stays_quiet_and_writes_nothing() {
+    // the editing flag is set through the About > Appearance flow; here just make sure many frames with the About page
+    // open (which hosts it) neither panic nor change parameters
+    let mut r = Rig::new();
+    r.click(60.0, 12.0);
+    for _ in 0..30 {
+        r.frame(vec![]);
+    }
+    assert!(r.log().is_empty(), "{:?}", r.log());
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generates satlim-plugin/src/params.rs (SatLim parameters). Run from rust/: python3 tools/gen_lparams.py
 
-Parameter ids are permanent once released. Slot numbers are the UI's addressing scheme (like SatComp's slider numbers).
+Parameter ids are permanent once released. Slot numbers are the UI's addressing scheme; the sat module keeps SatComp's slot numbers (1-7, 25, 27, bypass 26, out gain 22) so the shared sat UI code addresses the same cells.
 """
 P = []  # (slot, id, display name, kind, min, max, default, step, unit)
 def add(n, i, name, kind, mn, mx, df, step=None, unit=""):
@@ -15,16 +15,16 @@ add(4, "sat_hp", "Sat HP", "f", 20, 2000, 20, 1, " Hz")
 add(5, "sat_lp", "Sat LP", "f", 200, 20000, 20000, 1, " Hz")
 add(6, "tone", "Tone", "f", 1000, 20000, 20000, 1, " Hz")
 add(7, "os", "Oversampling", "int", 0, 3, 0)          # x1 x2 x4 x8: saturator and clipper
-add(8, "sat_mix", "Sat Mix", "f", 0, 100, 100, 1, " %")
-add(9, "sat_gain", "Sat Gain", "f", -24, 12, 0, 0.1, " dB")
+add(25, "sat_mix", "Sat Mix", "f", 0, 100, 100, 1, " %")
+add(27, "sat_gain", "Sat Gain", "f", -24, 12, 0, 0.1, " dB")
 # LIMITER
-add(10, "lookahead", "Lookahead", "bool", 0, 1, 1)    # off = zero latency, sample peak, instant attack
-add(11, "ceiling", "Ceiling", "f", -24, 0, -0.3, 0.1, " dB")
-add(12, "threshold", "Threshold", "f", -30, 0, 0, 0.1, " dB")
-add(13, "release", "Release", "f", 15, 80, 80, 1, " ms")
-add(14, "clip", "Clip", "f", 0, 100, 0, 1, " %")
-add(15, "out_gain", "Out Gain", "f", -24, 12, 0, 0.1, " dB")
-add(16, "bypass", "Bypass", "bool", 0, 1, 0)
+add(12, "lookahead", "Lookahead", "bool", 0, 1, 1)    # off = zero latency, sample peak, instant attack
+add(8, "ceiling", "Ceiling", "f", -24, 0, -0.3, 0.1, " dB")
+add(9, "threshold", "Threshold", "f", -30, 0, 0, 0.1, " dB")
+add(10, "release", "Release", "f", 15, 80, 80, 1, " ms")
+add(11, "clip", "Clip", "f", 0, 100, 0, 1, " %")
+add(22, "out_gain", "Out Gain", "f", -24, 12, 0, 0.1, " dB")
+add(26, "bypass", "Bypass", "bool", 0, 1, 0)
 
 def f(x):
     return repr(float(x))
@@ -52,7 +52,7 @@ for n, i, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{i}"]\n    pub {i}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
 o.append("}\n")
 o.append("impl Default for SatLimParams {\n    fn default() -> Self {\n        Self {")
-o.append("            editor_state: EguiState::from_size(455, 713),")
+o.append("            editor_state: EguiState::from_size(340, 496),")
 o.append("            palette_v2: Arc::new(AtomicI32::new(-1)),")
 o.append("            light: Arc::new(AtomicBool::new(false)),")
 o.append("            font: Arc::new(AtomicI32::new(0)),")

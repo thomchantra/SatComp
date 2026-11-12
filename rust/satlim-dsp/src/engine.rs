@@ -65,6 +65,9 @@ pub struct LimEngine {
     pub gr_pk: f64,
     /// smoothed output mean-square (RMS readout)
     pub fms: f64,
+    /// loudness change across the saturator (before SAT GAIN), dB: the plot's SAT readout
+    pub sat_db: f64,
+    ims: f64,
     pub clip_f: bool,
 }
 
@@ -109,6 +112,8 @@ impl LimEngine {
             sat_vz: 0.0,
             gr_pk: 0.0,
             fms: 1e-9,
+            sat_db: 0.0,
+            ims: 1e-9,
             clip_f: false,
         };
         e.derive();
@@ -192,6 +197,7 @@ impl LimEngine {
         let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
         self.sat_vz = self.sat.blk.max(self.sat_vz * vz_d);
         self.sat.blk = 0.0;
+        self.sat_db = 4.3429448 * (self.sat.ms.max(1e-12) / self.ims.max(1e-12)).ln();
     }
 
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
@@ -216,6 +222,7 @@ impl LimEngine {
 
         // SAT, then the level that maps the threshold onto the ceiling
         let s = self.sat.tick(inp, self.smoothing);
+        ms_step(&mut self.ims, inp[0], inp[1], self.rms_c);
         self.sat_out = self.sat_out.max(s[0].abs().max(s[1].abs()));
         self.thr_g += (self.thr_t - self.thr_g) * self.sm_c;
         let t = [s[0] * self.thr_g, s[1] * self.thr_g];

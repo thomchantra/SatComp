@@ -35,6 +35,8 @@ pub struct Shared {
     pub sat_vz: AtomicF32,
     /// smoothed output mean-square (RMS readout)
     pub fms: AtomicF32,
+    /// loudness change across the saturator (before SAT GAIN), dB
+    pub sat_db: AtomicF32,
     // UI -> audio
     pub delta_on: AtomicBool,
 }
@@ -52,6 +54,7 @@ impl Shared {
             sat_pk: AtomicF32::new(0.0),
             sat_vz: AtomicF32::new(0.0),
             fms: AtomicF32::new(1e-9),
+            sat_db: AtomicF32::new(0.0),
             delta_on: AtomicBool::new(false),
         }
     }
@@ -166,6 +169,7 @@ impl Plugin for SatLim {
         e.sat_out = 0.0;
         sh.sat_vz.store(e.sat_vz as f32, Ordering::Relaxed);
         sh.fms.store(e.fms as f32, Ordering::Relaxed);
+        sh.sat_db.store(e.sat_db as f32, Ordering::Relaxed);
         ProcessStatus::Normal
     }
 }

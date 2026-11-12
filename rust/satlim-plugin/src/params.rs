@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 17;
+pub const SLOTS: usize = 28;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -19,15 +19,15 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (5, "sat_lp", 200.0, 20000.0, 20000.0),
     (6, "tone", 1000.0, 20000.0, 20000.0),
     (7, "os", 0.0, 3.0, 0.0),
-    (8, "sat_mix", 0.0, 100.0, 100.0),
-    (9, "sat_gain", -24.0, 12.0, 0.0),
-    (10, "lookahead", 0.0, 1.0, 1.0),
-    (11, "ceiling", -24.0, 0.0, -0.3),
-    (12, "threshold", -30.0, 0.0, 0.0),
-    (13, "release", 15.0, 80.0, 80.0),
-    (14, "clip", 0.0, 100.0, 0.0),
-    (15, "out_gain", -24.0, 12.0, 0.0),
-    (16, "bypass", 0.0, 1.0, 0.0),
+    (25, "sat_mix", 0.0, 100.0, 100.0),
+    (27, "sat_gain", -24.0, 12.0, 0.0),
+    (12, "lookahead", 0.0, 1.0, 1.0),
+    (8, "ceiling", -24.0, 0.0, -0.3),
+    (9, "threshold", -30.0, 0.0, 0.0),
+    (10, "release", 15.0, 80.0, 80.0),
+    (11, "clip", 0.0, 100.0, 0.0),
+    (22, "out_gain", -24.0, 12.0, 0.0),
+    (26, "bypass", 0.0, 1.0, 0.0),
 ];
 
 #[derive(Params)]
@@ -95,7 +95,7 @@ pub struct SatLimParams {
 impl Default for SatLimParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(455, 713),
+            editor_state: EguiState::from_size(340, 496),
             palette_v2: Arc::new(AtomicI32::new(-1)),
             light: Arc::new(AtomicBool::new(false)),
             font: Arc::new(AtomicI32::new(0)),
@@ -172,15 +172,15 @@ impl SatLimParams {
             5 => self.sat_lp.as_ptr(),
             6 => self.tone.as_ptr(),
             7 => self.os.as_ptr(),
-            8 => self.sat_mix.as_ptr(),
-            9 => self.sat_gain.as_ptr(),
-            10 => self.lookahead.as_ptr(),
-            11 => self.ceiling.as_ptr(),
-            12 => self.threshold.as_ptr(),
-            13 => self.release.as_ptr(),
-            14 => self.clip.as_ptr(),
-            15 => self.out_gain.as_ptr(),
-            16 => self.bypass.as_ptr(),
+            25 => self.sat_mix.as_ptr(),
+            27 => self.sat_gain.as_ptr(),
+            12 => self.lookahead.as_ptr(),
+            8 => self.ceiling.as_ptr(),
+            9 => self.threshold.as_ptr(),
+            10 => self.release.as_ptr(),
+            11 => self.clip.as_ptr(),
+            22 => self.out_gain.as_ptr(),
+            26 => self.bypass.as_ptr(),
             _ => return None,
         })
     }
