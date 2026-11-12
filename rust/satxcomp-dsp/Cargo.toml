@@ -6,3 +6,6 @@ publish = false
 
 [dependencies]
 satcomp-dsp = { path = "../satcomp-dsp" }
+
+[dev-dependencies]
+satcomp-dsp = { path = "../satcomp-dsp", features = ["tune"] }

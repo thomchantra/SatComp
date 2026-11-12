@@ -5,3 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+
+[features]
+# dev-only: environment-variable overrides of the limiter constants (offline sweeps)
+tune = []

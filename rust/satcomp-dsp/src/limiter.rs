@@ -2,6 +2,9 @@
 //!
 //! * Detection: the stereo-linked peak of the input, including the inter-sample peaks found by a 4x polyphase
 //!   interpolator (2x at 96 kHz-class rates, plain sample peak above that: inter-sample overs vanish at high rates).
+//! * Hard clip: every sample is clipped at `CLIP_OVER_DB` above the ceiling before detection and again on the delayed
+//!   audio, so a tall transient is shaved off clean and the gain stage only ever has to find the small remainder (a limiter
+//!   alone would duck the whole body for the length of its release after an 8 dB spike). Faded in with the limiter.
 //! * Gain: the gain needed to hold the ceiling, a sliding minimum over the lookahead, then a boxcar of the lookahead
 //!   length. The result ramps down so that it reaches the full reduction exactly when the peak leaves the delay line.
 //!   Release is program dependent (fast for isolated peaks, slow under sustained reduction) and can only make the gain
@@ -19,6 +22,21 @@ use std::collections::VecDeque;
 const TAPS: usize = 64;
 /// Output ceiling, dBTP.
 pub const CEILING_DB: f64 = -0.2;
+/// Dev-only tuning hook (feature `tune`): an environment variable overrides a constant, for offline sweeps.
+#[cfg(feature = "tune")]
+fn tune(k: &str, d: f64) -> f64 {
+    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+}
+#[cfg(not(feature = "tune"))]
+fn tune(_k: &str, d: f64) -> f64 {
+    d
+}
+/// The hard clip sits this far above the ceiling (dB): peaks beyond it are shaved off clean, so the limiter only ever has
+/// to find this much (plus the inter-sample excess of the clipped waveform) and its release never has to ride a big spike.
+const CLIP_OVER_DB: f64 = 2.0;
+/// Release time constant range, seconds: fast for isolated peaks, slow under sustained reduction.
+const TAU_MIN: f64 = 0.020;
+const TAU_MAX: f64 = 0.120;
 /// Lookahead / attack ramp, seconds.
 const LOOKAHEAD_S: f64 = 0.0015;
 /// Capacity of the delay line and of the min / boxcar buffers (samples).
@@ -92,6 +110,9 @@ pub struct Limiter {
     on_s: f64,
     on_step: f64,
     delay: StereoDelay<CAP>,
+    clipv: f64,
+    tau0: f64,
+    tau1: f64,
     /// Smallest applied gain since the engine last reset it (linear, 1.0 = no reduction).
     pub gmin: f64,
 }
@@ -124,6 +145,9 @@ impl Limiter {
             on_s: 0.0,
             on_step: 0.0,
             delay: StereoDelay::new(),
+            clipv: 10f64.powf((CEILING_DB + tune("LIM_CLIP", CLIP_OVER_DB)) / 20.0),
+            tau0: tune("LIM_TAU0", TAU_MIN),
+            tau1: tune("LIM_TAU1", TAU_MAX),
             gmin: 1.0,
         };
         s.set_sample_rate(sr);
@@ -218,7 +242,8 @@ impl Limiter {
         let l = self.l;
 
         // ---- target gain for the sample the detector is looking at
-        let pk = self.detect(x);
+        let xc = [x[0].clamp(-self.clipv, self.clipv), x[1].clamp(-self.clipv, self.clipv)];
+        let pk = self.detect(xc);
         let need = if pk > self.ceil { self.ceil / pk } else { 1.0 };
         let t = need.min(self.need_prev);
         self.need_prev = need;
@@ -261,7 +286,7 @@ impl Limiter {
         // feed back and slow every release)
         self.avg += ((1.0 - a) - self.avg) * self.avg_c;
         if self.rc_n == 0 {
-            let tau = 0.030 + 0.270 * (self.avg / 0.25).min(1.0);
+            let tau = self.tau0 + (self.tau1 - self.tau0) * (self.avg / 0.25).min(1.0);
             self.rc = 1.0 - (-1.0 / (self.sr * tau)).exp();
             self.rc_n = 16;
         }
@@ -281,11 +306,17 @@ impl Limiter {
             self.on_s = (self.on_s - self.on_step).max(target);
         }
         let ge = 1.0 + (g - 1.0) * self.on_s;
-        if ge < self.gmin {
-            self.gmin = ge;
-        }
         let y = self.delay.tap(self.d + l);
-        [y[0] * ge, y[1] * ge]
+        // the reduction readout counts the clip too: gain the output sample lost against the unclipped one
+        let pk = y[0].abs().max(y[1].abs());
+        let clip_g = if pk > self.clipv { 1.0 + (self.clipv / pk - 1.0) * self.on_s } else { 1.0 };
+        if ge * clip_g < self.gmin {
+            self.gmin = ge * clip_g;
+        }
+        // the hard clip is part of the engaged path (faded in with it)
+        let yc = [y[0].clamp(-self.clipv, self.clipv), y[1].clamp(-self.clipv, self.clipv)];
+        let yo = [y[0] + (yc[0] - y[0]) * self.on_s, y[1] + (yc[1] - y[1]) * self.on_s];
+        [yo[0] * ge, yo[1] * ge]
     }
 }
 
@@ -404,6 +435,25 @@ mod tests {
                 assert!(lim.gmin < 0.5, "limiter never engaged");
             }
         }
+    }
+
+    #[test]
+    fn a_tall_spike_does_not_duck_the_body_after_it() {
+        // a steady -10 dB tone with one 1 ms spike at +12 dB: 30 ms later the tone must be back within 1 dB
+        let sr = 48000.0;
+        let mut lim = Limiter::new(sr);
+        let n = 24000;
+        let x: Vec<f64> = (0..n).map(|i| {
+            let t = i as f64 / sr;
+            let tone = 0.316 * (2.0 * PI * 200.0 * t).sin();
+            if (12000..12048).contains(&i) { tone + 4.0 * (PI * (i - 12000) as f64 / 48.0).sin() } else { tone }
+        }).collect();
+        let (y, _) = run(&mut lim, &x, &x, true);
+        let lat = lim.latency();
+        let from = 12000 + lat + (0.03 * sr) as usize;
+        let rms = |v: &[f64]| (v.iter().map(|a| a * a).sum::<f64>() / v.len() as f64).sqrt();
+        let g = db(rms(&y[from..from + 4800]) / rms(&x[from - lat..from - lat + 4800]));
+        assert!(g > -1.0, "body still ducked {g:.2} dB, 30 ms after the spike");
     }
 
     #[test]
