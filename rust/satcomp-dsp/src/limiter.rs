@@ -12,8 +12,10 @@
 //! * The audio is delayed by `latency()` samples whether or not the limiter is engaged (constant PDC); the detector
 //!   keeps running while it is off so switching it on is click-free (the engagement is a 10 ms linear fade).
 //!
-//! The ceiling is fixed at -0.2 dBTP: the interpolator is not an ideal reconstruction filter and the gain changes
-//! between samples, so the margin keeps the true peak of the output at or below 0 dBTP.
+//! The ceiling is -0.2 dBTP unless the owner sets it (`set_ceiling_db`; SatLim): the interpolator is not an ideal
+//! reconstruction filter and the gain changes between samples, so that margin keeps the true peak of the output at or
+//! below 0 dBTP. With the lookahead off (`set_lookahead(false)`, SatLim) the limiter has no delay and no interpolator: the
+//! gain follows the *sample* peak instantly (attack 0) and releases as usual, so inter-sample overs can pass.
 
 use crate::delay::StereoDelay;
 use std::collections::VecDeque;
@@ -115,6 +117,12 @@ pub struct Limiter {
     clipv: f64,
     tau0: f64,
     tau1: f64,
+    /// internal hard clip at the ceiling (on by default; SatLim does its own, oversampled)
+    clip_en: bool,
+    /// lookahead + true-peak detection (on by default); off = zero latency, sample-peak, instant attack
+    look: bool,
+    /// The input sample that `tick` just returned the limited version of (the delayed input), for a delta monitor.
+    pub last_in: [f64; 2],
     /// Smallest applied gain since the engine last reset it (linear, 1.0 = no reduction).
     pub gmin: f64,
 }
@@ -150,6 +158,9 @@ impl Limiter {
             clipv: 10f64.powf((CEILING_DB + tune("LIM_CLIP", CLIP_OVER_DB)) / 20.0),
             tau0: tune("LIM_TAU0", TAU_MIN),
             tau1: tune("LIM_TAU1", TAU_MAX),
+            clip_en: true,
+            look: true,
+            last_in: [0.0; 2],
             gmin: 1.0,
         };
         s.set_sample_rate(sr);
@@ -189,14 +200,58 @@ impl Limiter {
         self.gmin = 1.0;
     }
 
+    /// Ceiling in dB (the hard clip follows it). Cheap: call it whenever the parameter moves.
+    pub fn set_ceiling_db(&mut self, db: f64) {
+        self.ceil = 10f64.powf(db / 20.0);
+        self.clipv = 10f64.powf((db + tune("LIM_CLIP", CLIP_OVER_DB)) / 20.0);
+    }
+
+    /// Release: the slow end of the program-dependent time constant, ms (the fast end stays at 15 ms or below it).
+    pub fn set_release_ms(&mut self, ms: f64) {
+        self.tau1 = (ms * 0.001).max(0.001);
+        self.tau0 = self.tau1.min(TAU_MIN);
+    }
+
+    /// The internal hard clip at the ceiling.
+    pub fn set_clip(&mut self, on: bool) {
+        self.clip_en = on;
+    }
+
+    /// Lookahead on = true-peak brickwall with `latency()` delay; off = zero latency (see the module docs).
+    /// Changing it resets the gain state (the delay the host compensates for changes with it).
+    pub fn set_lookahead(&mut self, on: bool) {
+        if on == self.look {
+            return;
+        }
+        self.look = on;
+        self.hot = 0;
+        self.hist = [[0.0; 2 * TAPS]; 2];
+        self.need_prev = 1.0;
+        self.dq.clear();
+        self.ring.iter_mut().for_each(|v| *v = 1.0);
+        self.rpos = 0;
+        self.sum = self.l as f64;
+        self.g = 1.0;
+        self.avg = 0.0;
+        self.rc_n = 0;
+    }
+
+    pub fn lookahead(&self) -> bool {
+        self.look
+    }
+
     /// Jump the engagement fade to its end state (a fresh engine must limit from its first sample).
     pub fn snap_on(&mut self, on: bool) {
         self.on_s = if on { 1.0 } else { 0.0 };
     }
 
-    /// Samples the audio is delayed by (detector + lookahead), always.
+    /// Samples the audio is delayed by (detector + lookahead; 0 with the lookahead off), always.
     pub fn latency(&self) -> usize {
-        self.d + self.l
+        if self.look {
+            self.d + self.l
+        } else {
+            0
+        }
     }
 
     /// Current applied gain (1.0 = idle).
@@ -242,9 +297,14 @@ impl Limiter {
         self.delay.advance();
         self.delay.put(x);
         let l = self.l;
+        let cv = if self.clip_en { self.clipv } else { f64::INFINITY };
+
+        if !self.look {
+            return self.tick_instant(x, on, cv);
+        }
 
         // ---- target gain for the sample the detector is looking at
-        let xc = [x[0].clamp(-self.clipv, self.clipv), x[1].clamp(-self.clipv, self.clipv)];
+        let xc = [x[0].clamp(-cv, cv), x[1].clamp(-cv, cv)];
         let pk = self.detect(xc);
         let need = if pk > self.ceil { self.ceil / pk } else { 1.0 };
         let t = need.min(self.need_prev);
@@ -310,14 +370,52 @@ impl Limiter {
         let ge = 1.0 + (g - 1.0) * self.on_s;
         let y = self.delay.tap(self.d + l);
         // the reduction readout counts the clip too: gain the output sample lost against the unclipped one
+        self.last_in = y;
         let pk = y[0].abs().max(y[1].abs());
-        let clip_g = if pk > self.clipv { 1.0 + (self.clipv / pk - 1.0) * self.on_s } else { 1.0 };
+        let clip_g = if pk > cv { 1.0 + (cv / pk - 1.0) * self.on_s } else { 1.0 };
         if ge * clip_g < self.gmin {
             self.gmin = ge * clip_g;
         }
         // the hard clip is part of the engaged path (faded in with it)
-        let yc = [y[0].clamp(-self.clipv, self.clipv), y[1].clamp(-self.clipv, self.clipv)];
+        let yc = [y[0].clamp(-cv, cv), y[1].clamp(-cv, cv)];
         let yo = [y[0] + (yc[0] - y[0]) * self.on_s, y[1] + (yc[1] - y[1]) * self.on_s];
+        [yo[0] * ge, yo[1] * ge]
+    }
+
+    /// Lookahead off: no delay, gain from this sample's own (sample) peak, so the output never exceeds the ceiling at the
+    /// sample points; release as in the lookahead path.
+    #[inline]
+    fn tick_instant(&mut self, x: [f64; 2], on: bool, cv: f64) -> [f64; 2] {
+        self.last_in = x;
+        let xc = [x[0].clamp(-cv, cv), x[1].clamp(-cv, cv)];
+        let pk = xc[0].abs().max(xc[1].abs());
+        let need = if pk > self.ceil { self.ceil / pk } else { 1.0 };
+        self.avg += ((1.0 - need) - self.avg) * self.avg_c;
+        if self.rc_n == 0 {
+            let tau = self.tau0 + (self.tau1 - self.tau0) * (self.avg / 0.25).min(1.0);
+            self.rc = 1.0 - (-1.0 / (self.sr * tau)).exp();
+            self.rc_n = 16;
+        }
+        self.rc_n -= 1;
+        let rel = 1.0 - (1.0 - self.g) * (1.0 - self.rc);
+        let mut g = need.min(rel);
+        if g > 1.0 - 1e-7 {
+            g = 1.0;
+        }
+        self.g = g;
+        let target = if on { 1.0 } else { 0.0 };
+        if self.on_s < target {
+            self.on_s = (self.on_s + self.on_step).min(target);
+        } else if self.on_s > target {
+            self.on_s = (self.on_s - self.on_step).max(target);
+        }
+        let ge = 1.0 + (g - 1.0) * self.on_s;
+        let pk0 = x[0].abs().max(x[1].abs());
+        let clip_g = if pk0 > cv { 1.0 + (cv / pk0 - 1.0) * self.on_s } else { 1.0 };
+        if ge * clip_g < self.gmin {
+            self.gmin = ge * clip_g;
+        }
+        let yo = [x[0] + (xc[0] - x[0]) * self.on_s, x[1] + (xc[1] - x[1]) * self.on_s];
         [yo[0] * ge, yo[1] * ge]
     }
 }
@@ -542,5 +640,62 @@ mod tests {
             }
         }
         assert!((worst - 1.0).abs() < 0.01, "detected {worst}");
+    }
+
+    #[test]
+    fn ceiling_release_and_clip_are_settable_and_defaults_are_unchanged() {
+        let sr = 48000.0;
+        let x: Vec<f64> = (0..48000).map(|i| 3.0 * (2.0 * PI * 1000.0 * i as f64 / sr).sin()).collect();
+        let mut a = Limiter::new(sr);
+        let mut b = Limiter::new(sr);
+        b.set_ceiling_db(CEILING_DB);
+        b.set_release_ms(TAU_MAX * 1000.0);
+        b.set_clip(true);
+        b.set_lookahead(true);
+        let (ya, _) = run(&mut a, &x, &x, true);
+        let (yb, _) = run(&mut b, &x, &x, true);
+        assert_eq!(ya, yb);
+        let mut c = Limiter::new(sr);
+        c.set_ceiling_db(-6.0);
+        let (yc, _) = run(&mut c, &x, &x, true);
+        let pk = yc[24000..].iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        assert!(db(pk) > -6.3 && db(pk) < -5.9, "{} dB", db(pk));
+    }
+
+    #[test]
+    fn lookahead_off_has_no_latency_and_holds_the_sample_ceiling() {
+        let sr = 48000.0;
+        let mut lim = Limiter::new(sr);
+        lim.set_lookahead(false);
+        lim.snap_on(true);
+        assert_eq!(lim.latency(), 0);
+        let (l, r) = stress(sr);
+        let (yl, yr) = run(&mut lim, &l, &r, true);
+        let ceil = 10f64.powf(CEILING_DB / 20.0);
+        for y in [&yl, &yr] {
+            assert!(y.iter().all(|v| v.abs() <= ceil + 1e-12), "a sample went over the ceiling");
+        }
+        assert!(lim.gmin < 0.5);
+        // quiet material passes through bit-exactly, with no delay
+        let mut q = Limiter::new(sr);
+        q.set_lookahead(false);
+        q.snap_on(true);
+        let x: Vec<f64> = (0..5000).map(|i| 0.4 * (i as f64 * 0.03).sin()).collect();
+        let (y, _) = run(&mut q, &x, &x, true);
+        assert_eq!(y, x);
+    }
+
+    #[test]
+    fn internal_clip_off_leaves_a_spike_to_the_gain_stage() {
+        // without the clip the gain stage has to take the whole spike (it ducks); with it the clip takes it
+        let sr = 48000.0;
+        let x: Vec<f64> = (0..24000).map(|i| if (12000..12048).contains(&i) { 4.0 * (PI * (i - 12000) as f64 / 48.0).sin() } else { 0.1 }).collect();
+        let mut a = Limiter::new(sr);
+        a.set_clip(false);
+        run(&mut a, &x, &x, true);
+        let mut b = Limiter::new(sr);
+        run(&mut b, &x, &x, true);
+        assert!(a.gmin < 0.4, "{}", a.gmin);
+        assert!(b.gmin <= a.gmin + 1e-9 && b.gmin > 0.0);
     }
 }
