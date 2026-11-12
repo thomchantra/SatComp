@@ -80,6 +80,51 @@ fn phase_taps(r: usize) -> [[f64; TAPS]; 3] {
     c
 }
 
+/// True-peak meter: the limiter's own interpolator (4x at 48 kHz-class rates, 2x at 96 kHz-class, sample peak above),
+/// running every sample. Reads `TAPS / 2` samples late, which a meter does not mind.
+pub struct TruePeak {
+    r: usize,
+    coef: [[f64; TAPS]; 3],
+    hist: [[f64; 2 * TAPS]; 2],
+    pos: usize,
+}
+
+impl TruePeak {
+    pub fn new(sr: f64) -> Self {
+        let r = if sr <= 50_000.0 {
+            4
+        } else if sr <= 100_000.0 {
+            2
+        } else {
+            1
+        };
+        Self { r, coef: phase_taps(r), hist: [[0.0; 2 * TAPS]; 2], pos: 0 }
+    }
+
+    /// Peak (linear, both channels) of this sample and the inter-sample points around it.
+    pub fn tick(&mut self, x: [f64; 2]) -> f64 {
+        let p = self.pos;
+        for c in 0..2 {
+            self.hist[c][p] = x[c];
+            self.hist[c][p + TAPS] = x[c];
+        }
+        self.pos = (p + 1) % TAPS;
+        let mut pk = x[0].abs().max(x[1].abs());
+        if self.r == 1 {
+            return pk;
+        }
+        let q = self.pos;
+        for c in 0..2 {
+            let win = &self.hist[c][q..q + TAPS];
+            for ph in 0..self.r - 1 {
+                let acc: f64 = win.iter().zip(self.coef[ph].iter()).map(|(a, b)| a * b).sum();
+                pk = pk.max(acc.abs());
+            }
+        }
+        pk
+    }
+}
+
 pub struct Limiter {
     sr: f64,
     r: usize,

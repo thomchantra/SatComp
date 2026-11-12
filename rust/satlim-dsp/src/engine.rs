@@ -1,0 +1,411 @@
+//! SatLim engine: SAT (shared saturator, optionally oversampled) -> level into the ceiling (`ceiling - threshold`) ->
+//! CLIP (oversampled hard clip at the ceiling, driven up to +6 dB into it) -> true-peak brickwall limiter -> OUT GAIN.
+//!
+//! OUT GAIN is after the limiter on purpose: the ceiling is what the limiter holds, the output gain is the owner's to
+//! trim (a clipped -0.4 dBTP still has inter-sample peaks that a downstream converter may see). The reported latency is
+//! always the sum of the saturator oversampler, the clipper oversampler and the limiter lookahead (0 with L.AHD off).
+//! Stereo, f64 inside.
+
+use crate::params::LimParams;
+use satcomp_dsp::delay::StereoDelay;
+use satcomp_dsp::halfband::{self, Oversampler, Taps};
+use satcomp_dsp::level::{ms_step, one_pole, DB_AMP, LN10_20};
+use satcomp_dsp::{Limiter, SatParams, Saturator, ScopeRing, TruePeak};
+use std::sync::Arc;
+
+/// Delay ring length: larger than the longest latency (30 + 30 + 288 at 192 kHz).
+const RING: usize = 512;
+
+pub struct LimEngine {
+    sr: f64,
+    sr_prev: f64,
+    p: LimParams,
+    dirty: bool,
+    first_set: bool,
+    snap: bool,
+    /// Smooth Drive / Bias / Mix (set false for null tests).
+    pub smoothing: bool,
+    sat: Saturator,
+    taps: Taps,
+    ov: [Oversampler; 2],
+    lim: Limiter,
+    tp: TruePeak,
+    /// the signal entering the clipper, delayed to line up with the limiter output (for the delta and the scope)
+    pre: StereoDelay<RING>,
+    dry: StereoDelay<RING>,
+    thr_g: f64,
+    thr_t: f64,
+    og: f64,
+    og_t: f64,
+    byp_s: f64,
+    sm_c: f64,
+    byp_c: f64,
+    rms_c: f64,
+    ceil: f64,
+    clip_k: f64,
+    clip_on: bool,
+    os: i32,
+    /// monitor what the clipper + limiter removed (UI -> audio)
+    pub delta_on: bool,
+    pub scope: Arc<ScopeRing>,
+    sc_len: usize,
+    sc_n: usize,
+    sc_o: f64,
+    sc_p: f64,
+    // telemetry, audio -> UI. The shell takes the peaks with fetch_max and clears them.
+    /// output peak per channel (after OUT GAIN), linear
+    pub opk: [f64; 2],
+    /// output true peak (sample peak while L.AHD is off), linear
+    pub tpk: f64,
+    /// post-saturator (after SAT GAIN) peak, linear
+    pub sat_out: f64,
+    /// decaying peak of the saturator input for the plot's live dot
+    pub sat_vz: f64,
+    /// limiter gain reduction peak, dB positive
+    pub gr_pk: f64,
+    /// smoothed output mean-square (RMS readout)
+    pub fms: f64,
+    pub clip_f: bool,
+}
+
+impl LimEngine {
+    pub fn new(sr: f64) -> Self {
+        let mut e = Self {
+            sr,
+            sr_prev: 0.0,
+            p: LimParams::default(),
+            dirty: true,
+            first_set: true,
+            snap: true,
+            smoothing: true,
+            sat: Saturator::new(),
+            taps: Taps::new(),
+            ov: [Oversampler::default(), Oversampler::default()],
+            lim: Limiter::new(sr),
+            tp: TruePeak::new(sr),
+            pre: StereoDelay::new(),
+            dry: StereoDelay::new(),
+            thr_g: 1.0,
+            thr_t: 1.0,
+            og: 1.0,
+            og_t: 1.0,
+            byp_s: 0.0,
+            sm_c: 0.0,
+            byp_c: 0.0,
+            rms_c: 0.0,
+            ceil: 1.0,
+            clip_k: 1.0,
+            clip_on: false,
+            os: 0,
+            delta_on: false,
+            scope: Arc::new(ScopeRing::new()),
+            sc_len: 96,
+            sc_n: 0,
+            sc_o: 0.0,
+            sc_p: 0.0,
+            opk: [0.0; 2],
+            tpk: 0.0,
+            sat_out: 0.0,
+            sat_vz: 0.0,
+            gr_pk: 0.0,
+            fms: 1e-9,
+            clip_f: false,
+        };
+        e.derive();
+        e
+    }
+
+    pub fn sample_rate(&self) -> f64 {
+        self.sr
+    }
+
+    pub fn set_sample_rate(&mut self, sr: f64) {
+        self.sr = sr;
+        self.dirty = true;
+    }
+
+    pub fn set_params(&mut self, p: &LimParams) {
+        if self.first_set {
+            // a fresh engine starts at the host's settings instead of gliding there from defaults
+            self.first_set = false;
+            self.p = *p;
+            self.sat.set_out_db(p.sat_gain);
+            self.lim.snap_on(true);
+            self.snap = true;
+            let sm = std::mem::replace(&mut self.smoothing, false);
+            self.derive();
+            self.smoothing = sm;
+            return;
+        }
+        if *p != self.p {
+            if p.sat_gain != self.p.sat_gain {
+                self.sat.set_out_db(p.sat_gain);
+            }
+            self.p = *p;
+            self.derive(); // applied at once so latency() is valid before the first block
+        }
+    }
+
+    /// PDC latency to report: saturator oversampler + clipper oversampler + limiter lookahead.
+    pub fn latency(&self) -> u32 {
+        (self.sat.latency() + halfband::latency(self.os) + self.lim.latency()) as u32
+    }
+
+    fn derive(&mut self) {
+        let p = self.p;
+        let sr = self.sr;
+        self.dirty = false;
+        if sr != self.sr_prev {
+            self.sr_prev = sr;
+            self.lim.set_sample_rate(sr);
+            self.tp = TruePeak::new(sr);
+            self.sc_len = ((sr * ScopeRing::BUCKET_S).round() as usize).max(1);
+            self.sm_c = one_pole(sr, 0.02);
+            self.byp_c = one_pole(sr, 0.005);
+            self.rms_c = one_pole(sr, 0.3);
+        }
+        let sp: SatParams = p.sat();
+        self.sat.derive(&sp, sr, self.snap, self.smoothing);
+        self.os = p.os.clamp(0, 3);
+        self.ceil = 10f64.powf(p.ceiling / 20.0);
+        self.lim.set_ceiling_db(p.ceiling);
+        self.lim.set_release_ms(p.release);
+        self.lim.set_clip(false); // the clipper is this engine's own (oversampled)
+        self.lim.set_lookahead(p.lookahead);
+        self.clip_on = p.clip > 0.0;
+        self.clip_k = 10f64.powf(p.clip * 0.01 * 6.0 / 20.0);
+        self.thr_t = ((p.ceiling - p.threshold) * LN10_20).exp();
+        self.og_t = (p.out_gain * LN10_20).exp();
+        if self.snap {
+            self.thr_g = self.thr_t;
+            self.og = self.og_t;
+            self.byp_s = if p.bypass { 1.0 } else { 0.0 };
+            self.snap = false;
+        }
+    }
+
+    pub fn begin_block(&mut self, n: usize) {
+        if self.dirty || self.sr != self.sr_prev {
+            self.derive();
+        }
+        self.sat.begin_block();
+        let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
+        self.sat_vz = self.sat.blk.max(self.sat_vz * vz_d);
+        self.sat.blk = 0.0;
+    }
+
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let n = left.len().min(right.len());
+        self.begin_block(n);
+        for i in 0..n {
+            let (l, r) = self.tick(left[i] as f64, right[i] as f64);
+            left[i] = l as f32;
+            right[i] = r as f32;
+        }
+        let g = self.lim.gmin.max(1e-6);
+        self.gr_pk = self.gr_pk.max(-g.ln() * DB_AMP);
+        self.lim.gmin = 1.0;
+    }
+
+    #[inline]
+    pub fn tick(&mut self, in_l: f64, in_r: f64) -> (f64, f64) {
+        let inp = [in_l, in_r];
+        self.dry.advance();
+        self.dry.put(inp);
+        self.pre.advance();
+
+        // SAT, then the level that maps the threshold onto the ceiling
+        let s = self.sat.tick(inp, self.smoothing);
+        self.sat_out = self.sat_out.max(s[0].abs().max(s[1].abs()));
+        self.thr_g += (self.thr_t - self.thr_g) * self.sm_c;
+        let t = [s[0] * self.thr_g, s[1] * self.thr_g];
+        self.pre.put(t);
+
+        // CLIP: hard clip at the ceiling in the oversampled domain (always through the filters: constant latency)
+        let (k, c, on) = (self.clip_k, self.ceil, self.clip_on);
+        let mut cl = [0.0f64; 2];
+        for ch in 0..2 {
+            cl[ch] = self.ov[ch].process_fn(&self.taps, self.os, t[ch], |v| if on { (v * k).clamp(-c, c) } else { v });
+        }
+
+        // LIMITER
+        let lo = self.lim.tick(cl, true);
+        let lat_pre = halfband::latency(self.os) + self.lim.latency();
+        let pd = self.pre.tap(lat_pre);
+        self.og += (self.og_t - self.og) * self.sm_c;
+        let y = [lo[0] * self.og, lo[1] * self.og];
+
+        // monitors and bypass
+        let removed = [pd[0] - lo[0], pd[1] - lo[1]];
+        let proc = if self.delta_on { removed } else { y };
+        self.byp_s += ((if self.p.bypass { 1.0 } else { 0.0 }) - self.byp_s) * self.byp_c;
+        let dd = self.dry.tap(self.sat.latency() + lat_pre);
+        let out = if self.byp_s > 1e-9 { [proc[0] + (dd[0] - proc[0]) * self.byp_s, proc[1] + (dd[1] - proc[1]) * self.byp_s] } else { proc };
+
+        // telemetry
+        self.opk[0] = self.opk[0].max(out[0].abs());
+        self.opk[1] = self.opk[1].max(out[1].abs());
+        if out[0].abs() > 0.9999 || out[1].abs() > 0.9999 {
+            self.clip_f = true;
+        }
+        let pkv = if self.lim.lookahead() { self.tp.tick(out) } else { out[0].abs().max(out[1].abs()) };
+        self.tpk = self.tpk.max(pkv);
+        ms_step(&mut self.fms, out[0], out[1], self.rms_c);
+        let ao = out[0].abs().max(out[1].abs());
+        self.sc_o = self.sc_o.max(ao);
+        self.sc_p = self.sc_p.max((pd[0].abs().max(pd[1].abs())) * self.og).max(ao);
+        self.sc_n += 1;
+        if self.sc_n >= self.sc_len {
+            self.scope.push(self.sc_o as f32, self.sc_p as f32);
+            self.sc_o = 0.0;
+            self.sc_p = 0.0;
+            self.sc_n = 0;
+        }
+        (out[0], out[1])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::PI;
+
+    const SR: f64 = 48000.0;
+
+    fn noise(n: usize, seed: u64, amp: f64) -> Vec<f32> {
+        let mut s = seed;
+        (0..n)
+            .map(|_| {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0) * amp) as f32
+            })
+            .collect()
+    }
+
+    fn run(p: &LimParams, x: &[f32]) -> (Vec<f32>, LimEngine) {
+        let mut e = LimEngine::new(SR);
+        e.set_params(p);
+        let (mut l, mut r) = (x.to_vec(), x.to_vec());
+        for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            e.process(cl, cr);
+        }
+        (l, e)
+    }
+
+    fn db(x: f64) -> f64 {
+        20.0 * x.max(1e-12).log10()
+    }
+
+    #[test]
+    fn quiet_signal_is_an_exact_delayed_copy_at_x1() {
+        for look in [true, false] {
+            let p = LimParams { ceiling: 0.0, lookahead: look, ..LimParams::default() };
+            let x = noise(20000, 3, 0.4);
+            let (y, e) = run(&p, &x);
+            let lat = e.latency() as usize;
+            assert_eq!(lat, if look { 104 } else { 0 });
+            for i in lat..x.len() {
+                assert_eq!(y[i], x[i - lat], "look {look} sample {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn latency_adds_the_saturator_the_clipper_and_the_limiter() {
+        for (os, extra) in [(0, 0), (1, 48), (2, 56), (3, 60)] {
+            let mut e = LimEngine::new(SR);
+            e.set_params(&LimParams { os, ..LimParams::default() });
+            assert_eq!(e.latency() as usize, 104 + extra, "os {os}");
+            e.set_params(&LimParams { os, lookahead: false, ..LimParams::default() });
+            assert_eq!(e.latency() as usize, extra, "os {os}, no lookahead");
+        }
+    }
+
+    #[test]
+    fn bypass_is_the_input_at_the_reported_latency() {
+        let p = LimParams { os: 2, drive: 60.0, threshold: -12.0, clip: 80.0, bypass: true, ..LimParams::default() };
+        let x = noise(20000, 5, 0.5);
+        let (y, e) = run(&p, &x);
+        let lat = e.latency() as usize;
+        for i in lat + 100..x.len() {
+            assert!((y[i] - x[i - lat]).abs() < 1e-6, "sample {i}");
+        }
+    }
+
+    #[test]
+    fn the_output_holds_the_ceiling_before_out_gain() {
+        // hot programme, threshold -14 lifts it 13 dB into a -1 dB ceiling
+        for (os, look, clip) in [(0, true, 0.0), (2, true, 60.0), (0, false, 0.0), (3, false, 100.0)] {
+            let p = LimParams { ceiling: -1.0, threshold: -14.0, os, lookahead: look, clip, release: 40.0, ..LimParams::default() };
+            let x = noise(48000, 11, 0.9);
+            let (y, e) = run(&p, &x);
+            let pk = y[4000..].iter().fold(0.0f32, |m, v| m.max(v.abs())) as f64;
+            // sample peaks: exact with the lookahead off; the true-peak limiter keeps the interpolated peaks near the ceiling
+            // and the filtered clipper can ring a little over it
+            assert!(db(pk) < -1.0 + 0.3, "os {os} look {look} clip {clip}: peak {:.2} dB", db(pk));
+            assert!(db(e.tpk) < -1.0 + 0.6, "os {os} look {look} clip {clip}: true peak {:.2} dB", db(e.tpk));
+            assert!(db(pk) > -2.5, "it limits close to the ceiling, not far below it: {:.2}", db(pk));
+        }
+    }
+
+    #[test]
+    fn out_gain_is_after_the_ceiling() {
+        let p = LimParams { ceiling: -1.0, threshold: -10.0, out_gain: -3.0, ..LimParams::default() };
+        let x: Vec<f32> = (0..48000).map(|i| (0.9 * (2.0 * PI * 1000.0 * i as f64 / SR).sin()) as f32).collect();
+        let (y, _) = run(&p, &x);
+        let pk = y[4000..].iter().fold(0.0f32, |m, v| m.max(v.abs())) as f64;
+        assert!(db(pk) < -4.0 + 0.2 && db(pk) > -4.4, "{:.2}", db(pk));
+    }
+
+    #[test]
+    fn clip_takes_the_spikes_so_the_limiter_ducks_less() {
+        let mut x = vec![0.0f32; 48000];
+        for (i, v) in x.iter_mut().enumerate() {
+            let t = i as f64 / SR;
+            *v = (0.3 * (2.0 * PI * 200.0 * t).sin()) as f32;
+            if i % 4800 == 2400 {
+                *v += 3.0;
+            }
+        }
+        let base = LimParams { ceiling: -1.0, lookahead: true, ..LimParams::default() };
+        let (_, off) = run(&LimParams { clip: 0.0, ..base }, &x);
+        let (_, on) = run(&LimParams { clip: 100.0, ..base }, &x);
+        assert!(off.gr_pk > 6.0, "limiter alone ducks on the spikes: {}", off.gr_pk);
+        assert!(on.gr_pk < off.gr_pk * 0.6, "clip on {} vs off {}", on.gr_pk, off.gr_pk);
+    }
+
+    #[test]
+    fn delta_is_what_the_clipper_and_limiter_removed() {
+        let x = noise(24000, 17, 0.9);
+        let p = LimParams { ceiling: -1.0, threshold: -12.0, clip: 50.0, ..LimParams::default() };
+        let mut e = LimEngine::new(SR);
+        e.set_params(&p);
+        e.delta_on = true;
+        let (mut l, mut r) = (x.clone(), x.clone());
+        for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            e.process(cl, cr);
+        }
+        let rms = |v: &[f32]| (v[4000..].iter().map(|a| (*a as f64).powi(2)).sum::<f64>() / (v.len() - 4000) as f64).sqrt();
+        assert!(rms(&l) > 0.05, "heavy limiting leaves a real delta: {}", rms(&l));
+        // nothing to remove on a quiet signal
+        let q = noise(24000, 19, 0.05);
+        let mut e = LimEngine::new(SR);
+        e.set_params(&LimParams { ceiling: 0.0, ..LimParams::default() });
+        e.delta_on = true;
+        let (mut l, mut r) = (q.clone(), q.clone());
+        for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            e.process(cl, cr);
+        }
+        assert!(rms(&l) < 1e-9, "{}", rms(&l));
+    }
+
+    #[test]
+    fn telemetry_reads_the_stages() {
+        let p = LimParams { ceiling: -1.0, threshold: -10.0, drive: 30.0, ..LimParams::default() };
+        let x = noise(24000, 23, 0.8);
+        let (_, e) = run(&p, &x);
+        assert!(e.gr_pk > 3.0, "{}", e.gr_pk);
+        assert!(e.sat_out > 0.2 && e.opk[0] > 0.5 && e.tpk >= e.opk[0] as f64 - 1e-9, "{} {:?} {}", e.sat_out, e.opk, e.tpk);
+        assert!(e.scope.head() > 100);
+    }
+}

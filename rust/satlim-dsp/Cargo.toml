@@ -1,0 +1,8 @@
+[package]
+name = "satlim-dsp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+satcomp-dsp = { path = "../satcomp-dsp" }

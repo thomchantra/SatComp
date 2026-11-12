@@ -2317,6 +2317,15 @@ version = "0.5.2"
 dependencies = [
  "nih_plug",
  "nih_plug_egui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "satlim-dsp"
+version = "0.1.0"
+dependencies = [
+ "satcomp-dsp",
 ]
 
 [[package]]
