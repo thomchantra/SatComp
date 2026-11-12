@@ -162,6 +162,9 @@ pub struct SatXCompParams {
     /// ASYM of the hi band, one value (0..100 %) per waveshaper; saved with the project and presets (absent = all 100 %).
     #[persist = "asym-hi"]
     pub asym_hi: Arc<parking_lot::Mutex<Vec<f32>>>,
+    /// Packed waveform-scope view settings (see gui/ui/scope.rs); UI-only, saved with the project.
+    #[persist = "scope-v3"]
+    pub scope: Arc<AtomicI32>,
     #[persist = "match-trim"]
     pub match_trim: Arc<AtomicF32>,
     #[id = "x1"]
@@ -387,7 +390,7 @@ pub struct SatXCompParams {
 impl Default for SatXCompParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(850, 513),
+            editor_state: EguiState::from_size(830, 500),
             palette_v2: Arc::new(AtomicI32::new(0)),
             light: Arc::new(AtomicBool::new(false)),
             font: Arc::new(AtomicI32::new(0)),
@@ -400,6 +403,7 @@ impl Default for SatXCompParams {
             asym_lo: Arc::new(parking_lot::Mutex::new(Vec::new())),
             asym_mid: Arc::new(parking_lot::Mutex::new(Vec::new())),
             asym_hi: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            scope: Arc::new(AtomicI32::new((5 << 4) | (2 << 8))),
             match_trim: Arc::new(AtomicF32::new(0.0)),
             x1: FloatParam::new("X-Over 1", 150.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             x2: FloatParam::new("X-Over 2", 2500.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),

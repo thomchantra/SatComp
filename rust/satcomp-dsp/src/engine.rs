@@ -64,7 +64,7 @@ impl ScopeRing {
             w: AtomicUsize::new(0),
         }
     }
-    fn push(&self, o: f32, p: f32) {
+    pub fn push(&self, o: f32, p: f32) {
         let w = self.w.load(Ordering::Relaxed);
         self.out[w & (Self::LEN - 1)].store(o.to_bits(), Ordering::Relaxed);
         self.pre[w & (Self::LEN - 1)].store(p.to_bits(), Ordering::Relaxed);

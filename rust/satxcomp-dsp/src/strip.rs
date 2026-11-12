@@ -13,6 +13,8 @@ pub struct StripOut {
     pub removed: [f64; 2],
     /// the saturated signal before the compressor (for the "dry" spectrum)
     pub pre: [f64; 2],
+    /// gain reduction of the louder channel, dB (positive)
+    pub g: f64,
 }
 
 pub struct Strip {
@@ -141,6 +143,6 @@ impl Strip {
             pre[c] = dd[c] + (cd[c] - dd[c]) * self.on_s;
         }
         self.gr_blk = self.gr_blk.max(co.g[0].max(co.g[1]));
-        StripOut { y, removed, pre }
+        StripOut { y, removed, pre, g: co.g[0].max(co.g[1]) }
     }
 }

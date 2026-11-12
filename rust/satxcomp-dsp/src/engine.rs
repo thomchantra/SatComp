@@ -103,6 +103,10 @@ pub struct XEngine {
     pub tap_dry: Arc<TapRing>,
     pub tap_on: bool,
     pub scope: Arc<ScopeRing>,
+    sc_o: f64,
+    sc_p: f64,
+    sc_n: u32,
+    sc_len: u32,
 
     pub opk: [f64; 2],
     pub clip_f: bool,
@@ -178,6 +182,10 @@ impl XEngine {
             tap_dry: Arc::new(TapRing::new()),
             tap_on: false,
             scope: Arc::new(ScopeRing::new()),
+            sc_o: 0.0,
+            sc_p: 0.0,
+            sc_n: 0,
+            sc_len: 96,
             opk: [0.0; 2],
             clip_f: false,
             gr_blk: [0.0; 3],
@@ -244,6 +252,7 @@ impl XEngine {
         self.sr_prev = sr;
         self.dirty = false;
         self.lim.set_sample_rate(sr);
+        self.sc_len = ((sr * ScopeRing::BUCKET_S).round() as u32).max(1);
         let snap = self.snap;
         self.la_s = ((p.lookahead_ms * 0.001 * sr + 0.5).floor().max(0.0) as usize).min(1900);
         self.xo.set(p.x1, p.x2, p.x1_slope.clamp(0, 3) as usize, p.x2_slope.clamp(0, 3) as usize, sr, snap);
@@ -381,10 +390,14 @@ impl XEngine {
         let kb = if sc_act { Some(self.key_xo.tick(scv)) } else { None };
         let mut sum = [0.0f64; 2];
         let mut pre = [0.0f64; 2];
+        let mut gmax = 0.0f64;
         let gdelta = if self.delta_on { 1.0 } else { 0.0 };
         self.gd_s += (gdelta - self.gd_s) * self.byp_c;
         for b in 0..3 {
             let o = self.strips[b].tick(bands[b], self.smoothing, kb.map(|k| k[b]));
+            if self.p.bands[b].on {
+                gmax = gmax.max(o.g);
+            }
             let bp = &self.p.bands[b];
             let dtarget: f64 = if bp.delta { 1.0 } else { 0.0 };
             let d = self.d_s[b] + (dtarget.max(gdelta) - self.d_s[b]) * self.byp_c;
@@ -440,6 +453,17 @@ impl XEngine {
         self.opk[1] = self.opk[1].max(out[1].abs());
         if out[0].abs() > 0.9999 || out[1].abs() > 0.9999 {
             self.clip_f = true;
+        }
+        // scope bucket: output peak, and the same with the loudest band's gain reduction added back
+        let ao = out[0].abs().max(out[1].abs());
+        self.sc_o = self.sc_o.max(ao);
+        self.sc_p = self.sc_p.max(ao * (gmax * LN10_20).exp());
+        self.sc_n += 1;
+        if self.sc_n >= self.sc_len {
+            self.scope.push(self.sc_o as f32, self.sc_p as f32);
+            self.sc_o = 0.0;
+            self.sc_p = 0.0;
+            self.sc_n = 0;
         }
         self.fms += ((out[0] * out[0] + out[1] * out[1]) * 0.5 + DENORM - self.fms) * self.fms_c;
         (out[0], out[1])
@@ -615,6 +639,23 @@ mod tests {
         e.set_params(&p);
         let y = run(&mut e, &t);
         assert!(y[24000..].iter().fold(0.0f64, |m, v| m.max(v.abs())) > 2.0, "off must not limit");
+    }
+
+    #[test]
+    fn scope_buckets_show_output_and_the_reduction_added_back() {
+        let mut p = neutral();
+        for b in p.bands.iter_mut() {
+            b.thresh = -20.0;
+            b.ratio = 8.0;
+        }
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        let t: Vec<f64> = (0..48000).map(|i| 0.8 * (2.0 * PI * 200.0 * i as f64 / SR).sin()).collect();
+        run(&mut e, &t);
+        let n = e.scope.head();
+        assert!((n as f64 - 48000.0 / (SR * ScopeRing::BUCKET_S)).abs() < 3.0, "buckets {n}");
+        let (o, pre) = e.scope.get(n - 20);
+        assert!(o > 0.05 && pre > o * 1.5, "out {o}, with reduction {pre}");
     }
 
     #[test]

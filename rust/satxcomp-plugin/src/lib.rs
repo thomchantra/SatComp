@@ -7,7 +7,7 @@ mod presets;
 use nih_plug::prelude::*;
 use params::SatXCompParams;
 use satcomp_dsp::shapers::Curve;
-use satcomp_dsp::TapRing;
+use satcomp_dsp::{ScopeRing, TapRing};
 use satxcomp_dsp::XEngine;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -18,6 +18,8 @@ use std::time::Instant;
 pub struct Shared {
     pub tap_out: Arc<TapRing>,
     pub tap_dry: Arc<TapRing>,
+    /// per 2 ms bucket: output peak and the same with the gain reduction added back (waveform scope)
+    pub scope: Arc<ScopeRing>,
     pub epoch: Instant,
     pub sample_rate: AtomicF32,
     // audio -> UI. Peaks accumulate with fetch_max and are consumed with swap(0).
@@ -53,6 +55,7 @@ impl Shared {
         Self {
             tap_out: Arc::new(TapRing::new()),
             tap_dry: Arc::new(TapRing::new()),
+            scope: Arc::new(ScopeRing::new()),
             epoch: Instant::now(),
             sample_rate: AtomicF32::new(48000.0),
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
@@ -99,6 +102,7 @@ impl SatXComp {
         let mut e = XEngine::new(sr);
         e.tap_out = self.shared.tap_out.clone();
         e.tap_dry = self.shared.tap_dry.clone();
+        e.scope = self.shared.scope.clone();
         e.match_trim = self.params.match_trim.load(Ordering::Relaxed) as f64;
         e
     }
@@ -110,6 +114,7 @@ impl Default for SatXComp {
         let mut engine = XEngine::new(48000.0);
         engine.tap_out = shared.tap_out.clone();
         engine.tap_dry = shared.tap_dry.clone();
+        engine.scope = shared.scope.clone();
         Self { params: Arc::new(SatXCompParams::default()), shared, engine, last_latency: u32::MAX, last_curves: [Curve::linear(); 3], last_asym: [[100.0; satxcomp_dsp::params::SHAPER_COUNT]; 3] }
     }
 }

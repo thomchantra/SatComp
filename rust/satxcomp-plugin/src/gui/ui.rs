@@ -66,10 +66,10 @@ const SC_ROW_H: f32 = 17.0;
 /// viewport (spectrum / crossover / EQ curve)
 const VX: f32 = 10.0;
 const VY: f32 = 34.0;
-const VW: f32 = 530.0;
-const VH: f32 = 168.0;
+const VW: f32 = 514.0;
+const VH: f32 = 158.0;
 /// right-hand column (levels, crossover sliders, output module)
-const RX: f32 = 550.0;
+const RX: f32 = 534.0;
 const RW: f32 = 120.0;
 /// row of band tabs / EQ band toggles under the viewport
 const BAND_Y: f32 = VY + VH + 6.0;
@@ -85,7 +85,7 @@ const FFT_SOLID_FILL: bool = false;
 const EQ_W: f32 = 80.0;
 const EQ_P: f32 = 86.0;
 const EQ_PW: f32 = VW - 5.0 * EQ_P;
-/// window scale steps (x the 680 x 410 base)
+/// window scale steps (x the 664 x 400 base)
 const SIZES: [f32; 6] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5];
 /// `kit.act` values: 1..VIEW_ACT are parameter slots (vertical drag, slots run to 119); VIEW_ACT and up are viewport drags
 const VIEW_ACT: i32 = 1000;
@@ -102,6 +102,9 @@ const ACT_CURVE: i32 = VIEW_ACT + 20;
 const ACT_THR: i32 = VIEW_ACT + 30;
 /// ASYM slider drag (one slider, follows the selected band)
 const ACT_ASYM: i32 = VIEW_ACT + 40;
+/// waveform scope: view drag, then the WIN and CEIL sliders (ACT_SCOPE + 1 / + 2)
+const ACT_SCOPE: i32 = VIEW_ACT + 50;
+mod scope;
 const MENU_ROWS: usize = 18;
 const MENU_ROW_H: f32 = 14.0;
 
@@ -181,6 +184,9 @@ pub struct State {
     eq_sel: usize,
     /// custom-curve draw view of the selected band (pencil), and the point being dragged
     curve_edit: bool,
+    /// waveform scope settings, packed (see scope.rs); view-drag anchor (mx, my, window step, ceiling step)
+    scope_cfg: i32,
+    scope_drag: (f32, f32, usize, usize),
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
     asym_drag: (f32, f32),
     edit_seen: bool,
@@ -316,6 +322,8 @@ impl State {
             eq_page: false,
             eq_sel: 0,
             curve_edit: false,
+            scope_cfg: params.scope.load(Ordering::Relaxed),
+            scope_drag: (0.0, 0.0, 0, 0),
             asym_drag: (0.0, 0.0),
             edit_seen: false,
             cpt: 0,
@@ -481,7 +489,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
-const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &["First release: three bands with 12 to 96 dB crossovers, a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.", "Colour schemes with light mode, custom themes and fonts under About > Appearance.", "ASYM next to DRIVE keeps lopsided waveshaper curves from dragging DC and sub-bass pulses into the signal. A true-peak output limiter (LIM, on by default) catches rogue peaks; its reduction shows under PK / RMS."])];
+const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &["First release: three bands with 12 to 96 dB crossovers, a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.", "Colour schemes with light mode, custom themes and fonts under About > Appearance.", "ASYM next to DRIVE keeps lopsided waveshaper curves from dragging DC and sub-bass pulses into the signal. A true-peak output limiter (LIM, on by default) catches rogue peaks; its reduction shows in the LIM readout. The icon in the viewport corner opens a waveform scope (transient meter): half or full wave, with the gain reduction stacked in the accent colour; drag the view to change the window and ceiling."])];
 
 impl<'a> AppearanceUi<'a> for Gui<'a> {
     fn app(&mut self) -> &mut AppState {
@@ -931,27 +939,27 @@ impl<'a> Gui<'a> {
         // name -> dropdown
         let name = self.preset_name();
         let shown = if name.is_empty() || name == "INIT" { "-- INIT --".to_string() } else { name };
-        let hv = self.hit(178.0, y, 138.0, h);
+        let hv = self.hit(178.0, y, 122.0, h);
         if hv && self.kit.press && self.kit.act == 0 {
             self.open_preset_menu(178.0, y + h);
             self.kit.press = false;
         }
         self.setc(false);
-        self.cv.boxr(178.0, y, 138.0, h);
+        self.cv.boxr(178.0, y, 122.0, h);
         self.cv.set_font(2);
         let modified = self.is_modified();
         self.shown_modified = modified;
         let mut t = shown;
-        while self.cv.text_w(&t) > if modified { 120.0 } else { 132.0 } && t.chars().count() > 3 {
+        while self.cv.text_w(&t) > if modified { 104.0 } else { 116.0 } && t.chars().count() > 3 {
             t.pop();
         }
         if modified {
             t = format!("*{t}*");
         }
-        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 138.0, &t);
+        self.cv.textc(178.0, y + ((h - 8.0) * 0.5).floor(), 122.0, &t);
         // prev / next
         for (i, dir) in [(0, -1), (1, 1)] {
-            let x = 316.0 + i as f32 * 25.0;
+            let x = 300.0 + i as f32 * 25.0;
             if self.btn(x, y, 25.0, h, "", 0) {
                 self.step_preset(dir);
             }
@@ -965,8 +973,8 @@ impl<'a> Gui<'a> {
         }
         // window scale
         let label = format!("{:.0}%", self.cur_scale() * 100.0);
-        if self.btn(372.0, y, 42.0, h, &label, 0) {
-            self.open_size_menu(372.0, y + h);
+        if self.btn(356.0, y, 42.0, h, &label, 0) {
+            self.open_size_menu(356.0, y + h);
         }
     }
 
@@ -1137,6 +1145,13 @@ impl<'a> Gui<'a> {
         let hp = y + 1.0 + ((h - 3.0) * (self.gr_hold[b] / rg).min(1.0)).floor();
         self.cv.fill(x + 1.0, hp, w - 2.0, 1.0);
         self.cv.set_font(1);
+        // compressor GR as a number in a window at the top of the bar (positive, like the bar; slow refresh)
+        self.cv.setbg();
+        self.cv.fill(x + 1.0, y + 1.0, w - 2.0, 11.0);
+        self.setc(false);
+        self.cv.fill(x + 1.0, y + 12.0, w - 2.0, 1.0);
+        let gs = format!("{:.1}", self.gr_txt[b]);
+        self.cv.textc(x, y + 3.0, w, &gs);
         let mj = if rg == 3.0 { 1.0 } else if rg == 6.0 { 2.0 } else if rg == 12.0 { 3.0 } else { 6.0 };
         let stp = if rg <= 6.0 { 0.5 } else { 1.0 };
         for j in 1..=((rg / stp) as i32) {
@@ -2356,18 +2371,19 @@ impl<'a> Gui<'a> {
             self.setc(false);
             self.cv.boxr(x, y0, EQ_W, CELL_H);
             for t in 0..6usize {
-                let (gx, gy) = (x + 1.0 + (t % 3) as f32 * EQ_W / 3.0, y0 + 1.0 + (t / 3) as f32 * 22.0);
+                let gp = ((CELL_H - 2.0) * 0.5).floor();
+                let (gx, gy) = (x + 1.0 + (t % 3) as f32 * EQ_W / 3.0, y0 + 1.0 + (t / 3) as f32 * gp);
                 let cur = t as i32 == ty;
-                if self.hit(gx, gy, EQ_W / 3.0 - 1.0, 21.0) && self.kit.press && self.kit.act == 0 {
+                if self.hit(gx, gy, EQ_W / 3.0 - 1.0, gp - 1.0) && self.kit.press && self.kit.act == 0 {
                     self.click_set(o + 1, t as f32);
                     self.kit.press = false;
                 }
                 self.setc(false);
                 if cur {
-                    self.cv.fill(gx, gy, EQ_W / 3.0 - 1.0, 21.0);
+                    self.cv.fill(gx, gy, EQ_W / 3.0 - 1.0, gp - 1.0);
                     self.cv.setbg();
                 }
-                self.eq_glyph(EQ_KINDS[b][t], gx + EQ_W / 6.0, gy + 10.5);
+                self.eq_glyph(EQ_KINDS[b][t], gx + EQ_W / 6.0, gy + (gp - 1.0) * 0.5);
                 self.setc(false);
             }
             self.cell(o + 3, x, y0 + CELL_P, EQ_W, CELL_H, "Q");
@@ -2468,7 +2484,7 @@ impl<'a> Gui<'a> {
         // sidechain key: white = on and the host gave a bus, red = on but no bus
         let sc_on = self.sget(SC_ON) > 0.5;
         let sc_lit = if !sc_on { 0 } else if sh.sc_bus.load(Ordering::Relaxed) { 1 } else { 2 };
-        if self.btn(418.0, 8.0, 76.0, 16.0, "SIDECHAIN", sc_lit) {
+        if self.btn(402.0, 8.0, 76.0, 16.0, "SIDECHAIN", sc_lit) {
             self.click_set(SC_ON, if sc_on { 0.0 } else { 1.0 });
         }
         if !sc_on && sh.sc_solo.load(Ordering::Relaxed) {
@@ -2478,11 +2494,11 @@ impl<'a> Gui<'a> {
             // EQ page toggle; the square in it bypasses the whole EQ module (X = bypassed, like SatComp)
             let eq = self.env.dsp.eq;
             let eq_any = eq.bands.iter().any(|b| b.on) || eq.tilt != 0.0 || eq.gain != 0.0;
-            self.sq_tog(EQ_BYPASS, 502.0, 12.0, 8.0);
-            if self.btn(494.0, 8.0, 46.0, 16.0, "", self.eq_page as u8) {
+            self.sq_tog(EQ_BYPASS, 486.0, 12.0, 8.0);
+            if self.btn(478.0, 8.0, 46.0, 16.0, "", self.eq_page as u8) {
                 self.eq_page = !self.eq_page;
             }
-            self.sqind(502.0, 12.0, 8.0, eq_any, self.eq_page, eq_byp);
+            self.sqind(486.0, 12.0, 8.0, eq_any, self.eq_page, eq_byp);
             // label drawn by hand so it keeps a clear gap from the square
             if self.eq_page {
                 self.cv.setbg();
@@ -2490,7 +2506,7 @@ impl<'a> Gui<'a> {
                 self.setc(false);
             }
             self.cv.set_font(1);
-            self.cv.text(517.0, 12.0, "EQ");
+            self.cv.text(501.0, 12.0, "EQ");
             self.setc(false);
         }
         // LIM switch + output peak meter
@@ -2517,33 +2533,43 @@ impl<'a> Gui<'a> {
         } else if self.eq_page {
             self.draw_eq(VX, VY, VW, VH);
         } else {
-            // the sidechain controls take the bottom of the viewport while the key is on
-            let vh = if sc_on { VH - SC_ROW_H } else { VH };
-            self.draw_spectrum(VX, VY, VW, vh);
-            self.draw_crossover(VX, VY, VW, vh);
+            // the sidechain controls and the scope settings take the bottom of the viewport while they are on
+            let scope_on = self.s.scope_on();
+            let (sc_h, sp_h) = (if sc_on { SC_ROW_H } else { 0.0 }, if scope_on { SC_ROW_H } else { 0.0 });
+            let vh = VH - sc_h - sp_h;
+            self.scope_icon(false);
+            if self.s.scope_on() {
+                self.draw_scope(VX, VY, VW, vh);
+            } else {
+                self.draw_spectrum(VX, VY, VW, vh);
+                self.draw_crossover(VX, VY, VW, vh);
+            }
+            self.scope_icon(true);
+            self.set_dk(if byp { 0.5 } else { 1.0 });
             if sc_on {
-                self.set_dk(if byp { 0.5 } else { 1.0 });
                 self.sc_row(VX, VY + vh);
+            }
+            if scope_on {
+                self.scope_row(VX, VY + vh + sc_h);
             }
         }
         self.set_dk(1.0);
         self.cv.set_font(1);
         self.setc(false);
-        let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
-        self.setc(self.rd_pk > 0.9999);
-        self.cv.text(RX, VY + 22.0, "PK");
-        self.cv.textr(RX, VY + 22.0, RW, &s1);
-        self.setc(false);
-        let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
-        self.cv.text(RX, VY + 34.0, "RMS");
-        self.cv.textr(RX, VY + 34.0, RW, &s1);
-        // limiter reduction: accent once it has engaged
+        // limiter reduction first (same order as SatComp): accent once it has engaged
         let lim_on = self.sget(LIM_ON) > 0.5;
         self.setc(lim_on && self.lim_txt > 0.05);
-        self.cv.text(RX, VY + 46.0, "LIM");
+        self.cv.text(RX, VY + 22.0, "LIM");
         let s1 = if lim_on { format!("{:04.1}dB", self.lim_txt) } else { "-----dB".to_string() };
-        self.cv.textr(RX, VY + 46.0, RW, &s1);
+        self.cv.textr(RX, VY + 22.0, RW, &s1);
+        let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
+        self.setc(self.rd_pk > 0.9999);
+        self.cv.text(RX, VY + 34.0, "PK");
+        self.cv.textr(RX, VY + 34.0, RW, &s1);
         self.setc(false);
+        let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
+        self.cv.text(RX, VY + 46.0, "RMS");
+        self.cv.textr(RX, VY + 46.0, RW, &s1);
         // parameter group, evenly spaced and aligned to the viewport's bottom edge: crossover 1, crossover 2, oversampling
         let bottom = VY + VH;
         let os_y = bottom - 16.0;

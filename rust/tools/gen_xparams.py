@@ -98,12 +98,13 @@ for bid, _ in BANDS:
     o.append(f'    /// User-drawn waveshaper curve of the {bid} band (shaper 14); saved with the project and presets.\n    #[persist = "custom-curve-{bid}"]\n    pub curve_{bid}: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,')
 for bid, _ in BANDS:
     o.append(f'    /// ASYM of the {bid} band, one value (0..100 %) per waveshaper; saved with the project and presets (absent = all 100 %).\n    #[persist = "asym-{bid}"]\n    pub asym_{bid}: Arc<parking_lot::Mutex<Vec<f32>>>,')
+o.append('    /// Packed waveform-scope view settings (see gui/ui/scope.rs); UI-only, saved with the project.\n    #[persist = "scope-v3"]\n    pub scope: Arc<AtomicI32>,')
 o.append('    #[persist = "match-trim"]\n    pub match_trim: Arc<AtomicF32>,')
 for n, i, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{i}"]\n    pub {i}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
 o.append("}\n")
 o.append("impl Default for SatXCompParams {\n    fn default() -> Self {\n        Self {")
-o.append("            editor_state: EguiState::from_size(850, 513),")
+o.append("            editor_state: EguiState::from_size(830, 500),")
 o.append("            palette_v2: Arc::new(AtomicI32::new(0)),")
 o.append("            light: Arc::new(AtomicBool::new(false)),")
 o.append("            font: Arc::new(AtomicI32::new(0)),")
@@ -114,6 +115,7 @@ for bid, _ in BANDS:
     o.append(f"            curve_{bid}: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),")
 for bid, _ in BANDS:
     o.append(f"            asym_{bid}: Arc::new(parking_lot::Mutex::new(Vec::new())),")
+o.append("            scope: Arc::new(AtomicI32::new((5 << 4) | (2 << 8))),")
 o.append("            match_trim: Arc::new(AtomicF32::new(0.0)),")
 for n, i, name, k, mn, mx, df, st, u in P:
     if k == "int":
