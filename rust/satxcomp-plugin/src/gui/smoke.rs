@@ -511,3 +511,34 @@ fn four_band_tabs_and_the_third_crossover_line() {
     let last: f32 = new.last().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
     assert!(last < (3500.0 - 200.0) / 19800.0, "dragging left must lower X-Over 3: {new:?}");
 }
+
+/// Draw view: the corner pencil opens it with the symmetry tool (odd curve: the left half mirrors the right), the pencil tool
+/// draws free, the symmetry tool folds a lopsided curve back onto its odd part, the cross closes the view.
+#[test]
+fn draw_view_has_a_symmetry_tool_and_a_free_tool() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    let odd = |r: &Rig| {
+        let c = r.params.curve_snapshot(0);
+        (0..=10).map(|i| (c.eval(i as f64 * 0.1) + c.eval(-(i as f64) * 0.1)).abs()).fold(0.0, f64::max)
+    };
+    r.click(128.0, 272.0); // corner pencil: opens the draw view (plot at x 10, y 264, 126 square)
+    assert_eq!(r.params.curve_snapshot(0).n, 2);
+    r.click(99.0, 288.0); // a point at about (0.5, 0.8) on the right half
+    let c = r.params.curve_snapshot(0);
+    assert_eq!(c.n, 4, "a mirrored pair must appear: {:?}", c.pts());
+    assert!(odd(&r) < 1e-6, "symmetry tool keeps the curve odd: {}", odd(&r));
+    r.click(114.0, 272.0); // pencil tool: free draw
+    r.click(59.0, 331.0); // a lone point on the left half, at about (-0.25, -0.1)
+    let n_free = r.params.curve_snapshot(0).n;
+    assert_eq!(n_free, 5, "free draw adds a single point");
+    assert!(odd(&r) > 0.02, "the curve is lopsided now: {}", odd(&r));
+    r.click(100.0, 272.0); // symmetry tool: folds onto the odd part
+    assert!(odd(&r) < 1e-6, "folded back onto its odd part: {}", odd(&r));
+    let n_fold = r.params.curve_snapshot(0).n;
+    r.click(128.0, 272.0); // cross: closes the view
+    r.click(99.0, 300.0);
+    assert_eq!(r.params.curve_snapshot(0).n, n_fold, "a closed view must not edit the curve");
+}
