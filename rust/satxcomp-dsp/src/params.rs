@@ -135,6 +135,8 @@ pub struct XParams {
     pub out_gain: f64,
     pub gain_match: bool,
     pub bypass: bool,
+    /// true-peak output limiter (-0.2 dBTP) after OUT GAIN; its lookahead latency is always reported
+    pub lim_on: bool,
 }
 
 impl Default for XParams {
@@ -157,6 +159,7 @@ impl Default for XParams {
             out_gain: 0.0,
             gain_match: false,
             bypass: false,
+            lim_on: true,
         }
     }
 }

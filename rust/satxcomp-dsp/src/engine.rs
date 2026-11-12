@@ -9,7 +9,8 @@ use satcomp_dsp::biquad::eq_coef;
 use satcomp_dsp::delay::StereoDelay;
 use satcomp_dsp::eq::{EqBank, EqSection};
 use satcomp_dsp::keyinput::KeyInput;
-use satcomp_dsp::level::{ms_step, one_pole, Matcher, DB_POW, LN10_20};
+use satcomp_dsp::level::{ms_step, one_pole, Matcher, DB_AMP, DB_POW, LN10_20};
+use satcomp_dsp::Limiter;
 use satcomp_dsp::{ScopeRing, TapRing, DENORM};
 use std::sync::Arc;
 
@@ -55,6 +56,9 @@ pub struct XEngine {
     eq_mix: f64,
     eq_mix_t: f64,
     dw: StereoDelay<4096>,
+    lim: Limiter,
+    /// conditioned key delayed by the limiter latency (sidechain solo lines up with the limited path)
+    mon_s: StereoDelay<256>,
     la_s: usize,
     any_solo: bool,
     d_s: [f64; 3],
@@ -110,6 +114,8 @@ pub struct XEngine {
     /// per band peak of the saturator output, accumulated until the plug-in wrapper takes it (like `gr_pk`)
     pub sat_out: [f64; 3],
     pub fms: f64,
+    /// Peak limiter gain reduction (dB, positive) since the shell last took it.
+    pub lim_gr_pk: f64,
 }
 
 impl XEngine {
@@ -133,6 +139,8 @@ impl XEngine {
             eq_mix: 1.0,
             eq_mix_t: 1.0,
             dw: StereoDelay::new(),
+            lim: Limiter::new(sr),
+            mon_s: StereoDelay::new(),
             la_s: 0,
             any_solo: false,
             d_s: [0.0; 3],
@@ -177,6 +185,7 @@ impl XEngine {
             sat_vz: [0.0; 3],
             sat_out: [0.0; 3],
             fms: 1e-9,
+            lim_gr_pk: 0.0,
         };
         e.derive();
         e
@@ -192,6 +201,7 @@ impl XEngine {
             // a fresh engine starts at the host's settings instead of gliding from defaults (host rebuilds on every enable)
             self.first_set = false;
             self.p = *p;
+            self.lim.snap_on(p.lim_on);
             self.snap = true;
             let sm = std::mem::replace(&mut self.smoothing, false);
             self.derive();
@@ -206,7 +216,7 @@ impl XEngine {
 
     /// PDC latency to report (saturator oversampling + lookahead; all bands are aligned).
     pub fn latency(&self) -> u32 {
-        self.strips[0].latency() as u32
+        (self.strips[0].latency() + self.lim.latency()) as u32
     }
 
     pub fn request_match(&mut self) {
@@ -233,6 +243,7 @@ impl XEngine {
         let sr = self.sr;
         self.sr_prev = sr;
         self.dirty = false;
+        self.lim.set_sample_rate(sr);
         let snap = self.snap;
         self.la_s = ((p.lookahead_ms * 0.001 * sr + 0.5).floor().max(0.0) as usize).min(1900);
         self.xo.set(p.x1, p.x2, p.x1_slope.clamp(0, 3) as usize, p.x2_slope.clamp(0, 3) as usize, sr, snap);
@@ -283,6 +294,8 @@ impl XEngine {
         self.eq.begin_block(n);
 
         let dt = n as f64 / self.sr;
+        self.lim_gr_pk = self.lim_gr_pk.max(-self.lim.gmin.max(1e-6).ln() * DB_AMP);
+        self.lim.gmin = 1.0;
         self.gate_open = self.ims > 0.000001;
         if self.gate_open {
             self.diff_db = DB_POW * (self.oms.max(1e-12) / self.ims.max(1e-12)).ln();
@@ -355,6 +368,9 @@ impl XEngine {
         self.dw.advance();
         self.dw.put(inp);
         let dt = self.dw.tap(self.strips[0].latency());
+        // the untouched input a limiter latency later: lines up with the limited path for the bypass blend
+        let ll = self.lim.latency();
+        let db = self.dw.tap(self.strips[0].latency() + ll);
 
         // ---- split, process each band, sum with solo / delta weighting
         let bands = self.xo.tick(inp);
@@ -402,12 +418,17 @@ impl XEngine {
             self.bg_t = (self.pms / self.ims).sqrt().clamp(0.0631, 15.85);
         }
         self.bg += (self.bg_t - self.bg) * self.bg_c;
-        let mut out = [pp[0] + (dt[0] * self.bg - pp[0]) * self.byp_s, pp[1] + (dt[1] * self.bg - pp[1]) * self.byp_s];
+        // output limiter (processed path only: bypass and the key monitor are the untouched input / a monitor)
+        let lo = self.lim.tick(pp, self.p.lim_on);
+        let mut out = [lo[0] + (db[0] * self.bg - lo[0]) * self.byp_s, lo[1] + (db[1] * self.bg - lo[1]) * self.byp_s];
         // solo: hear the conditioned key as the detectors get it
         self.sc_s += ((if self.sc_solo && sc_act { 1.0 } else { 0.0 }) - self.sc_s) * self.byp_c;
+        self.mon_s.advance();
+        self.mon_s.put(scv);
         if self.sc_s > 0.0001 {
+            let sv = self.mon_s.tap(ll);
             for c in 0..2 {
-                out[c] += (scv[c] - out[c]) * self.sc_s;
+                out[c] += (sv[c] - out[c]) * self.sc_s;
             }
         }
 
@@ -431,6 +452,8 @@ mod tests {
     use std::f64::consts::PI;
 
     const SR: f64 = 48000.0;
+    /// the limiter's constant delay at 48 kHz (always reported)
+    const LIM_LAT: u32 = 32 + 72;
 
     fn noise(n: usize, seed: u64) -> Vec<f64> {
         let mut s = seed;
@@ -450,6 +473,7 @@ mod tests {
             b.ratio = 1.0;
             b.thresh = 0.0;
         }
+        p.lim_on = false;
         p
     }
 
@@ -565,7 +589,32 @@ mod tests {
         p.os = 2;
         p.lookahead_ms = 2.0;
         e.set_params(&p);
-        assert_eq!(e.latency(), 28 + (2.0f64 * 0.001 * SR + 0.5).floor() as u32);
+        assert_eq!(e.latency(), 28 + (2.0f64 * 0.001 * SR + 0.5).floor() as u32 + LIM_LAT);
+    }
+
+    #[test]
+    fn limiter_latency_is_reported_on_or_off_and_the_limiter_holds_the_ceiling() {
+        let mut e = XEngine::new(SR);
+        let mut p = neutral();
+        e.set_params(&p);
+        assert_eq!(e.latency(), LIM_LAT);
+        p.lim_on = true;
+        e.set_params(&p);
+        assert_eq!(e.latency(), LIM_LAT);
+        // +18 dB of SAT GAIN on a hot tone: the output stays at the -0.2 dBTP ceiling and the reduction is reported
+        for b in p.bands.iter_mut() {
+            b.sat_gain = 12.0;
+        }
+        e.set_params(&p);
+        let t: Vec<f64> = (0..48000).map(|i| 0.8 * (2.0 * PI * 1000.0 * i as f64 / SR).sin()).collect();
+        let y = run(&mut e, &t);
+        let pk = y[24000..].iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        assert!(pk <= 0.9777 && pk > 0.9, "peak {pk}");
+        assert!(e.lim_gr_pk > 5.0, "gr {}", e.lim_gr_pk);
+        p.lim_on = false;
+        e.set_params(&p);
+        let y = run(&mut e, &t);
+        assert!(y[24000..].iter().fold(0.0f64, |m, v| m.max(v.abs())) > 2.0, "off must not limit");
     }
 
     #[test]

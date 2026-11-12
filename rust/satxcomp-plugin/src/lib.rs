@@ -24,6 +24,8 @@ pub struct Shared {
     pub opk: [AtomicF32; 2],
     pub clip: AtomicBool,
     pub gr_pk: [AtomicF32; 3],
+    /// output limiter gain reduction (dB, positive), accumulated like `gr_pk`
+    pub lim_gr_pk: AtomicF32,
     /// per band: decaying peak of the saturator input
     pub sat_vz: [AtomicF32; 3],
     /// per band: post-saturator peak since the UI last took it (fetch_max / swap(0))
@@ -56,6 +58,7 @@ impl Shared {
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
             clip: AtomicBool::new(false),
             gr_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
+            lim_gr_pk: AtomicF32::new(0.0),
             sat_vz: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             sat_out_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             fms: AtomicF32::new(1e-9),
@@ -195,6 +198,8 @@ impl Plugin for SatXComp {
             sh.clip.store(true, Ordering::Relaxed);
             e.clip_f = false;
         }
+        sh.lim_gr_pk.fetch_max(e.lim_gr_pk as f32, Ordering::Relaxed);
+        e.lim_gr_pk = 0.0;
         for b in 0..3 {
             sh.gr_pk[b].fetch_max(e.gr_pk[b] as f32, Ordering::Relaxed);
             e.gr_pk[b] = 0.0;

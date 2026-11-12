@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 120;
+pub const SLOTS: usize = 121;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -121,6 +121,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (117, "eq_mix", 0.0, 100.0, 100.0),
     (118, "eq_gain", -12.0, 12.0, 0.0),
     (119, "eq_bypass", 0.0, 1.0, 0.0),
+    (120, "lim_on", 0.0, 1.0, 1.0),
 ];
 
 #[derive(Params)]
@@ -155,8 +156,10 @@ pub struct SatXCompParams {
     /// ASYM of the lo band, one value (0..100 %) per waveshaper; saved with the project and presets (absent = all 100 %).
     #[persist = "asym-lo"]
     pub asym_lo: Arc<parking_lot::Mutex<Vec<f32>>>,
+    /// ASYM of the mid band, one value (0..100 %) per waveshaper; saved with the project and presets (absent = all 100 %).
     #[persist = "asym-mid"]
     pub asym_mid: Arc<parking_lot::Mutex<Vec<f32>>>,
+    /// ASYM of the hi band, one value (0..100 %) per waveshaper; saved with the project and presets (absent = all 100 %).
     #[persist = "asym-hi"]
     pub asym_hi: Arc<parking_lot::Mutex<Vec<f32>>>,
     #[persist = "match-trim"]
@@ -377,6 +380,8 @@ pub struct SatXCompParams {
     pub eq_gain: FloatParam,
     #[id = "eq_bypass"]
     pub eq_bypass: BoolParam,
+    #[id = "lim_on"]
+    pub lim_on: BoolParam,
 }
 
 impl Default for SatXCompParams {
@@ -504,6 +509,7 @@ impl Default for SatXCompParams {
             eq_mix: FloatParam::new("EQ Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             eq_gain: FloatParam::new("EQ Gain", 0.0, FloatRange::Linear { min: -12.0, max: 12.0 }).with_unit(" dB").with_step_size(0.1),
             eq_bypass: BoolParam::new("EQ Bypass", false),
+            lim_on: BoolParam::new("Limiter", true),
         }
     }
 }
@@ -554,7 +560,7 @@ impl SatXCompParams {
             x1: self.x1.value() as f64, x2: self.x2.value() as f64, x1_slope: self.x1_slope.value(), x2_slope: self.x2_slope.value(), os: self.os.value(), lookahead_ms: self.lookahead.value() as f64,
             sc_on: self.sc_on.value(), sc_gain: self.sc_gain.value() as f64, sc_hp: self.sc_hp.value() as f64, sc_lp: self.sc_lp.value() as f64, key_mix: self.sc_mix.value() as f64,
             bands: [lo, mid, hi], eq, mix: self.mix.value() as f64, out_gain: self.out_gain.value() as f64,
-            gain_match: self.gain_match.value(), bypass: self.bypass.value(),
+            gain_match: self.gain_match.value(), bypass: self.bypass.value(), lim_on: self.lim_on.value(),
         }
     }
 
@@ -669,6 +675,7 @@ impl SatXCompParams {
             117 => self.eq_mix.as_ptr(),
             118 => self.eq_gain.as_ptr(),
             119 => self.eq_bypass.as_ptr(),
+            120 => self.lim_on.as_ptr(),
             _ => return None,
         })
     }

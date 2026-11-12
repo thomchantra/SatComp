@@ -59,6 +59,7 @@ const SC_GAIN: usize = 85;
 const SC_HP: usize = 86;
 const SC_LP: usize = 87;
 const SC_MIX: usize = 88;
+const LIM_ON: usize = 120;
 /// height of the sidechain control row under the spectrum
 const SC_ROW_H: f32 = 17.0;
 // ---- layout (logical units; the window is W x H = 680 x 480)
@@ -66,7 +67,7 @@ const SC_ROW_H: f32 = 17.0;
 const VX: f32 = 10.0;
 const VY: f32 = 34.0;
 const VW: f32 = 530.0;
-const VH: f32 = 150.0;
+const VH: f32 = 168.0;
 /// right-hand column (levels, crossover sliders, output module)
 const RX: f32 = 550.0;
 const RW: f32 = 120.0;
@@ -74,8 +75,8 @@ const RW: f32 = 120.0;
 const BAND_Y: f32 = VY + VH + 6.0;
 /// first row of cells; four rows, CELL_P apart
 const CELLS_Y: f32 = BAND_Y + 22.0;
-const CELL_H: f32 = 44.0;
-const CELL_P: f32 = 48.0;
+const CELL_H: f32 = 38.0;
+const CELL_P: f32 = 44.0;
 /// band module cells (saturator / compressor)
 const CELL_W: f32 = 74.0;
 /// spectrum look: true = solid UI-colour fill under the output, false = background fill with a stroke (accent shows the gap to dry)
@@ -198,6 +199,10 @@ pub struct State {
     gr_txt: [f32; 3],
     gr_txt_pk: [f32; 3],
     gr_txt_t: f64,
+    /// output limiter reduction: decaying peak (flow block) and a 4 Hz text value
+    lim_disp: f32,
+    lim_txt: f32,
+    lim_txt_pk: f32,
     /// per band post-saturator meter: decaying level, hold, and the last time it clipped
     vu: [f32; 3],
     vu_hold: [f32; 3],
@@ -325,6 +330,9 @@ impl State {
             gr_txt: [0.0; 3],
             gr_txt_pk: [0.0; 3],
             gr_txt_t: 0.0,
+            lim_disp: 0.0,
+            lim_txt: 0.0,
+            lim_txt_pk: 0.0,
             vu: [0.0; 3],
             vu_hold: [0.0; 3],
             vu_hold_t: [0.0; 3],
@@ -473,7 +481,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
-const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &["First release: three bands with 12 to 96 dB crossovers, a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.", "Colour schemes with light mode, custom themes and fonts under About > Appearance."])];
+const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &["First release: three bands with 12 to 96 dB crossovers, a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.", "Colour schemes with light mode, custom themes and fonts under About > Appearance.", "ASYM next to DRIVE keeps lopsided waveshaper curves from dragging DC and sub-bass pulses into the signal. A true-peak output limiter (LIM, on by default) catches rogue peaks; its reduction shows under PK / RMS."])];
 
 impl<'a> AppearanceUi<'a> for Gui<'a> {
     fn app(&mut self) -> &mut AppState {
@@ -1097,7 +1105,12 @@ impl<'a> Gui<'a> {
                 self.vu_clip_t[b] = now;
             }
         }
+        let lg = sh.lim_gr_pk.swap(0.0, Ordering::Relaxed);
+        self.lim_disp = lg.max(self.lim_disp * 0.9);
+        self.lim_txt_pk = self.lim_txt_pk.max(self.lim_disp);
         if now - self.gr_txt_t >= 0.25 {
+            self.lim_txt = self.lim_txt_pk;
+            self.lim_txt_pk = 0.0;
             self.gr_txt = self.gr_txt_pk;
             self.gr_txt_pk = [0.0; 3];
             self.gr_txt_t = now;
@@ -1436,6 +1449,7 @@ impl<'a> Gui<'a> {
     /// off; the EQ is lit when it does something and dim when bypassed; the sidechain key drops into the compressors.
     fn draw_flow_at(&mut self, r: Rect, _byp: bool) {
         let prev = self.kit.dk;
+        let sh = self.env.shared;
         self.setc(false);
         self.cv.boxr(r.x, r.y, r.w, r.h);
         self.cv.set_font(1);
@@ -1444,100 +1458,139 @@ impl<'a> Gui<'a> {
         let eq_any = eq.bands.iter().any(|b| b.on) || eq.tilt != 0.0 || eq.gain != 0.0;
         let eq_byp = self.sget(EQ_BYPASS) > 0.5;
         let sc_on = self.sget(SC_ON) > 0.5;
-        // rows sit 32 px apart from y+24 down to y+110: clear of the title above, the key box and the caption (y + h - 15) below
-        let cy = r.y + 56.0;
-        let (bh, bw_band) = (22.0, 92.0);
-        let bx = |i: usize| -> (f32, f32) {
-            // (x, w) of the main-line blocks: IN, X-OVER, [bands], SUM, EQ, OUT
-            match i {
-                0 => (r.x + 12.0, 24.0),
-                1 => (r.x + 62.0, 58.0),
-                2 => (r.x + 172.0, bw_band),
-                3 => (r.x + 172.0 + bw_band + 50.0, 34.0),
-                4 => (r.x + 172.0 + bw_band + 50.0 + 34.0 + 30.0, 30.0),
-                _ => (r.x + 172.0 + bw_band + 50.0 + 34.0 + 30.0 + 30.0 + 30.0, 30.0),
+        let lim_on = self.sget(LIM_ON) > 0.5;
+        let (bh, bwb) = (22.0f32, 92.0f32);
+        // main line: IN, X-OVER, [three bands], SUM, EQ, LIM, OUT. The diagram is centred: the gaps share what the widths leave over
+        let w = [24.0f32, 58.0, bwb, 34.0, 30.0, 30.0, 30.0];
+        let gw = [1.0f32, 2.0, 2.0, 1.2, 1.2, 1.2];
+        let unit = (r.w - 24.0 - w.iter().sum::<f32>()) / gw.iter().sum::<f32>();
+        let mut bx = [0.0f32; 7];
+        let mut cx = r.x + 12.0;
+        for i in 0..7 {
+            bx[i] = cx.floor();
+            cx += w[i] + if i < 6 { gw[i] * unit } else { 0.0 };
+        }
+        // the three band rows are centred between the title and the caption
+        let mid = ((r.y + 24.0) + (r.y + r.h - 22.0)) * 0.5;
+        let cy = (mid - bh * 0.5).floor();
+        let ys = [cy - 32.0, cy, cy + 32.0];
+        let ym = [ys[0] + 11.0, ys[1] + 11.0, ys[2] + 11.0];
+        // signal levels for the flowing dots: input side (loudest band input), per band in / out, output
+        let lvf = |v: f32| ((8.6858896 * v.max(1e-7).ln() + 48.0) / 48.0).clamp(0.0, 1.0);
+        let lo = lvf(self.ovl.max(self.ovr));
+        let mut b_in = [0.0f32; 3];
+        let mut b_out = [0.0f32; 3];
+        for b in 0..3 {
+            let on = self.sget(band_base(b) + ON) > 0.5;
+            b_in[b] = lvf(sh.sat_vz[b].load(Ordering::Relaxed));
+            b_out[b] = if on { (lvf(self.vu[b]) - self.gr_disp[b] / 48.0).max(0.0) } else { b_in[b] };
+        }
+        let inl = b_in[0].max(b_in[1]).max(b_in[2]);
+        let phase = ((self.kit.now * 26.0) as f32) % 6.0;
+        // dots walk along a polyline, 6 px apart, sized by level (the animated "dashes" of the flow)
+        let along = |c: &Canvas, pts: &[(f32, f32)], lv: f32| {
+            if lv <= 0.02 {
+                return;
+            }
+            let sz = (1.0 + lv * 2.99).floor();
+            let (mut acc, mut d) = (0.0f32, phase);
+            for sg in pts.windows(2) {
+                let (a, b) = (sg[0], sg[1]);
+                let len = (b.0 - a.0).abs() + (b.1 - a.1).abs();
+                while d < acc + len && len > 0.0 {
+                    let t = (d - acc) / len;
+                    let (px, py) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+                    c.fill((px - sz * 0.5).floor(), (py - sz * 0.5).floor() + 0.5, sz, sz);
+                    d += 6.0;
+                }
+                acc += len;
             }
         };
-        let names = ["IN", "X-OVER", "", "SUM", "EQ", "OUT"];
-        let ys = [cy - 32.0, cy, cy + 32.0];
-        // lines
-        self.setc(false);
-        let arrow = |c: &mut Canvas, x0: f32, x1: f32, y: f32| {
+        let arrow = |c: &Canvas, x0: f32, x1: f32, y: f32| {
             c.fill(x0, y, x1 - x0 - 3.0, 1.0);
             c.tri((x1 - 4.0, y - 3.0), (x1 - 4.0, y + 4.0), (x1, y + 0.5));
         };
-        let (inx, inw) = bx(0);
-        let (xx, xw) = bx(1);
-        arrow(&mut self.cv, inx + inw, xx, cy);
-        let (b0, _) = bx(2);
-        let fork = b0 - 24.0;
-        self.cv.fill(xx + xw, cy, fork - xx - xw, 1.0);
-        self.cv.fill(fork, ys[0], 1.0, ys[2] - ys[0] + 1.0);
-        for y in ys {
-            arrow(&mut self.cv, fork, b0, y + bh * 0.5 - 0.0);
+        // ---- lines, arrows and flowing dots
+        self.setc(false);
+        let fork = (bx[1] + w[1] + ((bx[2] - bx[1] - w[1]) * 0.5).floor()).floor();
+        let join = (bx[2] + bwb + ((bx[3] - bx[2] - bwb) * 0.5).floor()).floor();
+        arrow(&self.cv, bx[0] + w[0], bx[1], ym[1]);
+        self.cv.fill(bx[1] + w[1], ym[1], fork - bx[1] - w[1] + 1.0, 1.0);
+        self.cv.fill(fork, ym[0], 1.0, ym[2] - ym[0] + 1.0);
+        for i in 0..3 {
+            arrow(&self.cv, fork, bx[2], ym[i]);
+            self.cv.fill(bx[2] + bwb, ym[i], join - bx[2] - bwb + 1.0, 1.0);
         }
-        let (sx, sw) = bx(3);
-        let join = b0 + bw_band + 14.0;
-        for y in ys {
-            self.cv.fill(b0 + bw_band, y + bh * 0.5, join - b0 - bw_band, 1.0);
+        self.cv.fill(join, ym[0], 1.0, ym[2] - ym[0] + 1.0);
+        arrow(&self.cv, join, bx[3], ym[1]);
+        for i in 3..6 {
+            arrow(&self.cv, bx[i] + w[i], bx[i + 1], ym[1]);
         }
-        self.cv.fill(join, ys[0] + bh * 0.5, 1.0, ys[2] - ys[0] + 1.0);
-        arrow(&mut self.cv, join, sx, cy + bh * 0.5);
-        let (ex, ew) = bx(4);
-        arrow(&mut self.cv, sx + sw, ex, cy + bh * 0.5);
-        let (ox, _) = bx(5);
-        arrow(&mut self.cv, ex + ew, ox, cy + bh * 0.5);
-        // the main-line blocks sit on the middle band's height
-        let main_y = cy;
-        for i in [0usize, 1, 3, 4, 5] {
-            let (x, w) = bx(i);
-            let dim = i == 4 && (eq_byp || !eq_any);
+        along(&self.cv, &[(bx[0] + w[0], ym[1]), (bx[1] - 4.0, ym[1])], inl);
+        along(&self.cv, &[(bx[1] + w[1], ym[1]), (fork, ym[1])], inl);
+        for i in 0..3 {
+            let on = self.sget(band_base(i) + ON) > 0.5;
+            let into: Vec<(f32, f32)> = if i == 1 { vec![(fork, ym[1]), (bx[2] - 4.0, ym[1])] } else { vec![(fork, ym[1]), (fork, ym[i]), (bx[2] - 4.0, ym[i])] };
+            along(&self.cv, &into, if on { b_in[i] } else { 0.0 });
+            let out: Vec<(f32, f32)> = if i == 1 { vec![(bx[2] + bwb, ym[1]), (join, ym[1])] } else { vec![(bx[2] + bwb, ym[i]), (join, ym[i]), (join, ym[1])] };
+            along(&self.cv, &out, b_out[i]);
+        }
+        along(&self.cv, &[(join, ym[1]), (bx[3] - 4.0, ym[1])], lo);
+        for i in 3..6 {
+            along(&self.cv, &[(bx[i] + w[i], ym[1]), (bx[i + 1] - 4.0, ym[1])], lo);
+        }
+        // ---- main-line blocks
+        let names = ["IN", "X-OVER", "", "SUM", "EQ", "LIM", "OUT"];
+        for i in [0usize, 1, 3, 4, 5, 6] {
+            let (x, bwi) = (bx[i], w[i]);
+            let dim = (i == 4 && (eq_byp || !eq_any)) || (i == 5 && !lim_on);
             self.set_dk(if dim { prev * 0.5 } else { prev });
-            let lit = i == 4 && eq_any && !eq_byp;
+            let lit = (i == 4 && eq_any && !eq_byp) || (i == 5 && lim_on && self.lim_disp > 0.1);
             self.setc(false);
             if lit {
-                self.cv.fill(x, main_y, w, bh);
+                self.cv.fill(x, cy, bwi, bh);
                 self.cv.setbg();
             } else {
                 self.cv.setbg();
-                self.cv.fill(x + 1.0, main_y + 1.0, w - 2.0, bh - 2.0);
+                self.cv.fill(x + 1.0, cy + 1.0, bwi - 2.0, bh - 2.0);
                 self.setc(false);
-                self.cv.boxr(x, main_y, w, bh);
+                self.cv.boxr(x, cy, bwi, bh);
             }
-            self.cv.textc(x, main_y + 7.0, w, names[i]);
+            self.cv.textc(x, cy + 7.0, bwi, names[i]);
             self.setc(false);
         }
-        // the three bands
+        // ---- the three bands
         for b in 0..3 {
             let on = self.sget(band_base(b) + ON) > 0.5;
             let lit = on && self.gr_disp[b] > 0.1;
             self.set_dk(if on { prev } else { prev * 0.5 });
             self.setc(false);
             if lit {
-                self.cv.fill(b0, ys[b], bw_band, bh);
+                self.cv.fill(bx[2], ys[b], bwb, bh);
                 self.cv.setbg();
             } else {
                 self.cv.setbg();
-                self.cv.fill(b0 + 1.0, ys[b] + 1.0, bw_band - 2.0, bh - 2.0);
+                self.cv.fill(bx[2] + 1.0, ys[b] + 1.0, bwb - 2.0, bh - 2.0);
                 self.setc(false);
-                self.cv.boxr(b0, ys[b], bw_band, bh);
+                self.cv.boxr(bx[2], ys[b], bwb, bh);
             }
-            self.cv.textc(b0, ys[b] + 7.0, bw_band, &format!("{} SAT>COMP", BAND_NAMES[b]));
+            self.cv.textc(bx[2], ys[b] + 7.0, bwb, &format!("{} SAT>COMP", BAND_NAMES[b]));
             self.setc(false);
         }
         self.set_dk(prev);
-        // sidechain key: SIDECHAIN box above, dropping into the compressor column
+        // sidechain key: SIDECHAIN box above, dropping into the top band's compressor
         if sc_on {
-            let (kx, kw) = (b0 + 20.0, 78.0);
-            let ky = r.y + 3.0;
+            let (kw, ky) = (78.0f32, r.y + 3.0);
+            let kx = (bx[2] + (bwb - kw) * 0.5).floor();
+            let mx = (kx + kw * 0.5).floor();
             self.setc(false);
             self.cv.boxr(kx, ky, kw, 16.0);
             self.cv.textc(kx, ky + 4.0, kw, "SIDECHAIN");
-            self.cv.fill(kx + kw * 0.5, ky + 16.0, 1.0, ys[0] - ky - 16.0 - 3.0);
-            self.cv.tri((kx + kw * 0.5 - 3.0, ys[0] - 4.0), (kx + kw * 0.5 + 4.0, ys[0] - 4.0), (kx + kw * 0.5 + 0.5, ys[0]));
+            self.cv.fill(mx, ky + 16.0, 1.0, ys[0] - ky - 16.0 - 3.0);
+            self.cv.tri((mx - 3.0, ys[0] - 4.0), (mx + 4.0, ys[0] - 4.0), (mx + 0.5, ys[0]));
             self.cv.text(kx + kw + 8.0, ky + 4.0, "KEY > COMP");
         }
-        self.cv.text(r.x + 6.0, r.y + r.h - 15.0, "EACH BAND: SAT > COMP, THEN THE SUM GOES THROUGH THE POST EQ");
+        self.cv.text(r.x + 6.0, r.y + r.h - 15.0, "EACH BAND: SAT > COMP, THEN THE SUM GOES THROUGH THE POST EQ AND THE LIMITER");
     }
 
     // ------------------------------------------------------------------ popup menu
@@ -1977,10 +2030,10 @@ impl<'a> Gui<'a> {
         // compressor section sits flush right (GR meter + three columns); what is left over is the gap to the saturator
         let col0 = VX + VW - (3.0 * CELL_W + 12.0);
         let meter_x = col0 - 6.0 - 30.0;
-        self.shape_selector(o + SHAPE, VX, y0, sat_w, 22.0);
+        self.shape_selector(o + SHAPE, VX, y0, sat_w, 19.0);
         let drive_w = (sat_w * 0.5).floor();
-        self.cell1(o + DRIVE, VX, y0 + 22.0, drive_w, 22.0, "DRIVE");
-        self.asym_cell(b, VX + drive_w, y0 + 22.0, sat_w - drive_w, 22.0);
+        self.cell1(o + DRIVE, VX, y0 + 19.0, drive_w, 19.0, "DRIVE");
+        self.asym_cell(b, VX + drive_w, y0 + 19.0, sat_w - drive_w, 19.0);
         self.draw_sat_plot(VX, y0 + CELL_P, sat_w, sat_w);
         self.cell(o + BIAS, sat_x, rows[0], CELL_W, CELL_H, "BIAS");
         self.cell(o + TONE, sat_x, rows[1], CELL_W, CELL_H, "TONE");
@@ -2440,7 +2493,12 @@ impl<'a> Gui<'a> {
             self.cv.text(517.0, 12.0, "EQ");
             self.setc(false);
         }
-        self.out_meter(RX, 8.0, RW, 16.0);
+        // LIM switch + output peak meter
+        let lim_on = self.sget(LIM_ON) > 0.5;
+        if self.btn(RX, 8.0, 30.0, 16.0, "LIM", lim_on as u8) {
+            self.click_set(LIM_ON, if lim_on { 0.0 } else { 1.0 });
+        }
+        self.out_meter(RX + 34.0, 8.0, RW - 34.0, 16.0);
 
         // ---------- viewport row; right column: delta / bypass, levels, then the parameter group on the bottom edge
         let delta = sh.delta_on.load(Ordering::Relaxed);
@@ -2479,6 +2537,13 @@ impl<'a> Gui<'a> {
         let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
         self.cv.text(RX, VY + 34.0, "RMS");
         self.cv.textr(RX, VY + 34.0, RW, &s1);
+        // limiter reduction: accent once it has engaged
+        let lim_on = self.sget(LIM_ON) > 0.5;
+        self.setc(lim_on && self.lim_txt > 0.05);
+        self.cv.text(RX, VY + 46.0, "LIM");
+        let s1 = if lim_on { format!("{:04.1}dB", self.lim_txt) } else { "-----dB".to_string() };
+        self.cv.textr(RX, VY + 46.0, RW, &s1);
+        self.setc(false);
         // parameter group, evenly spaced and aligned to the viewport's bottom edge: crossover 1, crossover 2, oversampling
         let bottom = VY + VH;
         let os_y = bottom - 16.0;

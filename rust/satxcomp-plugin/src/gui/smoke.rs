@@ -130,20 +130,20 @@ fn script() -> (u64, Vec<String>) {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.click(610.0, 176.0); // oversampling x2 (right column, bottom row)
-    r.click(650.0, 176.0); // oversampling x4
-    r.drag(41.0, 245.0, 41.0, 220.0); // DRIVE row of the selected band
-    r.click(200.0, 198.0); // band row: select MID (click on the tab)
-    r.drag(41.0, 245.0, 41.0, 230.0); // DRIVE of MID
+    r.click(610.0, 194.0); // oversampling x2 (right column, bottom row)
+    r.click(650.0, 194.0); // oversampling x4
+    r.drag(41.0, 258.0, 41.0, 233.0); // DRIVE row of the selected band
+    r.click(200.0, 216.0); // band row: select MID (click on the tab)
+    r.drag(41.0, 258.0, 41.0, 243.0); // DRIVE of MID
     r.drag(100.0, 100.0, 150.0, 100.0); // viewport: grab a crossover line / marker area
-    r.click(350.0, 198.0); // band row: HI tab
-    r.click(468.0, 198.0); // DELTA of the band
-    r.click(516.0, 198.0); // SOLO of the band
+    r.click(350.0, 216.0); // band row: HI tab
+    r.click(468.0, 216.0); // DELTA of the band
+    r.click(516.0, 216.0); // SOLO of the band
     r.click(530.0, 16.0); // EQ page (header)
     r.drag(60.0, 120.0, 90.0, 80.0); // EQ node
-    r.click(300.0, 198.0); // EQ band toggle
-    r.drag(50.0, 282.0, 50.0, 257.0); // an EQ cell
-    r.click(50.0, 223.0); // type glyph
+    r.click(300.0, 216.0); // EQ band toggle
+    r.drag(50.0, 292.0, 50.0, 267.0); // an EQ cell
+    r.click(50.0, 241.0); // type glyph
     r.click(530.0, 16.0); // back to the main page
     r.click(640.0, 42.0); // BYPASS
     (r.hash, r.log())
@@ -173,15 +173,15 @@ fn eq_page_cells_above_slot_100_can_be_dragged() {
         r.frame(vec![]);
     }
     r.click(530.0, 16.0); // EQ page
-    // (x, y, drag dy, parameter that must be written): cells start at y 212, 48 apart; EQ mix sits at its maximum
+    // (x, y, drag dy, parameter that must be written): cells start at y 230, 44 apart; EQ mix sits at its maximum
     for (x, y, dy, name) in [
-        (490.0, 234.0, -25.0, "EQ Pivot"),
-        (490.0, 282.0, -25.0, "EQ Tilt"),
-        (490.0, 330.0, 25.0, "EQ Mix"),
-        (490.0, 378.0, -25.0, "EQ Gain"),
-        (222.0, 282.0, -25.0, "EQ3 Q"),
-        (222.0, 330.0, -25.0, "EQ3 Freq"),
-        (394.0, 378.0, -25.0, "EQ5 Gain"),
+        (490.0, 249.0, -25.0, "EQ Pivot"),
+        (490.0, 293.0, -25.0, "EQ Tilt"),
+        (490.0, 337.0, 25.0, "EQ Mix"),
+        (490.0, 381.0, -25.0, "EQ Gain"),
+        (222.0, 293.0, -25.0, "EQ3 Q"),
+        (222.0, 337.0, -25.0, "EQ3 Freq"),
+        (394.0, 381.0, -25.0, "EQ5 Gain"),
     ] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
@@ -189,9 +189,9 @@ fn eq_page_cells_above_slot_100_can_be_dragged() {
         assert!(new.iter().any(|l| l.starts_with(name)), "dragging the {name} cell wrote nothing: {new:?}");
         assert!(new.iter().all(|l| l.starts_with(name)), "dragging the {name} cell also wrote other parameters: {new:?}");
     }
-    // an EQ node drag must only move that node's own freq and gain (EQ2 sits at 200 Hz on the 0 dB line, x ~187, y 109)
+    // an EQ node drag must only move that node's own freq and gain (EQ2 sits at 200 Hz on the 0 dB line, x ~187, y 118)
     let n0 = r.log().len();
-    r.drag(187.0, 109.0, 247.0, 79.0);
+    r.drag(187.0, 118.0, 247.0, 88.0);
     let new: Vec<String> = r.log()[n0..].to_vec();
     assert!(new.iter().any(|l| l.starts_with("EQ2 Freq")) && new.iter().any(|l| l.starts_with("EQ2 Gain")), "{new:?}");
     assert!(new.iter().all(|l| l.starts_with("EQ2 ")), "an EQ node drag wrote other parameters: {new:?}");
@@ -204,8 +204,8 @@ fn main_page_controls_of_the_wide_layout_write_parameters() {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    // (x, y, drag dy, parameter): the crossover rows are 16 high at y 92 / 130, L.AHEAD is the small row at the end of the band row
-    for (x, y, dy, name) in [(600.0, 100.0, -25.0, "X-Over 1"), (600.0, 138.0, -25.0, "X-Over 2"), (600.0, 198.0, -25.0, "Lookahead")] {
+    // (x, y, drag dy, parameter): the crossover rows are 16 high at y 110 / 148, L.AHEAD is the small row at the end of the band row
+    for (x, y, dy, name) in [(600.0, 118.0, -25.0, "X-Over 1"), (600.0, 156.0, -25.0, "X-Over 2"), (600.0, 216.0, -25.0, "Lookahead")] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
         let new: Vec<String> = r.log()[n0..].to_vec();
@@ -213,7 +213,7 @@ fn main_page_controls_of_the_wide_layout_write_parameters() {
         assert!(new.iter().all(|l| l.starts_with(name)), "dragging {name} also wrote other parameters: {new:?}");
     }
     // slope buttons: 12 / 24 / 48 / 96, 30 wide from x 550, under each crossover
-    for (x, y, name) in [(625.0, 116.0, "X-Slope 1"), (565.0, 154.0, "X-Slope 2")] {
+    for (x, y, name) in [(625.0, 134.0, "X-Slope 1"), (565.0, 172.0, "X-Slope 2")] {
         let n0 = r.log().len();
         r.click(x, y);
         let new: Vec<String> = r.log()[n0..].to_vec();
@@ -221,14 +221,14 @@ fn main_page_controls_of_the_wide_layout_write_parameters() {
     }
     // oversampling lives under the crossover group
     let n0 = r.log().len();
-    r.click(610.0, 176.0);
+    r.click(610.0, 194.0);
     assert!(r.log()[n0..].iter().any(|l| l.starts_with("Sat Oversampling")));
     // band cells: THRESH of the selected (low) band, SAT GAIN, and the OUT column
     for (x, y, dy, name) in [
-        (343.0, 234.0, 25.0, "Lo Thresh"),
-        (193.0, 378.0, -25.0, "Lo Sat Gain"),
-        (610.0, 378.0, -25.0, "Out Gain"),
-        (610.0, 330.0, 25.0, "Mix"),
+        (343.0, 250.0, 25.0, "Lo Thresh"),
+        (179.0, 380.0, -25.0, "Lo Sat Gain"),
+        (610.0, 380.0, -25.0, "Out Gain"),
+        (610.0, 336.0, 25.0, "Mix"),
     ] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
@@ -297,15 +297,15 @@ fn sidechain_row_and_key_mix_cell() {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    // row y 167..184: SC gain x 10..170, HP 169..304, LP 303..438, SOLO 437..540
-    for (x, y, dy, name) in [(90.0, 175.0, -25.0, "SC Gain"), (230.0, 175.0, -25.0, "SC HP"), (370.0, 175.0, 25.0, "SC LP")] {
+    // row y 185..202: SC gain x 10..170, HP 169..304, LP 303..438, SOLO 437..540
+    for (x, y, dy, name) in [(90.0, 193.0, -25.0, "SC Gain"), (230.0, 193.0, -25.0, "SC HP"), (370.0, 193.0, 25.0, "SC LP")] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
         let new: Vec<String> = r.log()[n0..].to_vec();
         assert!(new.iter().any(|l| l.starts_with(name)) && new.iter().all(|l| l.starts_with(name)), "dragging {name}: {new:?}");
     }
     assert!(!r.shared.sc_solo.load(std::sync::atomic::Ordering::Relaxed));
-    r.click(490.0, 175.0);
+    r.click(490.0, 193.0);
     assert!(r.shared.sc_solo.load(std::sync::atomic::Ordering::Relaxed), "SOLO click sets the monitor flag");
     // KEY MIX sits where FF>FB is (third compressor column, second row) and defaults to its maximum
     let n0 = r.log().len();
@@ -317,7 +317,7 @@ fn sidechain_row_and_key_mix_cell() {
     r.shared.sc_solo.store(true, std::sync::atomic::Ordering::Relaxed);
     r.frame(vec![]);
     assert!(!r.shared.sc_solo.load(std::sync::atomic::Ordering::Relaxed), "solo never outlives the sidechain switch");
-    r.drag(90.0, 175.0, 90.0, 150.0);
+    r.drag(90.0, 193.0, 90.0, 168.0);
     assert!(!r.log().iter().any(|l| l.starts_with("SC Gain")), "no SC row while the sidechain is off: {:?}", r.log());
 }
 
@@ -378,9 +378,9 @@ fn theme_editor_opens_edits_and_cancels_without_touching_parameters() {
     assert!(r.st.app.editing());
     r.frame(vec![]);
     r.click(226.0 + 30.0, 212.0 + 20.0); // DARK BG swatch -> colour picker
-    r.click(200.0, 100.0); // inside the saturation / value square
-    r.drag(290.0, 70.0, 290.0, 110.0); // hue strip
-    r.click(380.0, 157.0); // picker CANCEL
+    r.click(200.0, 109.0); // inside the saturation / value square
+    r.drag(290.0, 79.0, 290.0, 119.0); // hue strip
+    r.click(380.0, 166.0); // picker CANCEL
     r.click(500.0, 330.0); // editor cancel icon
     assert!(!r.st.app.editing());
     assert_eq!(r.st.app.about, 3, "cancel returns to the Appearance tab");
@@ -420,12 +420,26 @@ fn asym_slider_writes_the_selected_shapers_value() {
         r.frame(vec![]);
     }
     assert_eq!(r.params.asym_snapshot(0)[0], 100.0);
-    r.drag(125.0, 245.0, 125.0, 265.0); // drag down = lower
+    r.drag(105.0, 258.0, 105.0, 278.0); // drag down = lower
     let a = r.params.asym_snapshot(0);
     assert!(a[0] < 100.0, "dragging ASYM changed nothing: {:?}", &a[..3]);
     assert_eq!(a[1], 100.0, "other shapers keep their own value");
     assert_eq!(r.params.asym_snapshot(1)[0], 100.0, "other bands keep their own value");
-    r.click(125.0, 245.0);
-    r.click(125.0, 245.0); // double-click = reset
+    r.click(105.0, 258.0);
+    r.click(105.0, 258.0); // double-click = reset
     assert_eq!(r.params.asym_snapshot(0)[0], 100.0);
+}
+
+/// LIM sits left of the output meter and toggles the limiter parameter (on by default).
+#[test]
+fn lim_button_toggles_the_limiter() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    assert!(r.params.lim_on.value(), "limiter defaults to on");
+    let n0 = r.log().len();
+    r.click(565.0, 16.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(new.iter().any(|l| l.starts_with("Limiter 0.000")), "LIM click should switch the limiter off: {new:?}");
 }
