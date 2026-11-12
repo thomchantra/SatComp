@@ -16,23 +16,26 @@ fn ceil_db(i: usize) -> i32 {
     10 - i as i32
 }
 
-/// (output peak, peak with the removed part added back) of absolute column `j` on a grid of `k` buckets per column, read from a
-/// ring whose newest bucket index is `head - 1`. Pure in (ring contents, j, k): once a column is complete it never changes.
-fn scope_col(ring: &satcomp_dsp::ScopeRing, head: usize, j: i64, k: f64) -> (f32, f32) {
+/// (output peak, peak the limiter was handed, peak before the clipper) of absolute column `j` on a grid of `k` buckets per column,
+/// read from a ring whose newest bucket index is `head - 1`. Pure in (ring contents, j, k): once a column is complete it never
+/// changes.
+fn scope_col(ring: &satcomp_dsp::ScopeRing, head: usize, j: i64, k: f64) -> (f32, f32, f32) {
     let len = satcomp_dsp::ScopeRing::LEN as i64;
     let b0 = j as f64 * k;
     let i0 = b0.floor() as i64;
     let i1 = ((b0 + k).floor() as i64).max(i0 + 1);
-    let (mut o, mut p) = (0.0f32, 0.0f32);
+    let (mut o, mut m, mut p) = (0.0f32, 0.0f32, 0.0f32);
     for i in i0..i1 {
         if i < 0 || head as i64 - i >= len {
             continue;
         }
-        let (a, b) = ring.get(i as usize);
+        let (a, b, c) = ring.get3(i as usize);
         o = o.max(a);
-        p = p.max(b);
+        m = m.max(b);
+        p = p.max(c);
     }
-    (o, p.max(o))
+    let m = m.max(o);
+    (o, m, p.max(m))
 }
 
 fn fmt_db(db: i32) -> String {
@@ -93,7 +96,7 @@ impl<'a> Gui<'a> {
             self.scope_pos += (target - self.scope_pos) * (1.0 - (-dt * 10.0).exp());
         }
         let last = (self.scope_pos / k).floor() as i64 - 1; // newest complete column
-        let mut cols = vec![(0.0f32, 0.0f32); ncol];
+        let mut cols = vec![(0.0f32, 0.0f32, 0.0f32); ncol];
         for (c, col) in cols.iter_mut().enumerate() {
             *col = scope_col(&ring, head, last - (ncol - 1 - c) as i64, k);
         }
@@ -101,11 +104,21 @@ impl<'a> Gui<'a> {
         let hpx = |v: f32| ((v * zoom).min(1.0) * span).floor();
         let base = if full { y + (h * 0.5).floor() } else { y + h - 1.0 };
         let solid = self.env.params.fft_solid.load(Ordering::Relaxed);
+        // Heights of the layers per column, bottom to top: output (UI colour), then what the limiter removed (solid accent), then
+        // what the clipper removed (hatched accent: every other column), stacked up to the pre-clip peak. They add up, so it does
+        // not matter which of the two is larger. SRC GR shows the two removals alone from the baseline.
+        let layers = |&(o, m, p): &(f32, f32, f32)| -> (f32, f32, f32) {
+            if src == 0 {
+                (hpx(o), hpx(m), hpx(p))
+            } else {
+                let l1 = hpx(m - o);
+                (0.0, l1, l1 + hpx(p - m))
+            }
+        };
         if solid {
-            // output (UI colour)
             if src < 2 {
                 self.setc(false);
-                for (c, &(o, _)) in cols.iter().enumerate() {
+                for (c, &(o, _, _)) in cols.iter().enumerate() {
                     let ho = hpx(o);
                     if ho > 0.0 {
                         let cx = x + 1.0 + c as f32;
@@ -117,25 +130,30 @@ impl<'a> Gui<'a> {
                     }
                 }
             }
-            // reduction (accent): what the compressor took off, stacked on the output (or alone from the baseline)
             if src != 1 {
                 self.setc(true);
-                for (c, &(o, p)) in cols.iter().enumerate() {
+                for (c, col) in cols.iter().enumerate() {
                     let cx = x + 1.0 + c as f32;
-                    let (lo, hi) = if src == 0 { (hpx(o), hpx(p)) } else { (0.0, hpx(p - o)) };
-                    if hi > lo {
-                        if full {
-                            self.cv.fill(cx, base - hi, 1.0, hi - lo);
-                            self.cv.fill(cx, base + lo + 1.0, 1.0, hi - lo);
-                        } else {
-                            self.cv.fill(cx, base - hi, 1.0, hi - lo);
+                    let (l0, l1, c1) = layers(col);
+                    let mut seg = |lo: f32, hi: f32| {
+                        if hi > lo {
+                            if full {
+                                self.cv.fill(cx, base - hi, 1.0, hi - lo);
+                                self.cv.fill(cx, base + lo + 1.0, 1.0, hi - lo);
+                            } else {
+                                self.cv.fill(cx, base - hi, 1.0, hi - lo);
+                            }
                         }
+                    };
+                    seg(l0, l1);
+                    if c % 2 == 0 {
+                        seg(l1, c1);
                     }
                 }
             }
         } else {
-            // outline: a 1 px stroke along the peaks, joined to the previous column so steep edges stay connected; the output in
-            // the UI colour, what the clipper and limiter removed as an accent stroke on top
+            // outline: a 1 px stroke along each layer's top, joined to the previous column so steep edges stay connected: the
+            // output in the UI colour, the limiter's removal as an accent stroke, the clipper's as a dotted accent stroke
             let stroke = |s: &mut Self, accent: bool, tops: &[Option<f32>], mirror: bool| {
                 s.setc(accent);
                 let mut prev: Option<f32> = None;
@@ -153,18 +171,14 @@ impl<'a> Gui<'a> {
                 }
             };
             if src < 2 {
-                let tops: Vec<Option<f32>> = cols.iter().map(|&(o, _)| Some(hpx(o))).collect();
+                let tops: Vec<Option<f32>> = cols.iter().map(|&(o, _, _)| Some(hpx(o))).collect();
                 stroke(self, false, &tops, full);
             }
             if src != 1 {
-                let tops: Vec<Option<f32>> = cols
-                    .iter()
-                    .map(|&(o, p)| {
-                        let (lo, hi) = if src == 0 { (hpx(o), hpx(p)) } else { (0.0, hpx(p - o)) };
-                        if hi > lo { Some(hi) } else { None }
-                    })
-                    .collect();
-                stroke(self, true, &tops, full);
+                let lim: Vec<Option<f32>> = cols.iter().map(|col| { let (l0, l1, _) = layers(col); if l1 > l0 { Some(l1) } else { None } }).collect();
+                stroke(self, true, &lim, full);
+                let clip: Vec<Option<f32>> = cols.iter().enumerate().map(|(c, col)| { let (_, l1, c1) = layers(col); if c1 > l1 && c % 2 == 0 { Some(c1) } else { None } }).collect();
+                stroke(self, true, &clip, full);
             }
         }
         self.setc(false);
@@ -277,7 +291,7 @@ mod tests {
         let after: Vec<_> = (400..420).map(|j| scope_col(&ring, ring.head(), j, k)).collect();
         assert_eq!(before, after);
         // and a column reads the maximum of the buckets it spans
-        let (o, _) = scope_col(&ring, ring.head(), 500, k);
+        let (o, _, _) = scope_col(&ring, ring.head(), 500, k);
         // column 500 spans buckets [1850, floor(1853.7)) = 1850..1853
         let want = (1850..1853).map(val).fold(0.0f32, f32::max);
         assert!((o - want).abs() < 1e-6, "{o} vs {want}");

@@ -88,6 +88,9 @@ pub struct State {
     // per-frame input (logical units)
     // meters
     gr_disp: f32,
+    /// the clipper's reduction (dB): decaying display value, and its readout copy
+    clip_disp: f32,
+    rd_clip: f32,
     gr_hold: f32,
     gr_hold_t: f64,
     gr_ri: usize,
@@ -197,6 +200,8 @@ impl State {
             vt2: 0,
             menu: None,
             gr_disp: 0.0,
+            clip_disp: 0.0,
+            rd_clip: 0.0,
             gr_hold: 0.0,
             gr_hold_t: 0.0,
             gr_ri: 0,
@@ -266,6 +271,7 @@ impl State {
         d.sat_vz.store(0.3, Ordering::Relaxed);
         d.sat_pk.store(0.4, Ordering::Relaxed);
         d.tpk.store(0.9, Ordering::Relaxed);
+        d.clip_gr_pk.store(1.0, Ordering::Relaxed);
     }
 }
 
@@ -551,9 +557,13 @@ impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ meters
     fn draw_meter(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let g = self.env.shared.gr_pk.swap(0.0, Ordering::Relaxed);
+        let cg = self.env.shared.clip_gr_pk.swap(0.0, Ordering::Relaxed);
         self.gr_disp = g.max(self.gr_disp * 0.9);
-        if g >= self.gr_hold {
-            self.gr_hold = g;
+        self.clip_disp = cg.max(self.clip_disp * 0.9);
+        // the bar is the total reduction: the limiter's part as solid accent from the top, the clipper's hatched right under it
+        let total = self.gr_disp + self.clip_disp;
+        if g + cg >= self.gr_hold {
+            self.gr_hold = g + cg;
             self.gr_hold_t = self.now;
         } else if self.now - self.gr_hold_t > 1.0 {
             self.gr_hold = (self.gr_hold - 0.4).max(0.0);
@@ -563,24 +573,31 @@ impl<'a> Gui<'a> {
             self.press = false;
         }
         let rng = |i: usize| [3.0f32, 6.0, 12.0, 18.0][i.min(3)];
-        while self.gr_ri < 3 && self.gr_disp > rng(self.gr_ri) {
+        while self.gr_ri < 3 && total > rng(self.gr_ri) {
             self.gr_ri += 1;
         }
         let rg = rng(self.gr_ri);
         self.setc(false);
         self.cv.boxr(x, y, w, h);
         self.setc(true);
-        self.cv.fill(x + 1.0, y + 1.0, w - 2.0, ((h - 2.0) * (self.gr_disp / rg).min(1.0)).floor());
+        let lim_h = ((h - 2.0) * (self.gr_disp / rg).min(1.0)).floor();
+        let all_h = ((h - 2.0) * (total / rg).min(1.0)).floor();
+        self.cv.fill(x + 1.0, y + 1.0, w - 2.0, lim_h);
+        let mut ry = y + 1.0 + lim_h;
+        while ry < y + 1.0 + all_h {
+            self.cv.fill(x + 1.0, ry, w - 2.0, 1.0); // hatched: every other row
+            ry += 2.0;
+        }
         self.setc(false);
         let hp = y + 1.0 + ((h - 3.0) * (self.gr_hold / rg).min(1.0)).floor();
         self.cv.fill(x + 1.0, hp, w - 2.0, 1.0);
         self.cv.set_font(1);
-        // limiter GR as a number in a window at the top of the bar (positive, like the bar)
+        // total GR as a number in a window at the top of the bar (positive, like the bar)
         self.cv.setbg();
         self.cv.fill(x + 1.0, y + 1.0, w - 2.0, 11.0);
         self.setc(false);
         self.cv.fill(x + 1.0, y + 12.0, w - 2.0, 1.0);
-        let gs = format!("{:.1}", self.rd_gr);
+        let gs = format!("{:.1}", self.rd_gr + self.rd_clip);
         self.cv.textc(x, y + 3.0, w, &gs);
         let mj = if rg == 3.0 { 1.0 } else if rg == 6.0 { 2.0 } else if rg == 12.0 { 3.0 } else { 6.0 };
         let stp = if rg <= 6.0 { 0.5 } else { 1.0 };
@@ -1573,6 +1590,7 @@ impl<'a> Gui<'a> {
         if self.rd_tick {
             self.rd_last = self.now;
             self.rd_gr = self.gr_disp;
+            self.rd_clip = self.clip_disp;
             self.rd_pk = self.opk_max;
             self.rd_rms = sh.fms.load(Ordering::Relaxed);
             self.rd_sat = sh.sat_db.load(Ordering::Relaxed);
@@ -1683,7 +1701,7 @@ impl<'a> Gui<'a> {
             // OVERSAMPL sits on the shape selector's row, centred over the meter bars; x1..x8 share that row at the column width
             self.setc(false);
             self.cv.set_font(1);
-            self.cv.textc(146.0, 192.0, 78.0, "OVERSAMPL");
+            self.cv.textc(146.0, 192.0, 78.0, "OVERSAMPLE");
             self.set_dk(if byp { 0.5 } else { 1.0 });
             let os_i = (self.sget(7) + 0.5).floor() as i32;
             for i in 0..4 {
@@ -1695,19 +1713,22 @@ impl<'a> Gui<'a> {
             }
             self.set_dk(1.0);
             self.cv.set_font(1);
-            // GR stays in the UI colour at all times; only the true peak turns accent on a clip
+            // GR (the limiter) and CLIP (the clipper) stay in the UI colour at all times; only the true peak turns accent on a clip
             self.setc(false);
-            self.cv.text(cx, 224.0, "GR");
+            self.cv.text(cx, 214.0, "GR");
             let s1 = if byp { "-----dB".to_string() } else { format!("{:04.1}dB", self.rd_gr) };
-            self.cv.textr(cx, 224.0, cw, &s1);
+            self.cv.textr(cx, 214.0, cw, &s1);
+            self.cv.text(cx, 225.0, "CLIP");
+            let s1 = if byp { "-----dB".to_string() } else { format!("{:04.1}dB", self.rd_clip) };
+            self.cv.textr(cx, 225.0, cw, &s1);
             self.setc(self.rd_pk > 1.0);
             self.cv.text(cx, 236.0, if look { "TRU.PK" } else { "PK" });
             let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
             self.cv.textr(cx, 236.0, cw, &s1);
             self.setc(false);
-            self.cv.text(cx, 248.0, "RMS");
+            self.cv.text(cx, 247.0, "RMS");
             let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
-            self.cv.textr(cx, 248.0, cw, &s1);
+            self.cv.textr(cx, 247.0, cw, &s1);
 
             self.set_dk(if byp { 0.5 } else { 1.0 });
             if self.btn(cx, 262.0, cw, 16.0, if look { "L.AHEAD  ON" } else { "L.AHEAD OFF" }, look as u8) {

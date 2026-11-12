@@ -69,6 +69,7 @@ impl Rig {
         self.shared.opk[1].store(0.4 + 0.3 * n.cos(), ord);
         self.shared.tpk.store(0.6 + 0.3 * n.sin(), ord);
         self.shared.gr_pk.store(2.0 + n.cos().abs() * 3.0, ord);
+        self.shared.clip_gr_pk.store(1.0 + n.sin().abs() * 2.0, ord);
         self.shared.sat_pk.store(0.5, ord);
         self.shared.sat_vz.store(0.4, ord);
         self.shared.fms.store(0.05, ord);
@@ -78,7 +79,7 @@ impl Rig {
             for _ in 0..chunk {
                 let i = self.shared.scope.head() as f32;
                 let v = 0.3 + 0.2 * (i * 0.1).sin() + 0.1 * (i * 0.37).sin();
-                self.shared.scope.push(v, v * 1.5);
+                self.shared.scope.push3(v, v * 1.25, v * 1.5);
             }
         }
         let raw = RawInput { time: Some(self.t), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(510.0, 756.0))), events, ..Default::default() };

@@ -22,6 +22,7 @@ presets `*.satlim` in `~/Library/Application Support/SatLim/Presets`.
 - **Meters:** segmented sat out (clip block at the top, held 1 s), GR with its value on top, stereo out VU (click the bars to cycle 48 / 24 / 12 / 6 dB, click the top block to reset the clip lamp and the peak readout).
 - **SAT readout** (plot corner): click = measure the saturator's loudness change for 3 s, then write the SAT GAIN that cancels it (click again to cancel).
 - **Scope:** CEIL runs +10 dB to -14 dB (default +2) so heavy clipping above 0 dBFS stays visible. Columns sit on a fixed grid in absolute time and the read position eases toward the newest bucket, so the picture scrolls steadily instead of flickering with each host block.
+- **Clip and limiter side by side:** the scope and the GR meter stack the two removals instead of merging them. Scope bottom to top: output (UI colour), what the limiter removed (solid accent), what the clipper removed (hatched accent: every other column), up to the pre-clip peak. The GR bar is the total, the limiter's part solid from the top and the clipper's hatched right under it; its number is the total. The readouts keep them apart: GR = limiter, CLIP = clipper. They add up, so it does not matter which is larger.
 - **SCOPE FILL** (About > Appearance): solid bars (default) or an outline stroke along the peaks, like SatXComp's spectrum fill.
 - **DELTA** = what the clipper and limiter removed (pre-clip signal minus limiter output, before OUT GAIN). **BYPASS** = the input at the
   same latency.

@@ -29,6 +29,8 @@ pub struct Shared {
     pub clip: AtomicBool,
     /// limiter gain reduction, dB positive
     pub gr_pk: AtomicF32,
+    /// what the clipper took off, dB positive, accumulated like `gr_pk`
+    pub clip_gr_pk: AtomicF32,
     /// post-saturator peak (after SAT GAIN), linear
     pub sat_pk: AtomicF32,
     /// decaying peak of the saturator input (live dot on the plot)
@@ -57,6 +59,7 @@ impl Shared {
             tpk: AtomicF32::new(0.0),
             clip: AtomicBool::new(false),
             gr_pk: AtomicF32::new(0.0),
+            clip_gr_pk: AtomicF32::new(0.0),
             sat_pk: AtomicF32::new(0.0),
             sat_vz: AtomicF32::new(0.0),
             fms: AtomicF32::new(1e-9),
@@ -179,6 +182,8 @@ impl Plugin for SatLim {
         }
         sh.gr_pk.fetch_max(e.gr_pk as f32, Ordering::Relaxed);
         e.gr_pk = 0.0;
+        sh.clip_gr_pk.fetch_max(e.clip_gr_pk as f32, Ordering::Relaxed);
+        e.clip_gr_pk = 0.0;
         sh.sat_pk.fetch_max(e.sat_out as f32, Ordering::Relaxed);
         e.sat_out = 0.0;
         sh.sat_vz.store(e.sat_vz as f32, Ordering::Relaxed);
