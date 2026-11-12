@@ -180,6 +180,8 @@ pub struct State {
     eq_sel: usize,
     /// custom-curve draw view of the selected band (pencil), and the point being dragged
     curve_edit: bool,
+    /// ASYM drag anchor: (mouse y, value 0..1) at the press
+    asym_drag: (f32, f32),
     edit_seen: bool,
     cpt: usize,
     menu: Option<Menu>,
@@ -309,6 +311,7 @@ impl State {
             eq_page: false,
             eq_sel: 0,
             curve_edit: false,
+            asym_drag: (0.0, 0.0),
             edit_seen: false,
             cpt: 0,
             menu: None,
@@ -1358,7 +1361,7 @@ impl<'a> Gui<'a> {
                 set(100.0);
             } else {
                 self.kit.act = ACT_ASYM;
-                self.kit.act_t = get() * 0.01;
+                self.asym_drag = (self.kit.my, get() * 0.01);
             }
             self.kit.press = false;
         }
@@ -1368,8 +1371,8 @@ impl<'a> Gui<'a> {
         }
         if self.kit.act == ACT_ASYM && self.kit.down {
             let k = if self.kit.shift { 0.0008 } else { 0.006 };
-            self.kit.act_t = (self.kit.act_t + (self.kit.last_my - self.kit.my) * k).clamp(0.0, 1.0);
-            set((self.kit.act_t * 100.0).round());
+            let t = (self.asym_drag.1 + (self.asym_drag.0 - self.kit.my) * k).clamp(0.0, 1.0);
+            set((t * 100.0).round());
         }
         let v = get();
         let act = self.kit.act == ACT_ASYM;
@@ -1969,7 +1972,7 @@ impl<'a> Gui<'a> {
         let col0 = VX + VW - (3.0 * CELL_W + 12.0);
         let meter_x = col0 - 6.0 - 30.0;
         self.shape_selector(o + SHAPE, VX, y0, sat_w, 22.0);
-        let drive_w = (sat_w * 0.58).floor();
+        let drive_w = (sat_w * 0.5).floor();
         self.cell1(o + DRIVE, VX, y0 + 22.0, drive_w, 22.0, "DRIVE");
         self.asym_cell(b, VX + drive_w, y0 + 22.0, sat_w - drive_w, 22.0);
         self.draw_sat_plot(VX, y0 + CELL_P, sat_w, sat_w);

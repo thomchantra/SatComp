@@ -411,3 +411,21 @@ fn icon_double_click_toggles_light_and_right_click_lists_schemes() {
     }
     assert_eq!(r.params.palette_v2.load(Relaxed), 2);
 }
+
+/// ASYM sits right of DRIVE: drag lowers / wheel changes the selected band's value for the current shaper (stored in the project).
+#[test]
+fn asym_slider_writes_the_selected_shapers_value() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    assert_eq!(r.params.asym_snapshot(0)[0], 100.0);
+    r.drag(125.0, 245.0, 125.0, 265.0); // drag down = lower
+    let a = r.params.asym_snapshot(0);
+    assert!(a[0] < 100.0, "dragging ASYM changed nothing: {:?}", &a[..3]);
+    assert_eq!(a[1], 100.0, "other shapers keep their own value");
+    assert_eq!(r.params.asym_snapshot(1)[0], 100.0, "other bands keep their own value");
+    r.click(125.0, 245.0);
+    r.click(125.0, 245.0); // double-click = reset
+    assert_eq!(r.params.asym_snapshot(0)[0], 100.0);
+}
