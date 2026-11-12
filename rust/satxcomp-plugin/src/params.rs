@@ -3,6 +3,7 @@
 use nih_plug::prelude::*;
 use nih_plug_egui::EguiState;
 use satcomp_dsp::shapers::Curve;
+use satxcomp_dsp::params::SHAPER_COUNT;
 use satxcomp_dsp::{BandParams, EqBandParams, EqParams, XParams};
 use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
@@ -151,6 +152,13 @@ pub struct SatXCompParams {
     /// User-drawn waveshaper curve of the hi band (shaper 14); saved with the project and presets.
     #[persist = "custom-curve-hi"]
     pub curve_hi: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,
+    /// ASYM of the lo band, one value (0..100 %) per waveshaper; saved with the project and presets (absent = all 100 %).
+    #[persist = "asym-lo"]
+    pub asym_lo: Arc<parking_lot::Mutex<Vec<f32>>>,
+    #[persist = "asym-mid"]
+    pub asym_mid: Arc<parking_lot::Mutex<Vec<f32>>>,
+    #[persist = "asym-hi"]
+    pub asym_hi: Arc<parking_lot::Mutex<Vec<f32>>>,
     #[persist = "match-trim"]
     pub match_trim: Arc<AtomicF32>,
     #[id = "x1"]
@@ -384,6 +392,9 @@ impl Default for SatXCompParams {
             curve_lo: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             curve_mid: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             curve_hi: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
+            asym_lo: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            asym_mid: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            asym_hi: Arc::new(parking_lot::Mutex::new(Vec::new())),
             match_trim: Arc::new(AtomicF32::new(0.0)),
             x1: FloatParam::new("X-Over 1", 150.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             x2: FloatParam::new("X-Over 2", 2500.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
@@ -504,25 +515,40 @@ impl SatXCompParams {
         Curve::from_points(&m.lock())
     }
 
+    pub fn asym_cell(&self, band: usize) -> &Arc<parking_lot::Mutex<Vec<f32>>> {
+        [&self.asym_lo, &self.asym_mid, &self.asym_hi][band.min(2)]
+    }
+
+    /// ASYM per shaper of a band, sanitised (short / missing = 100 %).
+    pub fn asym_snapshot(&self, band: usize) -> [f64; SHAPER_COUNT] {
+        asym_from(&self.asym_cell(band).lock())
+    }
+
     /// Snapshot for the DSP engine (UI side: may wait briefly for the curve locks).
     pub fn to_dsp(&self) -> XParams {
-        self.to_dsp_with([self.curve_snapshot(0), self.curve_snapshot(1), self.curve_snapshot(2)])
+        let a = [self.asym_snapshot(0), self.asym_snapshot(1), self.asym_snapshot(2)];
+        self.to_dsp_with([self.curve_snapshot(0), self.curve_snapshot(1), self.curve_snapshot(2)], a)
     }
 
     /// Audio-thread snapshot: never blocks on a curve lock (the previous curve is reused while the UI holds it).
-    pub fn to_dsp_rt(&self, last: &mut [Curve; 3]) -> XParams {
+    pub fn to_dsp_rt(&self, last: &mut [Curve; 3], last_asym: &mut [[f64; SHAPER_COUNT]; 3]) -> XParams {
+        for b in 0..3 {
+            if let Some(g) = self.asym_cell(b).try_lock() {
+                last_asym[b] = asym_from(&g);
+            }
+        }
         for (b, m) in [&self.curve_lo, &self.curve_mid, &self.curve_hi].into_iter().enumerate() {
             if let Some(g) = m.try_lock() {
                 last[b] = Curve::from_points(&g);
             }
         }
-        self.to_dsp_with(*last)
+        self.to_dsp_with(*last, *last_asym)
     }
 
-    fn to_dsp_with(&self, curves: [Curve; 3]) -> XParams {
-        let lo = BandParams { curve: curves[0], on: self.lo_on.value(), solo: self.lo_solo.value(), delta: self.lo_delta.value(), shape: self.lo_shape.value(), drive: self.lo_drive.value() as f64, bias: self.lo_bias.value() as f64, tone: self.lo_tone.value() as f64, sat_mix: self.lo_sat_mix.value() as f64, sat_gain: self.lo_sat_gain.value() as f64, thresh: self.lo_thresh.value() as f64, ratio: self.lo_ratio.value() as f64, attack: self.lo_attack.value() as f64, release: self.lo_release.value() as f64, speed: self.lo_speed.value() as f64, knee: self.lo_knee.value() as f64, knee_shape: self.lo_knee_shape.value() as f64, detector: self.lo_detector.value() as f64, ff_fb: self.lo_ff_fb.value() as f64, gr_dist: self.lo_gr_dist.value() as f64, comp_mix: self.lo_comp_mix.value() as f64, comp_gain: self.lo_comp_gain.value() as f64 };
-        let mid = BandParams { curve: curves[1], on: self.mid_on.value(), solo: self.mid_solo.value(), delta: self.mid_delta.value(), shape: self.mid_shape.value(), drive: self.mid_drive.value() as f64, bias: self.mid_bias.value() as f64, tone: self.mid_tone.value() as f64, sat_mix: self.mid_sat_mix.value() as f64, sat_gain: self.mid_sat_gain.value() as f64, thresh: self.mid_thresh.value() as f64, ratio: self.mid_ratio.value() as f64, attack: self.mid_attack.value() as f64, release: self.mid_release.value() as f64, speed: self.mid_speed.value() as f64, knee: self.mid_knee.value() as f64, knee_shape: self.mid_knee_shape.value() as f64, detector: self.mid_detector.value() as f64, ff_fb: self.mid_ff_fb.value() as f64, gr_dist: self.mid_gr_dist.value() as f64, comp_mix: self.mid_comp_mix.value() as f64, comp_gain: self.mid_comp_gain.value() as f64 };
-        let hi = BandParams { curve: curves[2], on: self.hi_on.value(), solo: self.hi_solo.value(), delta: self.hi_delta.value(), shape: self.hi_shape.value(), drive: self.hi_drive.value() as f64, bias: self.hi_bias.value() as f64, tone: self.hi_tone.value() as f64, sat_mix: self.hi_sat_mix.value() as f64, sat_gain: self.hi_sat_gain.value() as f64, thresh: self.hi_thresh.value() as f64, ratio: self.hi_ratio.value() as f64, attack: self.hi_attack.value() as f64, release: self.hi_release.value() as f64, speed: self.hi_speed.value() as f64, knee: self.hi_knee.value() as f64, knee_shape: self.hi_knee_shape.value() as f64, detector: self.hi_detector.value() as f64, ff_fb: self.hi_ff_fb.value() as f64, gr_dist: self.hi_gr_dist.value() as f64, comp_mix: self.hi_comp_mix.value() as f64, comp_gain: self.hi_comp_gain.value() as f64 };
+    fn to_dsp_with(&self, curves: [Curve; 3], asyms: [[f64; SHAPER_COUNT]; 3]) -> XParams {
+        let lo = BandParams { curve: curves[0], asym: asyms[0], on: self.lo_on.value(), solo: self.lo_solo.value(), delta: self.lo_delta.value(), shape: self.lo_shape.value(), drive: self.lo_drive.value() as f64, bias: self.lo_bias.value() as f64, tone: self.lo_tone.value() as f64, sat_mix: self.lo_sat_mix.value() as f64, sat_gain: self.lo_sat_gain.value() as f64, thresh: self.lo_thresh.value() as f64, ratio: self.lo_ratio.value() as f64, attack: self.lo_attack.value() as f64, release: self.lo_release.value() as f64, speed: self.lo_speed.value() as f64, knee: self.lo_knee.value() as f64, knee_shape: self.lo_knee_shape.value() as f64, detector: self.lo_detector.value() as f64, ff_fb: self.lo_ff_fb.value() as f64, gr_dist: self.lo_gr_dist.value() as f64, comp_mix: self.lo_comp_mix.value() as f64, comp_gain: self.lo_comp_gain.value() as f64 };
+        let mid = BandParams { curve: curves[1], asym: asyms[1], on: self.mid_on.value(), solo: self.mid_solo.value(), delta: self.mid_delta.value(), shape: self.mid_shape.value(), drive: self.mid_drive.value() as f64, bias: self.mid_bias.value() as f64, tone: self.mid_tone.value() as f64, sat_mix: self.mid_sat_mix.value() as f64, sat_gain: self.mid_sat_gain.value() as f64, thresh: self.mid_thresh.value() as f64, ratio: self.mid_ratio.value() as f64, attack: self.mid_attack.value() as f64, release: self.mid_release.value() as f64, speed: self.mid_speed.value() as f64, knee: self.mid_knee.value() as f64, knee_shape: self.mid_knee_shape.value() as f64, detector: self.mid_detector.value() as f64, ff_fb: self.mid_ff_fb.value() as f64, gr_dist: self.mid_gr_dist.value() as f64, comp_mix: self.mid_comp_mix.value() as f64, comp_gain: self.mid_comp_gain.value() as f64 };
+        let hi = BandParams { curve: curves[2], asym: asyms[2], on: self.hi_on.value(), solo: self.hi_solo.value(), delta: self.hi_delta.value(), shape: self.hi_shape.value(), drive: self.hi_drive.value() as f64, bias: self.hi_bias.value() as f64, tone: self.hi_tone.value() as f64, sat_mix: self.hi_sat_mix.value() as f64, sat_gain: self.hi_sat_gain.value() as f64, thresh: self.hi_thresh.value() as f64, ratio: self.hi_ratio.value() as f64, attack: self.hi_attack.value() as f64, release: self.hi_release.value() as f64, speed: self.hi_speed.value() as f64, knee: self.hi_knee.value() as f64, knee_shape: self.hi_knee_shape.value() as f64, detector: self.hi_detector.value() as f64, ff_fb: self.hi_ff_fb.value() as f64, gr_dist: self.hi_gr_dist.value() as f64, comp_mix: self.hi_comp_mix.value() as f64, comp_gain: self.hi_comp_gain.value() as f64 };
         let eq = EqParams { bands: [EqBandParams { on: self.eq1_on.value(), ty: self.eq1_type.value(), freq: self.eq1_freq.value() as f64, q: self.eq1_q.value() as f64, gain: self.eq1_gain.value() as f64 }, EqBandParams { on: self.eq2_on.value(), ty: self.eq2_type.value(), freq: self.eq2_freq.value() as f64, q: self.eq2_q.value() as f64, gain: self.eq2_gain.value() as f64 }, EqBandParams { on: self.eq3_on.value(), ty: self.eq3_type.value(), freq: self.eq3_freq.value() as f64, q: self.eq3_q.value() as f64, gain: self.eq3_gain.value() as f64 }, EqBandParams { on: self.eq4_on.value(), ty: self.eq4_type.value(), freq: self.eq4_freq.value() as f64, q: self.eq4_q.value() as f64, gain: self.eq4_gain.value() as f64 }, EqBandParams { on: self.eq5_on.value(), ty: self.eq5_type.value(), freq: self.eq5_freq.value() as f64, q: self.eq5_q.value() as f64, gain: self.eq5_gain.value() as f64 }], tilt: self.eq_tilt.value() as f64, pivot: self.eq_pivot.value() as f64, mix: self.eq_mix.value() as f64, gain: self.eq_gain.value() as f64, bypass: self.eq_bypass.value() };
         XParams {
             x1: self.x1.value() as f64, x2: self.x2.value() as f64, x1_slope: self.x1_slope.value(), x2_slope: self.x2_slope.value(), os: self.os.value(), lookahead_ms: self.lookahead.value() as f64,
@@ -646,4 +672,15 @@ impl SatXCompParams {
             _ => return None,
         })
     }
+}
+
+/// Persisted per-shaper ASYM values -> the DSP array (missing / non-finite entries = 100 %, clamped to 0..100).
+pub fn asym_from(v: &[f32]) -> [f64; SHAPER_COUNT] {
+    let mut a = [100.0; SHAPER_COUNT];
+    for (d, s) in a.iter_mut().zip(v) {
+        if s.is_finite() {
+            *d = (*s as f64).clamp(0.0, 100.0);
+        }
+    }
+    a
 }

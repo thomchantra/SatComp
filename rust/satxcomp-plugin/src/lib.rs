@@ -88,6 +88,7 @@ pub struct SatXComp {
     engine: XEngine,
     last_latency: u32,
     last_curves: [Curve; 3],
+    last_asym: [[f64; satxcomp_dsp::params::SHAPER_COUNT]; 3],
 }
 
 impl SatXComp {
@@ -106,7 +107,7 @@ impl Default for SatXComp {
         let mut engine = XEngine::new(48000.0);
         engine.tap_out = shared.tap_out.clone();
         engine.tap_dry = shared.tap_dry.clone();
-        Self { params: Arc::new(SatXCompParams::default()), shared, engine, last_latency: u32::MAX, last_curves: [Curve::linear(); 3] }
+        Self { params: Arc::new(SatXCompParams::default()), shared, engine, last_latency: u32::MAX, last_curves: [Curve::linear(); 3], last_asym: [[100.0; satxcomp_dsp::params::SHAPER_COUNT]; 3] }
     }
 }
 
@@ -158,13 +159,13 @@ impl Plugin for SatXComp {
     fn reset(&mut self) {
         let sr = self.engine.sample_rate();
         let mut engine = self.new_engine(sr);
-        engine.set_params(&self.params.to_dsp_rt(&mut self.last_curves));
+        engine.set_params(&self.params.to_dsp_rt(&mut self.last_curves, &mut self.last_asym));
         self.engine = engine;
     }
 
     fn process(&mut self, buffer: &mut Buffer, aux: &mut AuxiliaryBuffers, context: &mut impl ProcessContext<Self>) -> ProcessStatus {
         let sh = &self.shared;
-        self.engine.set_params(&self.params.to_dsp_rt(&mut self.last_curves));
+        self.engine.set_params(&self.params.to_dsp_rt(&mut self.last_curves, &mut self.last_asym));
         let lat = self.engine.latency();
         if lat != self.last_latency {
             self.last_latency = lat;

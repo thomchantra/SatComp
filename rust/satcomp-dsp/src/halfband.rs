@@ -127,6 +127,36 @@ impl Oversampler {
     }
 }
 
+impl Oversampler {
+    /// Like `process`, plus the even part e(x) = (f(x) + f(-x)) / 2 of the shaper through the same up / down filters
+    /// (so the two are sample-aligned and `f - e` is the odd part). Returns (f, e).
+    #[inline]
+    pub fn process_fe(&mut self, taps: &Taps, lut: &ShaperLut, os: i32, x: f64, eb: &mut Oversampler) -> (f64, f64) {
+        let ev = |v: f64| 0.5 * (lut.eval(v) + lut.eval(-v));
+        match os {
+            0 => (lut.eval(x), ev(x)),
+            1 => {
+                let (a0, a1) = self.a.up(&taps.a, 24, 31, x);
+                let f = self.a.down(&taps.a, 24, 63, lut.eval(a0), lut.eval(a1));
+                let e = eb.a.down(&taps.a, 24, 63, ev(a0), ev(a1));
+                (f, e)
+            }
+            _ => {
+                let (a0, a1) = self.a.up(&taps.a, 24, 31, x);
+                let (b0, b1) = self.b.up(&taps.b, 8, 7, a0);
+                let (b2, b3) = self.b.up(&taps.b, 8, 7, a1);
+                let c0 = self.b.down(&taps.b, 8, 15, lut.eval(b0), lut.eval(b1));
+                let c1 = self.b.down(&taps.b, 8, 15, lut.eval(b2), lut.eval(b3));
+                let f = self.a.down(&taps.a, 24, 63, c0, c1);
+                let d0 = eb.b.down(&taps.b, 8, 15, ev(b0), ev(b1));
+                let d1 = eb.b.down(&taps.b, 8, 15, ev(b2), ev(b3));
+                let e = eb.a.down(&taps.a, 24, 63, d0, d1);
+                (f, e)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

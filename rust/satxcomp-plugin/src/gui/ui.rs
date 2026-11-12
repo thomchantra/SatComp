@@ -99,6 +99,8 @@ const ACT_TILT: i32 = VIEW_ACT + 11;
 const ACT_CURVE: i32 = VIEW_ACT + 20;
 /// band handle drag in the spectrum (threshold); band b is ACT_THR + b
 const ACT_THR: i32 = VIEW_ACT + 30;
+/// ASYM slider drag (one slider, follows the selected band)
+const ACT_ASYM: i32 = VIEW_ACT + 40;
 const MENU_ROWS: usize = 18;
 const MENU_ROW_H: f32 = 14.0;
 
@@ -692,6 +694,8 @@ impl<'a> Gui<'a> {
         for b in 0..3 {
             let c = Curve::from_points(p.curve(b));
             self.curve_cell(b).lock().clone_from(&c.pts().to_vec());
+            let a = crate::params::asym_from(p.asym(b));
+            *self.env.params.asym_cell(b).lock() = a.iter().map(|&v| v as f32).collect();
         }
         self.set_preset_name(&p.name);
         self.base = None;
@@ -732,7 +736,7 @@ impl<'a> Gui<'a> {
                 return true;
             }
         }
-        (0..3).any(|c| Curve::from_points(b.curve(c)) != self.env.params.curve_snapshot(c))
+        (0..3).any(|c| Curve::from_points(b.curve(c)) != self.env.params.curve_snapshot(c) || crate::params::asym_from(b.asym(c)) != self.env.params.asym_snapshot(c))
     }
 
     fn capture(&self, name: &str) -> Preset {
@@ -745,6 +749,10 @@ impl<'a> Gui<'a> {
         let curves: Vec<Curve> = (0..3).map(|b| self.env.params.curve_snapshot(b)).collect();
         if curves.iter().any(|c| *c != Curve::linear()) {
             p.curves = curves.iter().map(|c| c.pts().to_vec()).collect();
+        }
+        let asyms: Vec<[f64; satxcomp_dsp::params::SHAPER_COUNT]> = (0..3).map(|b| self.env.params.asym_snapshot(b)).collect();
+        if asyms.iter().any(|a| a.iter().any(|&v| v != 100.0)) {
+            p.asym = asyms.iter().map(|a| a.iter().map(|&v| v as f32).collect()).collect();
         }
         p
     }
@@ -1331,6 +1339,50 @@ impl<'a> Gui<'a> {
 
     // ------------------------------------------------------------------ band modules
     /// shape selector: [<] NAME [>]; click the name or right-click anywhere for the full list
+    /// ASYM of the selected band's current shaper: how much of the shaper's even part (the part that carries DC and sub-audio
+    /// pulses) is kept. One value per shaper, stored in the project / presets (not a host parameter). Drag, wheel, double-click = 100 %.
+    fn asym_cell(&mut self, b: usize, x: f32, y: f32, w: f32, h: f32) {
+        let shape = ((self.sget(band_base(b) + SHAPE) + 0.5).floor() as i32).clamp(0, CUSTOM) as usize;
+        let cell = self.env.params.asym_cell(b).clone();
+        let get = || crate::params::asym_from(&cell.lock())[shape] as f32;
+        let set = |v: f32| {
+            let mut g = cell.lock();
+            if g.len() < SHAPER_NAMES.len() {
+                g.resize(SHAPER_NAMES.len(), 100.0);
+            }
+            g[shape] = v.clamp(0.0, 100.0);
+        };
+        let hv = self.hit(x, y, w, h);
+        if hv && self.kit.press && self.kit.act == 0 {
+            if self.dbl(170 + b as i32) {
+                set(100.0);
+            } else {
+                self.kit.act = ACT_ASYM;
+                self.kit.act_t = get() * 0.01;
+            }
+            self.kit.press = false;
+        }
+        if hv && self.kit.wheel != 0 {
+            let d = if self.kit.wheel > 0 { 1.0 } else { -1.0 } * if self.kit.shift { 0.5 } else { 3.0 };
+            set((get() + d).round());
+        }
+        if self.kit.act == ACT_ASYM && self.kit.down {
+            let k = if self.kit.shift { 0.0008 } else { 0.006 };
+            self.kit.act_t = (self.kit.act_t + (self.kit.last_my - self.kit.my) * k).clamp(0.0, 1.0);
+            set((self.kit.act_t * 100.0).round());
+        }
+        let v = get();
+        let act = self.kit.act == ACT_ASYM;
+        self.setc(act);
+        self.cv.boxr(x, y, w, h);
+        self.cv.set_font(1);
+        let ty = y + ((h - 8.0) * 0.5).floor();
+        self.cv.text(x + 3.0, ty, "ASYM");
+        self.cv.textr(x, ty, w - 3.0, &format!("{:.0}%", v));
+        self.cv.fill(x + 2.0, y + h - 3.0, (((v * 0.01) * (w - 4.0)).floor()).max(1.0), 1.0);
+        self.setc(false);
+    }
+
     fn shape_selector(&mut self, n: usize, x: f32, y: f32, w: f32, h: f32) {
         let aw = 16.0;
         let cy = y + h * 0.5;
@@ -1616,6 +1668,12 @@ impl<'a> Gui<'a> {
         let pre = (bp.drive * 0.01 * 36.0 * 0.11512925).exp();
         let bias = bp.bias * 0.01;
         self.lut.sync(bp.shape, &bp.curve);
+        // static curve as heard: the shaper minus the part of its even half that ASYM removes
+        let ak = bp.asym[(bp.shape.max(0) as usize).min(bp.asym.len() - 1)] * 0.01;
+        let eff = move |l: &ShaperLut, v: f64| {
+            let r = 0.5 * (1.0 - ak);
+            l.eval(v) * (1.0 - r) - r * l.eval(-v)
+        };
         // pencil: toggles the draw view; entering selects the Custom shaper so edits are audible
         let pen = self.hit(x + w - 14.0, y + 2.0, 12.0, 12.0);
         if pen && self.kit.press && self.kit.act == 0 {
@@ -1659,7 +1717,7 @@ impl<'a> Gui<'a> {
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
             let vx = -1.0 + 2.0 * i as f64 / n as f64;
-            let mut vy = if sat_on { self.lut.eval(vx * pre + bias) } else { vx };
+            let mut vy = if sat_on { eff(&self.lut, vx * pre + bias) } else { vx };
             vy = vy.clamp(-1.0, 1.0);
             let px = x + ((vx + 1.0) * 0.5) as f32 * (w - 1.0);
             let py = y + (1.0 - ((vy + 1.0) * 0.5) as f32) * (h - 1.0);
@@ -1673,7 +1731,7 @@ impl<'a> Gui<'a> {
         if sat_on && pk > 0.002 {
             self.setc(true);
             for sgn in [1.0f64, -1.0] {
-                let vy = self.lut.eval(sgn * pk as f64 * pre + bias).clamp(-1.0, 1.0) as f32;
+                let vy = eff(&self.lut, sgn * pk as f64 * pre + bias).clamp(-1.0, 1.0) as f32;
                 let vx = sgn as f32 * pk;
                 self.cv.fill(x + (vx + 1.0) * 0.5 * (w - 1.0) - 1.0, y + (1.0 - (vy + 1.0) * 0.5) * (h - 1.0) - 1.0, 3.0, 3.0);
             }
@@ -1911,7 +1969,9 @@ impl<'a> Gui<'a> {
         let col0 = VX + VW - (3.0 * CELL_W + 12.0);
         let meter_x = col0 - 6.0 - 30.0;
         self.shape_selector(o + SHAPE, VX, y0, sat_w, 22.0);
-        self.cell1(o + DRIVE, VX, y0 + 22.0, sat_w, 22.0, "DRIVE");
+        let drive_w = (sat_w * 0.58).floor();
+        self.cell1(o + DRIVE, VX, y0 + 22.0, drive_w, 22.0, "DRIVE");
+        self.asym_cell(b, VX + drive_w, y0 + 22.0, sat_w - drive_w, 22.0);
         self.draw_sat_plot(VX, y0 + CELL_P, sat_w, sat_w);
         self.cell(o + BIAS, sat_x, rows[0], CELL_W, CELL_H, "BIAS");
         self.cell(o + TONE, sat_x, rows[1], CELL_W, CELL_H, "TONE");

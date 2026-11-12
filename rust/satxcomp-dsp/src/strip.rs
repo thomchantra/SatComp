@@ -63,7 +63,7 @@ impl Strip {
     }
 
     pub fn sat_params(p: &BandParams, os: i32) -> SatParams {
-        SatParams { shape: p.shape, curve: p.curve, drive: p.drive, bias: p.bias, hp: 20.0, lp: 20000.0, tone: p.tone, os, mix: p.sat_mix, out_db: p.sat_gain }
+        SatParams { shape: p.shape, curve: p.curve, drive: p.drive, bias: p.bias, hp: 20.0, lp: 20000.0, tone: p.tone, os, mix: p.sat_mix, out_db: p.sat_gain, asym: Some(p.asym[(p.shape.max(0) as usize).min(p.asym.len() - 1)]) }
     }
 
     pub fn comp_params(p: &BandParams, key_mix: f64) -> CompParams {

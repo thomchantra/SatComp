@@ -31,11 +31,18 @@ pub struct SatParams {
     pub mix: f64,
     /// dB
     pub out_db: f64,
+    /// Even / odd split of the shaper: `None` = the plain shaper (legacy). `Some(a)`, a in 0..100 %: output = odd part +
+    /// a * (even part high-passed at `EVEN_HP_HZ`). The even part of an asymmetric curve is what carries DC and
+    /// envelope-following sub-audio pulses (they sink the waveform into the headroom); 0 % drops it altogether.
+    pub asym: Option<f64>,
 }
+
+/// Corner of the high-pass on the even part of the shaper (2nd order), Hz.
+pub const EVEN_HP_HZ: f64 = 25.0;
 
 impl Default for SatParams {
     fn default() -> Self {
-        Self { shape: 0, curve: Curve::linear(), drive: 25.0, bias: 0.0, hp: 20.0, lp: 20000.0, tone: 20000.0, os: 0, mix: 100.0, out_db: 0.0 }
+        Self { shape: 0, curve: Curve::linear(), drive: 25.0, bias: 0.0, hp: 20.0, lp: 20000.0, tone: 20000.0, os: 0, mix: 100.0, out_db: 0.0, asym: None }
     }
 }
 
@@ -44,6 +51,11 @@ pub struct Saturator {
     lut_cnt: u32,
     taps: Taps,
     ov: [Oversampler; 2],
+    /// down-filter state of the even part (see `Oversampler::process_fe`)
+    ove: [Oversampler; 2],
+    asym_k: Option<f64>,
+    evc: Coef,
+    evs: [[f64; 2]; 2],
     pre: f64,
     pre_t: f64,
     bias: f64,
@@ -97,6 +109,10 @@ impl Saturator {
             lut_cnt: 0,
             taps: Taps::new(),
             ov: [Oversampler::default(), Oversampler::default()],
+            ove: [Oversampler::default(), Oversampler::default()],
+            asym_k: None,
+            evc: biquad::IDENTITY,
+            evs: [[0.0; 2]; 2],
             pre: 1.0,
             pre_t: 1.0,
             bias: 0.0,
@@ -168,11 +184,17 @@ impl Saturator {
         if self.use_tone {
             self.tnc = biquad::lp(p.tone, 0.70710678, sr);
         }
+        self.asym_k = p.asym.map(|a| (a * 0.01).clamp(0.0, 1.0));
+        if self.asym_k.is_some() {
+            self.evc = biquad::hp(EVEN_HP_HZ, 0.70710678, sr);
+        }
         self.os = (p.os as f64 + 0.5).floor() as i32;
         if self.os != self.last_os {
             self.last_os = self.os;
             self.ov[0].clear();
             self.ov[1].clear();
+            self.ove[0].clear();
+            self.ove[1].clear();
             self.res.clear();
         }
         self.lat = match self.os {
@@ -245,12 +267,28 @@ impl Saturator {
             let rd_res = self.res.tap(self.lat);
             for c in 0..2 {
                 let xin = bp[c] * self.pre + self.bias;
-                if self.dc_warm {
-                    for _ in 0..256 {
-                        self.ov[c].process(&self.taps, &self.lut, self.os, xin);
+                let sh = if let Some(k) = self.asym_k {
+                    if self.dc_warm {
+                        for _ in 0..256 {
+                            self.ov[c].process_fe(&self.taps, &self.lut, self.os, xin, &mut self.ove[c]);
+                        }
                     }
-                }
-                let sh = self.ov[c].process(&self.taps, &self.lut, self.os, xin);
+                    let (f, e) = self.ov[c].process_fe(&self.taps, &self.lut, self.os, xin, &mut self.ove[c]);
+                    if self.dc_warm {
+                        // settle the even-part high-pass on its constant input (output 0)
+                        for _ in 0..16384 {
+                            bq(&mut self.evs[c], &self.evc, e);
+                        }
+                    }
+                    f - e + k * bq(&mut self.evs[c], &self.evc, e)
+                } else {
+                    if self.dc_warm {
+                        for _ in 0..256 {
+                            self.ov[c].process(&self.taps, &self.lut, self.os, xin);
+                        }
+                    }
+                    self.ov[c].process(&self.taps, &self.lut, self.os, xin)
+                };
                 if self.dc_warm {
                     self.dcx[c] = sh;
                     self.dcy[c] = 0.0;
@@ -275,5 +313,51 @@ impl Saturator {
         ms_step(&mut self.ms, cc[0], cc[1], self.ms_c);
         self.gain += (self.gain_t - self.gain) * self.gain_c;
         [cc[0] * self.gain, cc[1] * self.gain]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shapers::CUSTOM;
+
+    /// Kick-like loop through the user's zig-zag custom curve: (min of the 20 Hz low-passed output, peak) per ASYM setting.
+    fn run(asym: Option<f64>, os: i32) -> (f64, f64, f64) {
+        let sr = 48000.0;
+        let curve = Curve::from_points(&[(-1.0, -1.0), (-0.6, -0.2), (-0.35, -0.8), (0.0, 0.1), (0.3, 0.7), (0.5, 0.1), (0.8, 0.8), (1.0, 0.9)]);
+        let p = SatParams { shape: CUSTOM, curve, drive: 16.0, bias: 0.0, os, mix: 100.0, asym, ..SatParams::default() };
+        let mut s = Saturator::new();
+        s.derive(&p, sr, true, false);
+        let lp = biquad::lp(6.0, 0.70710678, sr);
+        let (mut st, mut lo, mut hi, mut pk) = ([0.0; 2], 0.0f64, 0.0f64, 0.0f64);
+        let n = (sr * 2.0) as usize;
+        for i in 0..n {
+            let t = (i as f64 / sr) % 0.345;
+            let f = 55.0 + 90.0 * (-t / 0.02).exp();
+            let ph = 2.0 * PI * (55.0 * t + 90.0 * 0.02 * (1.0 - (-t / 0.02).exp()));
+            let _ = f;
+            let x = 0.9 * (-t / 0.08).exp() * ph.sin() + 0.1 * (2.0 * PI * 3000.0 * i as f64 / sr).sin() * (-t / 0.1).exp();
+            let y = if asym == Some(-1.0) { x } else { s.tick([x, x], false)[0] };
+            let l = bq(&mut st, &lp, y);
+            if i > n / 2 {
+                lo = lo.min(l);
+                hi = hi.max(l);
+                pk = pk.max(y.abs());
+            }
+        }
+        (lo, hi, pk)
+    }
+
+    #[test]
+    fn asym_tames_sub_audio_offset_of_a_lopsided_curve() {
+        for os in [0, 2] {
+            let legacy = run(None, os);
+            let full = run(Some(100.0), os);
+            let none = run(Some(0.0), os);
+            eprintln!("input only {:?}", run(Some(-1.0), os));
+            eprintln!("os {os}: legacy {legacy:?}  asym100 {full:?}  asym0 {none:?}");
+            let swing = |r: (f64, f64, f64)| r.1 - r.0;
+            assert!(swing(full) < 0.5 * swing(legacy), "asym 100 low-passed swing {full:?} vs legacy {legacy:?}");
+        }
     }
 }

@@ -24,11 +24,14 @@ pub struct Preset {
     /// Custom waveshaper curve points of the low, mid and high band (absent / empty = all linear).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curves: Vec<Vec<(f32, f32)>>,
+    /// ASYM (0..100 %) per waveshaper of the low, mid and high band (absent / empty = all 100 %).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asym: Vec<Vec<f32>>,
 }
 
 impl Preset {
     pub fn new(name: &str, params: BTreeMap<String, f32>) -> Self {
-        Self { format: "satxcomp-preset".into(), version: 1, name: name.into(), params, curves: Vec::new() }
+        Self { format: "satxcomp-preset".into(), version: 1, name: name.into(), params, curves: Vec::new(), asym: Vec::new() }
     }
 
     /// All defaults.
@@ -44,6 +47,11 @@ impl Preset {
 
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+
+    /// ASYM values of band `b` (empty slice = all 100 %).
+    pub fn asym(&self, b: usize) -> &[f32] {
+        self.asym.get(b).map(|v| &v[..]).unwrap_or(&[])
     }
 
     /// Curve points of band `b` (empty slice = linear).
@@ -171,6 +179,21 @@ mod tests {
         assert!(q.curve(1).is_empty() && q.curve(7).is_empty());
         let old = r#"{"format":"satxcomp-preset","version":1,"name":"x","params":{}}"#;
         assert!(Preset::from_json(old).unwrap().curves.is_empty());
+    }
+
+    #[test]
+    fn asym_roundtrips_and_old_presets_load_without_it() {
+        let mut p = Preset::init();
+        assert!(!p.to_json().contains("asym"), "not written when unused");
+        p.asym = vec![vec![100.0, 40.0], vec![], vec![0.0]];
+        let q = Preset::from_json(&p.to_json()).unwrap();
+        assert_eq!(q.asym, p.asym);
+        assert_eq!(q.asym(0)[1], 40.0);
+        assert!(q.asym(1).is_empty() && q.asym(9).is_empty());
+        let a = crate::params::asym_from(q.asym(0));
+        assert_eq!((a[0], a[1], a[14]), (100.0, 40.0, 100.0));
+        let old = r#"{"format":"satxcomp-preset","version":1,"name":"x","params":{}}"#;
+        assert!(Preset::from_json(old).unwrap().asym.is_empty());
     }
 
     #[test]

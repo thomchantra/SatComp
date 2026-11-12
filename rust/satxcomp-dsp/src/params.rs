@@ -2,6 +2,9 @@
 
 use satcomp_dsp::shapers::Curve;
 
+/// Number of waveshapers (14 built-in + custom).
+pub const SHAPER_COUNT: usize = 15;
+
 /// One band's saturator + compressor + output stage.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct BandParams {
@@ -14,6 +17,8 @@ pub struct BandParams {
     // SAT
     pub shape: i32,
     pub curve: Curve,
+    /// ASYM per shaper (0..100 %: how much of the shaper's even part is kept, see `SatParams::asym`); the active one is `asym[shape]`
+    pub asym: [f64; SHAPER_COUNT],
     pub drive: f64,
     pub bias: f64,
     pub tone: f64,
@@ -44,6 +49,7 @@ impl Default for BandParams {
             delta: false,
             shape: 0,
             curve: Curve::linear(),
+            asym: [100.0; SHAPER_COUNT],
             drive: 0.0,
             bias: 0.0,
             tone: 20000.0,

@@ -89,6 +89,7 @@ impl Params {
             os: self.os,
             mix: self.sat_mix,
             out_db: self.sat_out,
+            asym: None,
         }
     }
 
