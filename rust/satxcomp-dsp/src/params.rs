@@ -21,6 +21,9 @@ pub struct BandParams {
     pub drive: f64,
     pub bias: f64,
     pub tone: f64,
+    /// saturator input high-pass / low-pass, Hz (20 / 20000 = off)
+    pub hp: f64,
+    pub lp: f64,
     pub sat_mix: f64,
     pub sat_gain: f64,
     // COMP
@@ -52,6 +55,8 @@ impl Default for BandParams {
             drive: 0.0,
             bias: 0.0,
             tone: 20000.0,
+            hp: 20.0,
+            lp: 20000.0,
             sat_mix: 100.0,
             sat_gain: 0.0,
             thresh: 0.0,
@@ -111,12 +116,14 @@ impl Default for EqParams {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct XParams {
-    /// crossover frequencies, Hz (x2 is kept above x1)
+    /// crossover frequencies, Hz (each is kept above the one below)
     pub x1: f64,
     pub x2: f64,
+    pub x3: f64,
     /// crossover slopes: 0 = 12, 1 = 24, 2 = 48, 3 = 96 dB/oct
     pub x1_slope: i32,
     pub x2_slope: i32,
+    pub x3_slope: i32,
     /// saturator oversampling: 0 off, 1 x2, 2 x4
     pub os: i32,
     pub lookahead_ms: f64,
@@ -127,7 +134,7 @@ pub struct XParams {
     pub sc_lp: f64,
     /// 0..100 %: how much of every band's detector level comes from the key instead of the band's own signal
     pub key_mix: f64,
-    pub bands: [BandParams; 3],
+    pub bands: [BandParams; crate::xover::NB],
     pub eq: EqParams,
     /// 0..100 % dry/wet of the whole plug-in
     pub mix: f64,
@@ -142,9 +149,11 @@ impl Default for XParams {
     fn default() -> Self {
         Self {
             x1: 150.0,
-            x2: 2500.0,
+            x2: 800.0,
+            x3: 3500.0,
             x1_slope: 1,
             x2_slope: 1,
+            x3_slope: 1,
             os: 0,
             lookahead_ms: 0.0,
             sc_on: false,
@@ -152,7 +161,7 @@ impl Default for XParams {
             sc_hp: 20.0,
             sc_lp: 20000.0,
             key_mix: 100.0,
-            bands: [BandParams::default(); 3],
+            bands: [BandParams::default(); crate::xover::NB],
             eq: EqParams::default(),
             mix: 100.0,
             out_gain: 0.0,

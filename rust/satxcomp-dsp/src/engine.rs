@@ -1,10 +1,10 @@
-//! SatXComp signal path: LR4 3-way split -> per band [saturator -> compressor -> comp mix/gain] -> sum (solo / delta) ->
+//! SatXComp signal path: LR4 4-way split -> per band [saturator -> compressor -> comp mix/gain] -> sum (solo / delta) ->
 //! 5-band EQ (+ tilt, mix, gain) -> dry/wet mix -> out gain -> equal-loudness bypass.
 //! Meters and match logic follow `satcomp_dsp::Engine`.
 
 use crate::params::{eq_kind, EqParams, XParams};
 use crate::strip::Strip;
-use crate::xover::Crossover3;
+use crate::xover::{Crossover4, NB};
 use satcomp_dsp::biquad::eq_coef;
 use satcomp_dsp::delay::StereoDelay;
 use satcomp_dsp::eq::{EqBank, EqSection};
@@ -42,16 +42,16 @@ pub struct XEngine {
     snap: bool,
     first_set: bool,
 
-    xo: Crossover3,
+    xo: Crossover4,
     /// the external key: conditioned globally, then split by its own copy of the crossover into one slice per band
     key: KeyInput,
-    key_xo: Crossover3,
+    key_xo: Crossover4,
     /// the host gave a sidechain bus this block
     pub sc_avail: bool,
     /// monitor the conditioned key instead of the output (UI toggle)
     pub sc_solo: bool,
     sc_s: f64,
-    pub strips: [Strip; 3],
+    pub strips: [Strip; NB],
     eq: EqSection<EQ_FILTERS>,
     eq_mix: f64,
     eq_mix_t: f64,
@@ -61,8 +61,8 @@ pub struct XEngine {
     mon_s: StereoDelay<256>,
     la_s: usize,
     any_solo: bool,
-    d_s: [f64; 3],
-    solo_s: [f64; 3],
+    d_s: [f64; NB],
+    solo_s: [f64; NB],
     sm_c: f64,
 
     og: f64,
@@ -111,12 +111,12 @@ pub struct XEngine {
     pub opk: [f64; 2],
     pub clip_f: bool,
     /// per band: gain reduction (dB) of the current block / peak since the owner last cleared it
-    pub gr_blk: [f64; 3],
-    pub gr_pk: [f64; 3],
+    pub gr_blk: [f64; NB],
+    pub gr_pk: [f64; NB],
     /// decaying peak of each band's saturator input (for the live marker on the transfer plot)
-    pub sat_vz: [f64; 3],
+    pub sat_vz: [f64; NB],
     /// per band peak of the saturator output, accumulated until the plug-in wrapper takes it (like `gr_pk`)
-    pub sat_out: [f64; 3],
+    pub sat_out: [f64; NB],
     pub fms: f64,
     /// Peak limiter gain reduction (dB, positive) since the shell last took it.
     pub lim_gr_pk: f64,
@@ -132,13 +132,13 @@ impl XEngine {
             smoothing: true,
             snap: true,
             first_set: true,
-            xo: Crossover3::new(),
+            xo: Crossover4::new(),
             key: KeyInput::new(),
-            key_xo: Crossover3::new(),
+            key_xo: Crossover4::new(),
             sc_avail: false,
             sc_solo: false,
             sc_s: 0.0,
-            strips: [Strip::new(), Strip::new(), Strip::new()],
+            strips: [Strip::new(), Strip::new(), Strip::new(), Strip::new()],
             eq: EqSection::default(),
             eq_mix: 1.0,
             eq_mix_t: 1.0,
@@ -147,8 +147,8 @@ impl XEngine {
             mon_s: StereoDelay::new(),
             la_s: 0,
             any_solo: false,
-            d_s: [0.0; 3],
-            solo_s: [1.0; 3],
+            d_s: [0.0; NB],
+            solo_s: [1.0; NB],
             sm_c: 0.0,
             og: 1.0,
             og_t: 1.0,
@@ -188,10 +188,10 @@ impl XEngine {
             sc_len: 96,
             opk: [0.0; 2],
             clip_f: false,
-            gr_blk: [0.0; 3],
-            gr_pk: [0.0; 3],
-            sat_vz: [0.0; 3],
-            sat_out: [0.0; 3],
+            gr_blk: [0.0; NB],
+            gr_pk: [0.0; NB],
+            sat_vz: [0.0; NB],
+            sat_out: [0.0; NB],
             fms: 1e-9,
             lim_gr_pk: 0.0,
         };
@@ -255,10 +255,12 @@ impl XEngine {
         self.sc_len = ((sr * ScopeRing::BUCKET_S).round() as u32).max(1);
         let snap = self.snap;
         self.la_s = ((p.lookahead_ms * 0.001 * sr + 0.5).floor().max(0.0) as usize).min(1900);
-        self.xo.set(p.x1, p.x2, p.x1_slope.clamp(0, 3) as usize, p.x2_slope.clamp(0, 3) as usize, sr, snap);
-        self.key_xo.set(p.x1, p.x2, p.x1_slope.clamp(0, 3) as usize, p.x2_slope.clamp(0, 3) as usize, sr, snap);
+        let xf = [p.x1, p.x2, p.x3];
+        let xs = [p.x1_slope, p.x2_slope, p.x3_slope].map(|v| v.clamp(0, 3) as usize);
+        self.xo.set(xf, xs, sr, snap);
+        self.key_xo.set(xf, xs, sr, snap);
         self.key.derive(p.sc_gain, p.sc_hp, p.sc_lp, sr);
-        for b in 0..3 {
+        for b in 0..NB {
             self.strips[b].derive(&p.bands[b], p.os, self.la_s, p.key_mix, sr, snap, self.smoothing);
         }
         self.any_solo = p.bands.iter().any(|b| b.solo);
@@ -320,13 +322,13 @@ impl XEngine {
         }
         let trim = if self.match_on { self.match_trim } else { 0.0 };
         self.og_t = ((self.p.out_gain + trim) * LN10_20).exp();
-        for b in 0..3 {
+        for b in 0..NB {
             self.gr_blk[b] = self.strips[b].gr_blk;
             self.gr_pk[b] = self.gr_pk[b].max(self.gr_blk[b]);
             self.strips[b].gr_blk = 0.0;
         }
         let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
-        for b in 0..3 {
+        for b in 0..NB {
             self.sat_vz[b] = self.strips[b].sat.blk.max(self.sat_vz[b] * vz_d);
             self.strips[b].sat.blk = 0.0;
             self.sat_out[b] = self.sat_out[b].max(self.strips[b].sat_pk);
@@ -393,7 +395,7 @@ impl XEngine {
         let mut gmax = 0.0f64;
         let gdelta = if self.delta_on { 1.0 } else { 0.0 };
         self.gd_s += (gdelta - self.gd_s) * self.byp_c;
-        for b in 0..3 {
+        for b in 0..NB {
             let o = self.strips[b].tick(bands[b], self.smoothing, kb.map(|k| k[b]));
             if self.p.bands[b].on {
                 gmax = gmax.max(o.g);
@@ -526,15 +528,16 @@ mod tests {
     #[test]
     fn neutral_engine_stays_flat_at_every_crossover_slope() {
         let x = noise(48000, 5);
-        for (s1, s2) in [(0, 0), (0, 3), (2, 1), (3, 3)] {
+        for (s1, s2, s3) in [(0, 0, 0), (0, 3, 1), (2, 1, 0), (3, 3, 3)] {
             let mut p = neutral();
             p.x1_slope = s1;
             p.x2_slope = s2;
+            p.x3_slope = s3;
             let mut e = XEngine::new(SR);
             e.set_params(&p);
             let y = run(&mut e, &x);
             let g = 20.0 * (rms(&y[6000..]) / rms(&x[6000..])).log10();
-            assert!(g.abs() < 0.1, "slopes {s1}/{s2}: {g} dB");
+            assert!(g.abs() < 0.1, "slopes {s1}/{s2}/{s3}: {g} dB");
         }
     }
 
@@ -544,17 +547,20 @@ mod tests {
         let amp = 0.5;
         let w = 2.0 * PI * 330.0 / SR;
         let tone: Vec<f64> = (0..48000).map(|i| amp * (w * i as f64).sin()).collect();
-        for (from, to) in [((1, 1), (2, 1)), ((1, 1), (0, 1)), ((0, 0), (3, 3)), ((3, 3), (1, 1))] {
+        for (from, to) in [((1, 1, 1), (2, 1, 1)), ((1, 1, 1), (0, 1, 0)), ((0, 0, 0), (3, 3, 3)), ((3, 3, 3), (1, 1, 1))] {
             let mut p = neutral();
             p.x1 = 200.0;
-            p.x2 = 2500.0;
+            p.x2 = 1200.0;
+            p.x3 = 5000.0;
             p.x1_slope = from.0;
             p.x2_slope = from.1;
+            p.x3_slope = from.2;
             let mut e = XEngine::new(SR);
             e.set_params(&p);
             let mut y = run(&mut e, &tone[..24000]);
             p.x1_slope = to.0;
             p.x2_slope = to.1;
+            p.x3_slope = to.2;
             e.set_params(&p);
             y.extend(run(&mut e, &tone[24000..]));
             let worst = y.windows(2).skip(8000).map(|d| (d[1] - d[0]).abs()).fold(0.0, f64::max);
@@ -565,12 +571,12 @@ mod tests {
 
     #[test]
     fn a_band_only_affects_its_own_range() {
-        // compress only the mid band hard: a low tone is untouched, a mid tone is reduced
+        // compress only the high-mid band hard: a low tone is untouched, a tone inside the band is reduced
         let tone = |f: f64| (0..48000).map(|i| 0.5 * (2.0 * PI * f * i as f64 / SR).sin()).collect::<Vec<f64>>();
         let mut p = neutral();
-        p.bands[1].thresh = -30.0;
-        p.bands[1].ratio = 20.0;
-        let (lo, mid) = (tone(60.0), tone(900.0));
+        p.bands[2].thresh = -30.0;
+        p.bands[2].ratio = 20.0;
+        let (lo, mid) = (tone(60.0), tone(1800.0));
         let (mut e1, mut e2) = (XEngine::new(SR), XEngine::new(SR));
         e1.set_params(&p);
         e2.set_params(&p);
@@ -740,7 +746,7 @@ mod tests {
         e.set_params(&neutral());
         run(&mut e, &tone);
         assert!((e.sat_out[0] - 0.5).abs() < 0.1, "low band peak: {}", e.sat_out[0]);
-        assert!(e.sat_out[1] < 0.1 && e.sat_out[2] < 0.05, "other bands only see leakage: {:?}", e.sat_out);
+        assert!(e.sat_out[1] < 0.1 && e.sat_out[2] < 0.05 && e.sat_out[3] < 0.05, "other bands only see leakage: {:?}", e.sat_out);
         // hot sat gain pushes the post-sat peak over full scale (what the clip indicator watches)
         let mut p = neutral();
         p.bands[0].sat_gain = 12.0;
@@ -761,7 +767,7 @@ mod tests {
         e.set_params(&p);
         run(&mut e, &tone);
         assert!((e.sat_vz[0] - 0.4).abs() < 0.08, "low band sees the 50 Hz tone: {}", e.sat_vz[0]);
-        assert!(e.sat_vz[1] < 0.02 && e.sat_vz[2] < 0.02, "other bands stay quiet: {:?}", e.sat_vz);
+        assert!(e.sat_vz[1] < 0.02 && e.sat_vz[2] < 0.02 && e.sat_vz[3] < 0.02, "other bands stay quiet: {:?}", e.sat_vz);
     }
 
     fn sine(n: usize, f: f64, amp: f64) -> Vec<f64> {

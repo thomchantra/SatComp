@@ -1,7 +1,8 @@
-//! 3-way Linkwitz-Riley crossover: low / mid / high that sum back to a flat magnitude (all-pass) response.
+//! 4-way Linkwitz-Riley crossover: low / low-mid / high-mid / high that sum back to a flat magnitude (all-pass) response.
 //!
-//! Split 1 at `f1` (LP = low, HP = rest), split 2 at `f2` on the rest (LP = mid, HP = high).
-//! The low band takes an all-pass at `f2` so all three bands have the same phase response and sum flat.
+//! Split 1 at `f1` (LP = low, HP = rest), split 2 at `f2` on the rest (LP = low-mid, HP = rest), split 3 at `f3` on that rest
+//! (LP = high-mid, HP = high). Lower bands take all-passes at the splits they do not pass through, so all four bands have
+//! the same phase response and sum flat.
 //! Each split has its own slope: 12 / 24 / 48 / 96 dB/oct = Butterworth order m = 1 / 2 / 4 / 8 squared (Linkwitz-Riley).
 //! LR2 (12 dB/oct) only sums flat with its high side inverted, so the engine sums the bands with `signs()`; the bands
 //! themselves keep their natural polarity (so asymmetric saturation behaves the same at every slope).
@@ -9,6 +10,10 @@
 
 use satcomp_dsp::biquad::{allpass, bq, hp, lp, Coef, IDENTITY};
 use std::f64::consts::PI;
+
+/// Number of bands (and `NB - 1` crossover splits).
+pub const NB: usize = 4;
+const NS: usize = NB - 1;
 
 /// Butterworth section Qs per order (order 1 is a first-order section, handled separately).
 const Q2: [f64; 1] = [0.707_106_781_186_547_5];
@@ -20,12 +25,18 @@ pub const SLOPES: usize = 4;
 pub const SLOPE_DB: [u32; SLOPES] = [12, 24, 48, 96];
 const MAX_SEC: usize = 8; // LR8x2: 4 biquads, squared
 const AP_SEC: usize = 4;
-const LP1: usize = 0;
-const HP1: usize = MAX_SEC;
-const LP2: usize = 2 * MAX_SEC;
-const HP2: usize = 3 * MAX_SEC;
-const AP2: usize = 4 * MAX_SEC;
-const N: usize = 4 * MAX_SEC + AP_SEC;
+/// filter slots: per split an LP chain then an HP chain, then the all-pass chains
+/// (low band at splits 2 and 3, low-mid band at split 3)
+const fn lp_at(s: usize) -> usize {
+    2 * s * MAX_SEC
+}
+const fn hp_at(s: usize) -> usize {
+    (2 * s + 1) * MAX_SEC
+}
+const AP0: usize = 2 * NS * MAX_SEC;
+/// all-pass chains: [low @ split 2, low @ split 3, low-mid @ split 3]
+const N_AP: usize = 3;
+const N: usize = AP0 + N_AP * AP_SEC;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
@@ -78,54 +89,51 @@ fn fill(out: &mut [Coef], kind: Kind, f: f64, slope: usize, repeat: usize, sr: f
 }
 
 struct Core {
-    slopes: (usize, usize),
+    slopes: [usize; NS],
     cur: [Coef; N],
     tgt: [Coef; N],
     delta: [Coef; N],
     st: [[[f64; 2]; 2]; N],
     ramping: bool,
-    sign_cur: [f64; 3],
-    sign_tgt: [f64; 3],
-    sign_delta: [f64; 3],
+    sign_cur: [f64; NB],
+    sign_tgt: [f64; NB],
+    sign_delta: [f64; NB],
 }
 
 impl Core {
     fn new() -> Self {
         Self {
-            slopes: (1, 1),
+            slopes: [1; NS],
             cur: [IDENTITY; N],
             tgt: [IDENTITY; N],
             delta: [[0.0; 5]; N],
             st: [[[0.0; 2]; 2]; N],
             ramping: false,
-            sign_cur: [1.0; 3],
-            sign_tgt: [1.0; 3],
-            sign_delta: [0.0; 3],
+            sign_cur: [1.0; NB],
+            sign_tgt: [1.0; NB],
+            sign_delta: [0.0; NB],
         }
-    }
-
-    /// Per-band polarity the engine multiplies each band with when summing (-1 only for the 12 dB/oct high sides).
-    #[inline]
-    fn signs(&self) -> [f64; 3] {
-        self.sign_cur
     }
 
     /// New crossover frequencies and slopes (0..3 = 12 / 24 / 48 / 96 dB/oct); `snap` jumps to them (first parameter set),
     /// otherwise they glide over the next block.
-    fn set(&mut self, f1: f64, f2: f64, s1: usize, s2: usize, sr: f64, snap: bool) {
-        self.slopes = (s1, s2);
-        fill(&mut self.tgt[LP1..HP1], Kind::Lp, f1, s1, 2, sr);
-        fill(&mut self.tgt[HP1..LP2], Kind::Hp, f1, s1, 2, sr);
-        fill(&mut self.tgt[LP2..HP2], Kind::Lp, f2, s2, 2, sr);
-        fill(&mut self.tgt[HP2..AP2], Kind::Hp, f2, s2, 2, sr);
-        fill(&mut self.tgt[AP2..N], Kind::Ap, f2, s2, 1, sr);
-        let (g1, g2) = (if s1 == 0 { -1.0 } else { 1.0 }, if s2 == 0 { -1.0 } else { 1.0 });
-        self.sign_tgt = [1.0, g1, g1 * g2];
+    fn set(&mut self, f: [f64; NS], s: [usize; NS], sr: f64, snap: bool) {
+        self.slopes = s;
+        for k in 0..NS {
+            fill(&mut self.tgt[lp_at(k)..lp_at(k) + MAX_SEC], Kind::Lp, f[k], s[k], 2, sr);
+            fill(&mut self.tgt[hp_at(k)..hp_at(k) + MAX_SEC], Kind::Hp, f[k], s[k], 2, sr);
+        }
+        // all-passes: low band at splits 2 and 3, low-mid band at split 3
+        for (i, k) in [1usize, 2, 2].into_iter().enumerate() {
+            fill(&mut self.tgt[AP0 + i * AP_SEC..AP0 + (i + 1) * AP_SEC], Kind::Ap, f[k], s[k], 1, sr);
+        }
+        let g = |k: usize| if s[k] == 0 { -1.0 } else { 1.0 };
+        self.sign_tgt = [1.0, g(0), g(0) * g(1), g(0) * g(1) * g(2)];
         if snap {
             self.cur = self.tgt;
             self.delta = [[0.0; 5]; N];
             self.sign_cur = self.sign_tgt;
-            self.sign_delta = [0.0; 3];
+            self.sign_delta = [0.0; NB];
             self.ramping = false;
         }
     }
@@ -147,7 +155,7 @@ impl Core {
                 moving = true;
             }
         }
-        for b in 0..3 {
+        for b in 0..NB {
             let d = self.sign_tgt[b] - self.sign_cur[b];
             if d.abs() < 1e-12 {
                 self.sign_cur[b] = self.sign_tgt[b];
@@ -173,28 +181,32 @@ impl Core {
         x
     }
 
-    /// One stereo sample -> natural-polarity [low, mid, high], each [l, r] (sum them with `signs()`).
+    /// One stereo sample -> natural-polarity bands (low .. high), each [l, r] (sum them with the engine's `signs()`).
     #[inline]
-    fn tick(&mut self, x: [f64; 2]) -> [[f64; 2]; 3] {
+    fn tick(&mut self, x: [f64; 2]) -> [[f64; 2]; NB] {
         if self.ramping {
             for f in 0..N {
                 for i in 0..5 {
                     self.cur[f][i] += self.delta[f][i];
                 }
             }
-            for b in 0..3 {
+            for b in 0..NB {
                 self.sign_cur[b] += self.sign_delta[b];
             }
         }
-        let mut out = [[0.0f64; 2]; 3];
+        let mut out = [[0.0f64; 2]; NB];
         for c in 0..2 {
-            let low = self.chain(LP1, MAX_SEC, c, x[c]);
-            let rest = self.chain(HP1, MAX_SEC, c, x[c]);
-            let mid = self.chain(LP2, MAX_SEC, c, rest);
-            let high = self.chain(HP2, MAX_SEC, c, rest);
-            out[0][c] = self.chain(AP2, AP_SEC, c, low);
-            out[1][c] = mid;
-            out[2][c] = high;
+            let low = self.chain(lp_at(0), MAX_SEC, c, x[c]);
+            let rest1 = self.chain(hp_at(0), MAX_SEC, c, x[c]);
+            let ml = self.chain(lp_at(1), MAX_SEC, c, rest1);
+            let rest2 = self.chain(hp_at(1), MAX_SEC, c, rest1);
+            let mh = self.chain(lp_at(2), MAX_SEC, c, rest2);
+            let high = self.chain(hp_at(2), MAX_SEC, c, rest2);
+            let low = self.chain(AP0, AP_SEC, c, low);
+            out[0][c] = self.chain(AP0 + AP_SEC, AP_SEC, c, low);
+            out[1][c] = self.chain(AP0 + 2 * AP_SEC, AP_SEC, c, ml);
+            out[2][c] = mh;
+            out[3][c] = high;
         }
         out
     }
@@ -205,37 +217,39 @@ const HIST: usize = 4096;
 /// Length of the crossfade when a slope changes (about 10 ms at 48 kHz).
 const FADE: usize = 512;
 
-/// The 3-way crossover. A frequency change glides the filter coefficients; a slope change builds the new crossover next to
+/// The 4-way crossover. A frequency change glides the filter coefficients; a slope change builds the new crossover next to
 /// the old one (warmed up on recent input) and crossfades, because the two have different filter structures.
-pub struct Crossover3 {
+pub struct Crossover4 {
     core: Core,
     old: Option<Core>,
     fade: usize,
     hist: Box<[[f64; 2]; HIST]>,
     hpos: usize,
-    sign_mix: [f64; 3],
+    sign_mix: [f64; NB],
 }
 
-impl Default for Crossover3 {
+impl Default for Crossover4 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Crossover3 {
+impl Crossover4 {
     pub fn new() -> Self {
-        Self { core: Core::new(), old: None, fade: 0, hist: Box::new([[0.0; 2]; HIST]), hpos: 0, sign_mix: [1.0; 3] }
+        Self { core: Core::new(), old: None, fade: 0, hist: Box::new([[0.0; 2]; HIST]), hpos: 0, sign_mix: [1.0; NB] }
     }
 
-    /// Clamp the pair so f1 < f2 with at least a 5 % gap.
-    pub fn order(f1: f64, f2: f64) -> (f64, f64) {
-        let f1 = f1.clamp(20.0, 19000.0);
-        (f1, f2.max(f1 * 1.05).min(20000.0))
+    /// Clamp the frequencies so f1 < f2 < f3, each at least a 5 % gap above the one below.
+    pub fn order(f: [f64; NS]) -> [f64; NS] {
+        let f1 = f[0].clamp(20.0, 18000.0);
+        let f2 = f[1].max(f1 * 1.05).min(19000.0);
+        let f3 = f[2].max(f2 * 1.05).min(20000.0);
+        [f1, f2, f3]
     }
 
     /// Per-band polarity the engine multiplies each band with when summing (-1 only for the 12 dB/oct high sides).
     #[inline]
-    pub fn signs(&self) -> [f64; 3] {
+    pub fn signs(&self) -> [f64; NB] {
         self.sign_mix
     }
 
@@ -246,16 +260,16 @@ impl Crossover3 {
 
     /// New crossover frequencies and slopes (0..3 = 12 / 24 / 48 / 96 dB/oct); `snap` jumps to them (first parameter set).
     /// Otherwise frequencies glide over the next block and a slope change crossfades.
-    pub fn set(&mut self, f1: f64, f2: f64, slope1: usize, slope2: usize, sr: f64, snap: bool) {
-        let (f1, f2) = Self::order(f1, f2);
-        let (s1, s2) = (slope1.min(SLOPES - 1), slope2.min(SLOPES - 1));
+    pub fn set(&mut self, freqs: [f64; NS], slopes: [usize; NS], sr: f64, snap: bool) {
+        let f = Self::order(freqs);
+        let s = slopes.map(|v| v.min(SLOPES - 1));
         if snap {
             self.old = None;
-            self.core.set(f1, f2, s1, s2, sr, true);
+            self.core.set(f, s, sr, true);
             self.sign_mix = self.core.sign_cur;
-        } else if (s1, s2) != self.core.slopes {
+        } else if s != self.core.slopes {
             let mut fresh = Core::new();
-            fresh.set(f1, f2, s1, s2, sr, true);
+            fresh.set(f, s, sr, true);
             // warm it up on the last HIST input samples, oldest first
             for k in 0..HIST {
                 let _ = fresh.tick(self.hist[(self.hpos + k) % HIST]);
@@ -263,7 +277,7 @@ impl Crossover3 {
             self.old = Some(std::mem::replace(&mut self.core, fresh));
             self.fade = 0;
         } else {
-            self.core.set(f1, f2, s1, s2, sr, false);
+            self.core.set(f, s, sr, false);
         }
     }
 
@@ -275,9 +289,9 @@ impl Crossover3 {
         }
     }
 
-    /// One stereo sample -> natural-polarity [low, mid, high], each [l, r] (sum them with `signs()`).
+    /// One stereo sample -> natural-polarity bands (low .. high), each [l, r] (sum them with `signs()`).
     #[inline]
-    pub fn tick(&mut self, x: [f64; 2]) -> [[f64; 2]; 3] {
+    pub fn tick(&mut self, x: [f64; 2]) -> [[f64; 2]; NB] {
         self.hist[self.hpos] = x;
         self.hpos = (self.hpos + 1) % HIST;
         let new = self.core.tick(x);
@@ -287,8 +301,8 @@ impl Crossover3 {
         };
         let a = (self.fade + 1) as f64 / FADE as f64;
         let prev = old.tick(x);
-        let mut out = [[0.0f64; 2]; 3];
-        for b in 0..3 {
+        let mut out = [[0.0f64; 2]; NB];
+        for b in 0..NB {
             for c in 0..2 {
                 out[b][c] = prev[b][c] + (new[b][c] - prev[b][c]) * a;
             }
@@ -307,15 +321,16 @@ mod tests {
     use super::*;
 
     const SR: f64 = 48000.0;
+    const F: [f64; NS] = [200.0, 1200.0, 5000.0];
 
-    fn impulse_response(f1: f64, f2: f64, s1: usize, s2: usize) -> ([Vec<f64>; 3], [f64; 3]) {
-        let mut x = Crossover3::new();
-        x.set(f1, f2, s1, s2, SR, true);
+    fn impulse_response(f: [f64; NS], s: [usize; NS]) -> ([Vec<f64>; NB], [f64; NB]) {
+        let mut x = Crossover4::new();
+        x.set(f, s, SR, true);
         x.begin_block(1);
-        let mut r = [vec![], vec![], vec![]];
+        let mut r: [Vec<f64>; NB] = Default::default();
         for i in 0..16384 {
             let o = x.tick([if i == 0 { 1.0 } else { 0.0 }, 0.0]);
-            for b in 0..3 {
+            for b in 0..NB {
                 r[b].push(o[b][0]);
             }
         }
@@ -333,24 +348,36 @@ mod tests {
     }
 
     #[test]
-    fn bands_sum_to_a_flat_magnitude_at_every_slope_pair() {
+    fn bands_sum_to_a_flat_magnitude_at_every_slope_combination() {
         for s1 in 0..SLOPES {
             for s2 in 0..SLOPES {
-                let (ir, sg) = impulse_response(200.0, 2500.0, s1, s2);
-                let sum: Vec<f64> = (0..ir[0].len()).map(|i| ir[0][i] * sg[0] + ir[1][i] * sg[1] + ir[2][i] * sg[2]).collect();
-                for f in [30.0, 100.0, 200.0, 800.0, 2500.0, 6000.0, 15000.0] {
-                    let db = 20.0 * mag(&sum, f).log10();
-                    assert!(db.abs() < 0.05, "slopes {s1}/{s2} at {f} Hz: {db} dB");
+                for s3 in 0..SLOPES {
+                    // every combination, thinned: all uniform ones plus a spread of mixed ones
+                    if !((s1 == s2 && s2 == s3) || (s1 + 2 * s2 + 3 * s3) % 5 == 0) {
+                        continue;
+                    }
+                    let (ir, sg) = impulse_response(F, [s1, s2, s3]);
+                    let sum: Vec<f64> = (0..ir[0].len()).map(|i| (0..NB).map(|b| ir[b][i] * sg[b]).sum()).collect();
+                    for f in [30.0, 100.0, 200.0, 600.0, 1200.0, 3000.0, 5000.0, 9000.0, 15000.0] {
+                        let db = 20.0 * mag(&sum, f).log10();
+                        assert!(db.abs() < 0.05, "slopes {s1}/{s2}/{s3} at {f} Hz: {db} dB");
+                    }
                 }
             }
         }
     }
 
     #[test]
-    fn only_the_12_db_split_inverts_its_high_side() {
-        for (s1, s2, want) in [(0, 0, [1.0, -1.0, 1.0]), (1, 1, [1.0, 1.0, 1.0]), (0, 2, [1.0, -1.0, -1.0]), (3, 0, [1.0, 1.0, -1.0])] {
-            let (_, sg) = impulse_response(200.0, 2500.0, s1, s2);
-            assert_eq!(sg, want, "slopes {s1}/{s2}");
+    fn only_the_12_db_splits_invert_their_high_side() {
+        for (s, want) in [
+            ([0, 0, 0], [1.0, -1.0, 1.0, -1.0]),
+            ([1, 1, 1], [1.0, 1.0, 1.0, 1.0]),
+            ([0, 2, 1], [1.0, -1.0, -1.0, -1.0]),
+            ([3, 0, 2], [1.0, 1.0, -1.0, -1.0]),
+            ([1, 1, 0], [1.0, 1.0, 1.0, -1.0]),
+        ] {
+            let (_, sg) = impulse_response(F, s);
+            assert_eq!(sg, want, "slopes {s:?}");
         }
     }
 
@@ -358,10 +385,13 @@ mod tests {
     fn each_band_is_minus_6db_at_its_crossover_and_slope_sets_the_rejection() {
         let mut rej = [0.0f64; SLOPES];
         for s in 0..SLOPES {
-            let (ir, _) = impulse_response(200.0, 2500.0, s, s);
+            let (ir, _) = impulse_response(F, [s; NS]);
             let db = |b: usize, f: f64| 20.0 * mag(&ir[b], f).log10();
-            assert!((db(0, 200.0) + 6.02).abs() < 0.3 && (db(1, 200.0) + 6.02).abs() < 0.3, "slope {s}");
-            assert!((db(1, 2500.0) + 6.02).abs() < 0.3 && (db(2, 2500.0) + 6.02).abs() < 0.3, "slope {s}");
+            for (k, f) in F.iter().enumerate() {
+                // the inner splits sit close to their neighbours' skirts, so they may stray a little further from -6 dB
+                let tol = if k == 0 { 0.3 } else { 1.2 };
+                assert!((db(k, *f) + 6.02).abs() < tol && (db(k + 1, *f) + 6.02).abs() < tol, "slope {s} split {k}: {} / {}", db(k, *f), db(k + 1, *f));
+            }
             rej[s] = db(0, 800.0); // two octaves above the low crossover
             // roughly the nominal dB/oct over the two octaves (less the 6 dB at the corner)
             let want = -(SLOPE_DB[s] as f64) * 2.0;
@@ -372,19 +402,19 @@ mod tests {
 
     #[test]
     fn gliding_frequencies_and_slopes_stay_finite_and_settle() {
-        let mut x = Crossover3::new();
-        x.set(150.0, 2500.0, 1, 1, SR, true);
+        let mut x = Crossover4::new();
+        x.set([150.0, 900.0, 3500.0], [1; NS], SR, true);
         let (mut peak, mut settled) = (0.0f64, 0.0f64);
         for blk in 0..400 {
             if blk == 50 {
-                x.set(400.0, 6000.0, 2, 0, SR, false);
+                x.set([400.0, 2000.0, 6000.0], [2, 0, 1], SR, false);
             }
             x.begin_block(64);
             for i in 0..64 {
                 let s = (2.0 * std::f64::consts::PI * 330.0 * (blk * 64 + i) as f64 / SR).sin();
                 let o = x.tick([s, s]);
                 let sg = x.signs();
-                let sum = o[0][0] * sg[0] + o[1][0] * sg[1] + o[2][0] * sg[2];
+                let sum: f64 = (0..NB).map(|b| o[b][0] * sg[b]).sum();
                 assert!(sum.is_finite());
                 if blk < 100 {
                     peak = peak.max(sum.abs()); // while the crossover moves (a swept tone overshoots a little)
@@ -399,8 +429,8 @@ mod tests {
     }
 
     #[test]
-    fn order_keeps_f2_above_f1() {
-        let (a, b) = Crossover3::order(3000.0, 100.0);
-        assert!(b >= a * 1.05);
+    fn order_keeps_each_split_above_the_one_below() {
+        let [a, b, c] = Crossover4::order([3000.0, 100.0, 50.0]);
+        assert!(b >= a * 1.05 && c >= b * 1.05);
     }
 }
