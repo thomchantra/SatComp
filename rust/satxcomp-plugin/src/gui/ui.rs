@@ -2355,7 +2355,7 @@ impl<'a> Gui<'a> {
             }
         }
         let d = self.rd_eq_diff;
-        self.diff_row(VX + EQ_P * 5.0, y, EQ_PW, 16.0, "IN>OUT", d);
+        self.diff_row(VX + EQ_P * 5.0, y, EQ_PW, 16.0, "I>O", d);
     }
 
     fn eq_cells(&mut self, y0: f32) {
