@@ -73,7 +73,7 @@ impl Rig {
             let v = 0.3 + 0.2 * ((i as f32 + n * 5.0) * 0.1).sin();
             self.shared.scope.push(v, v * 1.5);
         }
-        let raw = RawInput { time: Some(self.t), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(510.0, 744.0))), events, ..Default::default() };
+        let raw = RawInput { time: Some(self.t), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(510.0, 756.0))), events, ..Default::default() };
         let setter = ParamSetter::new(&*self.host);
         let (p, sh) = (self.params.clone(), self.shared.clone());
         let st = &mut self.st;
@@ -133,13 +133,13 @@ fn script() -> (u64, Vec<String>) {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.click(318.0, 38.0); // oversampling x8
-    r.drag(41.0, 380.0, 41.0, 350.0); // DRIVE
-    r.click(281.0, 260.0); // L.AHD off
-    r.drag(281.0, 295.0, 281.0, 280.0); // CEILING
-    r.drag(281.0, 337.0, 281.0, 322.0); // THRESHOLD
-    r.drag(281.0, 421.0, 281.0, 405.0); // CLIP
-    r.drag(281.0, 463.0, 281.0, 450.0); // OUT GAIN
+    r.click(317.0, 208.0); // oversampling x8
+    r.drag(41.0, 388.0, 41.0, 358.0); // DRIVE
+    r.click(281.0, 270.0); // L.AHEAD off
+    r.drag(281.0, 303.0, 281.0, 288.0); // CEILING
+    r.drag(281.0, 335.0, 281.0, 355.0); // THRESHOLD (default is the top of its range: drag down)
+    r.drag(281.0, 390.0, 281.0, 375.0); // CLIP
+    r.drag(281.0, 472.0, 281.0, 458.0); // OUT GAIN
     r.click(247.0, 14.0); // DELTA
     r.click(247.0, 14.0);
     r.click(300.0, 14.0); // BYPASS on
@@ -155,8 +155,8 @@ fn script() -> (u64, Vec<String>) {
         r.frame(vec![]);
     }
     r.click(60.0, 12.0); // and off
-    r.rclick(330.0, 480.0); // grip: size menu
-    r.rclick(330.0, 480.0);
+    r.rclick(332.0, 496.0); // grip: size menu
+    r.rclick(332.0, 496.0);
     r.reopen_editor();
     r.frame(vec![]);
     (r.hash, r.log())
@@ -178,7 +178,7 @@ fn the_oversampling_buttons_write_x8() {
     for _ in 0..3 {
         r.frame(vec![]);
     }
-    r.click(318.0, 38.0);
+    r.click(317.0, 208.0);
     let log = r.log();
     // x8 = 3 of 0..3 -> normalised 1.0
     assert!(log.iter().any(|l| l.starts_with("Oversampling") && l.ends_with("1.000")), "{log:?}");
@@ -190,7 +190,7 @@ fn the_look_ahead_button_switches_it_off() {
     for _ in 0..3 {
         r.frame(vec![]);
     }
-    r.click(281.0, 260.0);
+    r.click(281.0, 270.0);
     assert!(r.log().iter().any(|l| l.starts_with("Lookahead") && l.ends_with("0.000")), "{:?}", r.log());
 }
 
@@ -202,6 +202,32 @@ fn the_about_page_stays_quiet_and_writes_nothing() {
     r.click(60.0, 12.0);
     for _ in 0..30 {
         r.frame(vec![]);
+    }
+    assert!(r.log().is_empty(), "{:?}", r.log());
+}
+
+#[test]
+fn clicking_the_sat_readout_requests_the_level_match_and_its_result_writes_sat_gain() {
+    let mut r = Rig::new();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(100.0, 358.0); // the SAT readout in the plot's bottom right corner
+    assert!(r.shared.sat_req.swap(false, std::sync::atomic::Ordering::Relaxed), "no match request");
+    r.shared.sat_result.store(-3.5, std::sync::atomic::Ordering::Relaxed);
+    r.shared.sat_result_new.store(true, std::sync::atomic::Ordering::Release);
+    r.frame(vec![]);
+    assert!(r.log().iter().any(|l| l.starts_with("Sat Gain")), "{:?}", r.log());
+}
+
+#[test]
+fn clicking_the_output_bars_cycles_the_range_without_writing_parameters() {
+    let mut r = Rig::new();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    for _ in 0..5 {
+        r.click(205.0, 300.0);
     }
     assert!(r.log().is_empty(), "{:?}", r.log());
 }

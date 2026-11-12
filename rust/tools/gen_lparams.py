@@ -52,7 +52,7 @@ for n, i, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{i}"]\n    pub {i}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
 o.append("}\n")
 o.append("impl Default for SatLimParams {\n    fn default() -> Self {\n        Self {")
-o.append("            editor_state: EguiState::from_size(340, 496),")
+o.append("            editor_state: EguiState::from_size(340, 504),")
 o.append("            palette_v2: Arc::new(AtomicI32::new(-1)),")
 o.append("            light: Arc::new(AtomicBool::new(false)),")
 o.append("            font: Arc::new(AtomicI32::new(0)),")

@@ -12,12 +12,15 @@ presets `*.satlim` in `~/Library/Application Support/SatLim/Presets`.
 - **THRESHOLD** is the input level that lands on the ceiling: the signal is lifted by `CEILING - THRESHOLD` dB. Lowering it pushes harder.
 - **CLIP** 0-100 %: 0 = off. Otherwise a hard clamp at the ceiling, run at the oversampled rate, driven up to +6 dB into it. With the
   clip on the limiter mostly handles inter-sample excess.
-- **L.AHD** on: 1.5 ms lookahead + 4x interpolated true-peak detection (constant latency, reported). Off: zero limiter latency, the gain
-  follows the *sample* peak instantly (attack 0), so inter-sample overs can pass. The readout reads **T.PK** when on and **PK** when off.
+- **L.AHEAD** on: 1.5 ms lookahead + 4x interpolated true-peak detection (constant latency, reported). Off: zero limiter latency, the gain
+  follows the *sample* peak instantly (attack 0), so inter-sample overs can pass. The readout reads **TRU.PK** when on and **PK** when off (accent only when it clips; GR stays in the UI colour).
 - **RELEASE** 15-80 ms: the slow end of the program-dependent release (fast end stays at 15 ms or below).
-- **x1..x8** oversample the saturator and the clipper (latency 0 / 24 / 28 / 30 samples each). The limiter's own detection is always
+- **x1..x8** (OVERSAMPL, top of the limiter column) oversample the saturator and the clipper (latency 0 / 24 / 28 / 30 samples each). The limiter's own detection is always
   true-peak (L.AHD on).
 - **Latency** = saturator oversampler + clipper oversampler + limiter lookahead, always reported; it changes with x1..x8 and L.AHD.
+- **Cells** top to bottom: CEILING, THRESHOLD, CLIP, RELEASE, OUT GAIN (SAT GAIN in the sat module).
+- **Meters:** segmented sat out (clip block at the top, held 1 s), GR with its value on top, stereo out VU (click the bars to cycle 48 / 24 / 12 / 6 dB, click the top block to reset the clip lamp and the peak readout).
+- **SAT readout** (plot corner): click = measure the saturator's loudness change for 3 s, then write the SAT GAIN that cancels it (click again to cancel).
 - **DELTA** = what the clipper and limiter removed (pre-clip signal minus limiter output, before OUT GAIN). **BYPASS** = the input at the
   same latency.
 
@@ -32,7 +35,7 @@ presets `*.satlim` in `~/Library/Application Support/SatLim/Presets`.
 | 7 | os | 0-3 (x1 x2 x4 x8) | 0 |
 | 25 | sat_mix | 0-100 % | 100 |
 | 27 | sat_gain | -24-12 dB | 0 |
-| 12 | lookahead | on / off | on |
+| 12 | lookahead (L.AHEAD) | on / off | on |
 | 8 | ceiling | -24-0 dB | -0.3 |
 | 9 | threshold | -30-0 dB | 0 |
 | 10 | release | 15-80 ms | 80 |
@@ -49,6 +52,5 @@ clip lightens the limiter, delta, telemetry). `satlim-plugin`: params / presets 
 mode holds the sample ceiling and passes quiet audio bit-exactly, clip off leaves a spike to the gain stage).
 
 ## Not done / known
-- The editor has only been exercised headlessly (standalone crashes at window creation on macOS 27): layout is unverified by eye.
+- The editor is tested headlessly; first-pass screenshots from REAPER came back (`docs/feedbacknotes/satlimpass1.png`) and pass 1 is applied.
 - No audio golden for `LimEngine`, no M/S, no sidechain, no auto-release.
-- The sat module's click-to-match gain readout was left out (SAT readout only).

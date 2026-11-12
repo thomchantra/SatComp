@@ -17,7 +17,7 @@ use ui::{Env, Gui, State};
 
 /// Logical grid (units); the window scales it in quarter steps.
 pub const W: f32 = 340.0;
-pub const H: f32 = 496.0;
+pub const H: f32 = 504.0;
 
 /// One editor frame: map the egui input into logical canvas units, draw the whole UI.
 pub(crate) fn run_frame(ctx: &egui::Context, setter: &nih_plug::prelude::ParamSetter, st: &mut State, params: &SatLimParams, shared: &Shared) {

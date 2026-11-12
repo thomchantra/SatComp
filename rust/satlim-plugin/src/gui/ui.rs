@@ -3,7 +3,7 @@
 
 use satcomp_ui::canvas::Canvas;
 use satcomp_ui::kit::{Kit, Meta, Widgets};
-use satcomp_ui::appearance::{AppState, AppearanceUi, CellGrid, Rect};
+use satcomp_ui::appearance::{self, AppState, AppearanceUi, CellGrid, Rect};
 use crate::params::{SatLimParams, SLOTS, TABLE};
 use crate::presets::{self, Preset};
 use crate::Shared;
@@ -28,6 +28,9 @@ struct MItem {
     kind: u8,
     id: i32,
 }
+
+/// Output VU ranges: (dB span, dB values labelled), cycled by clicking the bars.
+const VU_RANGES: [(f32, &[i32]); 4] = [(48.0, &[-6, -12, -24, -36]), (24.0, &[-3, -6, -12, -18]), (12.0, &[-2, -4, -6, -9]), (6.0, &[-1, -2, -3, -4, -5])];
 
 /// ASYM slider drag (viewport-style act id: released with the mouse)
 const ACT_ASYM: i32 = 145;
@@ -93,6 +96,9 @@ pub struct State {
     hl_r_t: f64,
     opk_max: f32,
     clip_lat: bool,
+    clip_t: f64,
+    /// output VU range index (VU_RANGES)
+    vu_ri: usize,
     /// post-saturator level meter: decaying level and the last time it clipped (accent, held 1 s)
     sat_lv: f32,
     sat_clip_t: f64,
@@ -196,6 +202,8 @@ impl State {
             hl_r_t: 0.0,
             opk_max: 0.0,
             clip_lat: false,
+            clip_t: -10.0,
+            vu_ri: 0,
             sat_lv: 0.0,
             sat_clip_t: -10.0,
             rd_last: 0.0,
@@ -412,58 +420,17 @@ impl<'a> Gui<'a> {
 
     // ------------------------------------------------------------------ formatting
     fn fmt_slot(&self, n: usize, v: f32) -> String {
-        if (29..=58).contains(&n) {
-            let o = (n - 29) % 15;
-            return if o < 12 {
-                match o % 4 {
-                    1 => {
-                        if v >= 10000.0 {
-                            format!("{:.0}kHz", v * 0.001)
-                        } else if v >= 1000.0 {
-                            format!("{:.1}kHz", v * 0.001)
-                        } else {
-                            format!("{:.0}Hz", v)
-                        }
-                    }
-                    2 => {
-                        if v.abs() < 0.05 {
-                            "0.0dB".into()
-                        } else {
-                            format!("{:+.1}dB", v)
-                        }
-                    }
-                    _ => format!("{:.2}", v),
-                }
-            } else if o == 13 {
-                if v >= 1000.0 {
-                    format!("{:.1}kHz", v * 0.001)
-                } else {
-                    format!("{:.0}Hz", v)
-                }
-            } else if v.abs() < 0.05 {
-                "0.0dB".into()
-            } else {
-                format!("{:+.1}dB", v)
-            };
-        }
         match n {
-            59 => {
-                if v < 0.05 {
-                    "OFF".into()
-                } else {
-                    format!("{:.1}ms", v)
-                }
-            }
-            2 | 12 | 14 | 15 | 17 | 18 | 19 | 21 | 25 | 67 => format!("{:.0}%", v),
+            2 | 25 | 11 => format!("{:.0}%", v),
             3 => format!("{:+.0}%", v),
-            4 | 16 | 65 => {
-                if v <= if n == 4 || n == 65 { 20.5 } else { 15.0 } {
+            4 => {
+                if v <= 20.5 {
                     "OFF".into()
                 } else {
                     format!("{:.0}Hz", v)
                 }
             }
-            5 | 6 | 66 => {
+            5 | 6 => {
                 if v >= 19900.0 {
                     "OFF".into()
                 } else if n != 6 && v < 1000.0 {
@@ -472,32 +439,9 @@ impl<'a> Gui<'a> {
                     format!("{:.1}k", v * 0.001)
                 }
             }
-            8 => format!("{:.1}dB", v),
-            9 => {
-                if v >= 19.9 {
-                    "INF".into()
-                } else {
-                    format!("{:.1}:1", v)
-                }
-            }
-            10 => {
-                if v < 1.0 {
-                    format!("{:.2}ms", v)
-                } else {
-                    format!("{:.1}ms", v)
-                }
-            }
-            11 => {
-                if v >= 1990.0 {
-                    "AUTO".into()
-                } else if v >= 1000.0 {
-                    format!("{:.2}s", v * 0.001)
-                } else {
-                    format!("{:.0}ms", v)
-                }
-            }
-            13 | 20 => format!("{:.1}dB", v),
-            22 | 27 | 64 => format!("{:+.1}dB", v),
+            8 | 9 => format!("{:.1}dB", v),
+            10 => format!("{:.0}ms", v),
+            22 | 27 => format!("{:+.1}dB", v),
             _ => format!("{:.1}", v),
         }
     }
@@ -578,12 +522,12 @@ impl<'a> Gui<'a> {
         }
         self.cv.boxr(x + 6.0, y + 6.0, 9.0, 9.0);
         let l = |c: &Canvas, a: f32, b: f32, cc: f32, d: f32| c.line(x + a, y + b, x + cc, y + d);
-        l(&self.cv, 12.5, 0.5, 20.5, 0.5);
-        l(&self.cv, 20.5, 0.5, 20.5, 7.5);
-        l(&self.cv, 8.5, 20.5, 0.5, 20.5);
-        l(&self.cv, 0.5, 20.5, 0.5, 13.5);
-        l(&self.cv, 6.5, 14.5, 0.5, 20.5);
-        l(&self.cv, 14.5, 6.5, 20.5, 0.5);
+        // four corner brackets round the inner square
+        for (sx, sy) in [(0.5f32, 0.5f32), (20.5, 0.5), (0.5, 20.5), (20.5, 20.5)] {
+            let (dx, dy) = (if sx < 10.0 { 1.0 } else { -1.0 }, if sy < 10.0 { 1.0 } else { -1.0 });
+            l(&self.cv, sx, sy, sx + 7.0 * dx, sy);
+            l(&self.cv, sx, sy, sx, sy + 7.0 * dy);
+        }
     }
 
 
@@ -638,8 +582,8 @@ impl<'a> Gui<'a> {
         }
     }
 
-    /// Thin summed post-saturator level (solid fill, -48..0 dB). The whole meter turns accent while the saturator output
-    /// is over 0 dBFS, held for 1 s after the last clip.
+    /// Post-saturator level (summed channels), segmented (-48..0 dB). The clip lamp is a block at the top of the bar, the
+    /// height of the GR value window, in the accent colour while the saturator output is over 0 dBFS and for 1 s after.
     fn sat_vu(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let pk = self.env.shared.sat_pk.swap(0.0, Ordering::Relaxed);
         self.sat_lv = pk.max(self.sat_lv * 0.85);
@@ -647,18 +591,29 @@ impl<'a> Gui<'a> {
             self.sat_clip_t = self.now;
         }
         let clip = self.now - self.sat_clip_t < 1.0;
+        let lamp = 12.0;
+        let (by, bh) = (y + lamp + 1.0, h - lamp - 1.0);
         let lvf = |v: f32| ((8.6858896 * v.max(0.0000001).ln() + 48.0) / 48.0).clamp(0.0, 1.0);
+        self.setc(false);
+        self.cv.boxr(x, by, w, bh);
+        // 2 px segments, 1 px gaps, filled from the bottom
+        let segs = ((bh - 2.0) / 3.0).floor() as i32;
+        let on = (segs as f32 * lvf(self.sat_lv)).ceil() as i32;
+        for i in 0..on.min(segs) {
+            self.cv.fill(x + 1.0, by + bh - 1.0 - 2.0 - i as f32 * 3.0, w - 2.0, 2.0);
+        }
         self.setc(clip);
-        self.cv.boxr(x, y, w, h);
-        let lh = ((h - 2.0) * lvf(self.sat_lv)).floor();
-        if lh > 0.0 {
-            self.cv.fill(x + 1.0, y + h - 1.0 - lh, w - 2.0, lh);
+        if clip {
+            self.cv.fill(x, y, w, lamp);
+        } else {
+            self.cv.boxr(x, y, w, lamp);
         }
         self.setc(false);
     }
 
-    /// Stereo output level, vertical (-48..0 dB, two bars with peak holds); also tracks the true / sample peak readout and the clip
-    /// lamp (top block, accent after any over 0 dBFS). Click = reset the PK readout and the lamp.
+    /// Stereo output level, vertical: two bars with peak holds over a selectable range (click the bars to cycle 48 / 24 / 12 /
+    /// 6 dB), small dB labels in the background colour on top of the bars, and a clip lamp at the top (accent after any over
+    /// 0 dBFS; click it to reset the lamp and the peak readout). The true / sample peak readout is tracked here too.
     fn out_vu(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let sh = self.env.shared;
         let pa = sh.opk[0].swap(0.0, Ordering::Relaxed);
@@ -666,12 +621,19 @@ impl<'a> Gui<'a> {
         let tp = sh.tpk.swap(0.0, Ordering::Relaxed);
         if sh.clip.swap(false, Ordering::Relaxed) {
             self.clip_lat = true;
+            self.clip_t = self.now;
         }
-        if self.hit(x, y, w, h) && self.press && self.act == 0 {
+        let lamp = 12.0;
+        let (by, bh) = (y + lamp + 1.0, h - lamp - 1.0);
+        if self.hit(x, y, w, lamp) && self.press && self.act == 0 {
             self.opk_max = 0.0;
             self.clip_lat = false;
             self.hl_l = 0.0;
             self.hl_r = 0.0;
+            self.press = false;
+        }
+        if self.hit(x, by, w, bh) && self.press && self.act == 0 {
+            self.vu_ri = (self.vu_ri + 1) % VU_RANGES.len();
             self.press = false;
         }
         self.ovl = pa.max(self.ovl * 0.85);
@@ -690,10 +652,9 @@ impl<'a> Gui<'a> {
             self.hl_r *= 0.9;
         }
         self.opk_max = self.opk_max.max(tp);
-        let lamp = 6.0;
-        let (by, bh) = (y + lamp + 2.0, h - lamp - 2.0);
+        let (rng, labels) = VU_RANGES[self.vu_ri];
         let bw = ((w - 3.0) * 0.5).floor();
-        let lvf = |v: f32| ((8.6858896 * v.max(0.0000001).ln() + 48.0) / 48.0).clamp(0.0, 1.0);
+        let lvf = |v: f32| ((8.6858896 * v.max(0.0000001).ln() + rng) / rng).clamp(0.0, 1.0);
         self.setc(false);
         self.cv.boxr(x, by, w, bh);
         for (i, (lv, hl)) in [(self.ovl, self.hl_l), (self.ovr, self.hl_r)].into_iter().enumerate() {
@@ -706,16 +667,20 @@ impl<'a> Gui<'a> {
                 self.cv.fill(bx, by + bh - 2.0 - ((bh - 3.0) * lvf(hl)).floor(), bw, 1.0);
             }
         }
-        // -6 / -12 / -24 / -36 ticks over the bars
-        for db in [-6.0f32, -12.0, -24.0, -36.0] {
-            let ty = by + bh - 1.0 - ((bh - 2.0) * ((db + 48.0) / 48.0)).floor();
+        // dB labels (no sign) in the background colour on top of the bars, ticks beside them
+        self.cv.set_font(1);
+        for &db in labels {
+            let ty = by + bh - 1.0 - ((bh - 2.0) * ((db as f32 + rng) / rng)).floor();
+            self.setc(false);
             self.cv.fill(x + w, ty, 3.0, 1.0);
+            self.cv.setbg();
+            self.cv.text(x + 2.0, (ty - 4.0).min(by + bh - 11.0), &format!("{}", -db));
         }
-        if self.clip_lat {
-            self.setc(true);
+        let clip = self.clip_lat;
+        self.setc(clip);
+        if clip {
             self.cv.fill(x, y, w, lamp);
         } else {
-            self.setc(false);
             self.cv.boxr(x, y, w, lamp);
         }
         self.setc(false);
@@ -819,8 +784,14 @@ impl<'a> Gui<'a> {
             }
         }
         let hv = self.hit(x, y, w, h) && !self.curve_edit;
+        let tb = self.hit(x + w - 84.0, y + h - 14.0, 82.0, 12.0);
         if hv && self.press && self.act == 0 {
-            self.begin_drag(27);
+            if tb {
+                self.env.shared.sat_req.store(true, Ordering::Relaxed); // measure 3 s, then write SAT GAIN
+                self.press = false;
+            } else {
+                self.begin_drag(27);
+            }
         }
         if hv && self.wheel != 0 {
             self.wheel_adj(27);
@@ -880,7 +851,12 @@ impl<'a> Gui<'a> {
         self.cv.set_font(1);
         let s = format!("OUT {:+.1}dB", tot);
         self.cv.text(x + 3.0, y + 3.0, &s);
-        let s = format!("SAT {:+.1}dB", self.rd_sat);
+        let s = if self.env.shared.sat_meas.load(Ordering::Relaxed) {
+            self.setc(appearance::blink(self.now));
+            format!("MEAS {:.1}s", self.env.shared.sat_mt.load(Ordering::Relaxed))
+        } else {
+            format!("SAT {:+.1}dB", self.rd_sat)
+        };
         self.cv.textr(x, y + h - 14.0, w - 3.0, &s);
         self.setc(false);
     }
@@ -1459,26 +1435,26 @@ impl<'a> Gui<'a> {
         // name -> dropdown
         let name = self.preset_name();
         let shown = if name.is_empty() || name == "INIT" { "-- INIT --".to_string() } else { name };
-        let hv = self.hit(36.0, y, 142.0, h);
+        let hv = self.hit(36.0, y, 244.0, h);
         if hv && self.press && self.act == 0 {
             self.open_preset_menu(36.0, y + h);
             self.press = false;
         }
         self.setc(false);
-        self.cv.boxr(36.0, y, 142.0, h);
+        self.cv.boxr(36.0, y, 244.0, h);
         self.cv.set_font(2);
         let modified = self.is_modified();
         let mut t = shown;
-        while self.cv.text_w(&t) > if modified { 124.0 } else { 136.0 } && t.chars().count() > 3 {
+        while self.cv.text_w(&t) > if modified { 226.0 } else { 238.0 } && t.chars().count() > 3 {
             t.pop();
         }
         if modified {
             t = format!("*{t}*");
         }
-        self.cv.textc(36.0, y + ((h - 8.0) * 0.5).floor(), 142.0, &t);
+        self.cv.textc(36.0, y + ((h - 8.0) * 0.5).floor(), 244.0, &t);
         // prev / next
         for (i, dir) in [(0, -1), (1, 1)] {
-            let x = 178.0 + i as f32 * 25.0;
+            let x = 280.0 + i as f32 * 25.0;
             if self.btn(x, y, 25.0, h, "", 0) {
                 self.step_preset(dir);
             }
@@ -1584,6 +1560,11 @@ impl<'a> Gui<'a> {
             self.rd_rms = sh.fms.load(Ordering::Relaxed);
             self.rd_sat = sh.sat_db.load(Ordering::Relaxed);
         }
+        // a finished sat level match writes SAT GAIN (the audio thread cannot set parameters)
+        if sh.sat_result_new.swap(false, Ordering::Acquire) {
+            let v = sh.sat_result.load(Ordering::Relaxed);
+            self.click_set(27, v);
+        }
         self.refresh_dsp();
         self.menu_frame();
 
@@ -1641,22 +1622,12 @@ impl<'a> Gui<'a> {
             self.click_set(26, if byp { 0.0 } else { 1.0 });
         }
 
-        // ---------- preset row + oversampling
+        // ---------- preset row
         self.preset_bar();
         let ab = self.app.about > 0;
-        if !ab {
-            self.setc(false);
-            let os_i = (self.sget(7) + 0.5).floor() as i32;
-            for i in 0..4 {
-                let l = ["x1", "x2", "x4", "x8"][i as usize];
-                if self.btn(234.0 + i as f32 * 24.0, 30.0, 24.0, 16.0, l, (os_i == i) as u8) {
-                    self.click_set(7, i as f32);
-                }
-            }
-        }
         self.set_dk(if byp { 0.5 } else { 1.0 });
         if ab {
-            self.draw_about(Rect::new(10.0, 52.0, 320.0, 432.0), byp);
+            self.draw_about(Rect::new(10.0, 52.0, 320.0, 440.0), byp);
         }
 
         if !ab {
@@ -1666,19 +1637,19 @@ impl<'a> Gui<'a> {
 
             // ---------- SAT module
             self.selector(1, 10.0, 188.0, 130.0, 16.0);
-            self.draw_plot(10.0, 208.0, 130.0, 148.0);
+            self.draw_plot(10.0, 208.0, 130.0, 156.0);
             // the theme editor's dummy page keeps the plot, the meters (shorter) and the limiter readouts; its cell group
             // takes the place of the sat cells
-            let mh = if editing { 146.0 } else { 274.0 };
+            let mh = if editing { 146.0 } else { 282.0 };
             if editing {
-                self.theme_cells(CellGrid { x0: 10.0, y0: 360.0, cw: 62.0, ch: 38.0, px: 68.0, py: 42.0 });
+                self.theme_cells(CellGrid { x0: 10.0, y0: 368.0, cw: 62.0, ch: 38.0, px: 68.0, py: 42.0 });
             } else {
-                self.cell(2, 10.0, 360.0, 62.0, 38.0, "DRIVE");
-                self.bias_asym(78.0, 360.0, 62.0, 38.0);
-                self.cell2(4, 5, 10.0, 402.0, 62.0, 38.0, "HP", "LP");
-                self.cell(6, 78.0, 402.0, 62.0, 38.0, "TONE");
-                self.cell(25, 10.0, 444.0, 62.0, 38.0, "SAT MIX");
-                self.cell_o(27, 78.0, 444.0, 62.0, 38.0, "SAT GAIN");
+                self.cell(2, 10.0, 368.0, 62.0, 38.0, "DRIVE");
+                self.bias_asym(78.0, 368.0, 62.0, 38.0);
+                self.cell2(4, 5, 10.0, 410.0, 62.0, 38.0, "HP", "LP");
+                self.cell(6, 78.0, 410.0, 62.0, 38.0, "TONE");
+                self.cell(25, 10.0, 452.0, 62.0, 38.0, "SAT MIX");
+                self.cell_o(27, 78.0, 452.0, 62.0, 38.0, "SAT GAIN");
             }
             // sat out, GR and output meters
             self.sat_vu(146.0, 208.0, 20.0, mh);
@@ -1686,35 +1657,49 @@ impl<'a> Gui<'a> {
             self.out_vu(198.0, 208.0, 26.0, mh);
         }
 
-        // ---------- limiter column
+        // ---------- limiter column: oversampling, readouts, L.AHEAD, cells
         self.set_dk(1.0);
-        self.cv.set_font(1);
-        self.setc(false);
         let (cx, cw) = (232.0, 98.0);
-        let gr_lit = self.rd_gr > 0.05 && !byp;
-        self.setc(gr_lit);
-        self.cv.text(cx, 210.0, "GR");
-        let s1 = if byp { "-----dB".to_string() } else { format!("{:04.1}dB", self.rd_gr) };
-        self.cv.textr(cx, 210.0, cw, &s1);
-        self.setc(self.rd_pk > 1.0);
-        self.cv.text(cx, 222.0, if look { "T.PK" } else { "PK" });
-        let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
-        self.cv.textr(cx, 222.0, cw, &s1);
+        if !ab {
+            self.setc(false);
+            self.cv.set_font(1);
+            self.cv.textc(cx, 190.0, cw, "OVERSAMPL");
+            self.set_dk(if byp { 0.5 } else { 1.0 });
+            let os_i = (self.sget(7) + 0.5).floor() as i32;
+            for i in 0..4 {
+                let l = ["x1", "x2", "x4", "x8"][i as usize];
+                let (bx, bx2) = (cx + (cw * i as f32 / 4.0).floor(), cx + (cw * (i + 1) as f32 / 4.0).floor());
+                if self.btn(bx, 200.0, bx2 - bx + 1.0, 16.0, l, (os_i == i) as u8) {
+                    self.click_set(7, i as f32);
+                }
+            }
+            self.set_dk(1.0);
+        }
+        self.cv.set_font(1);
+        // GR stays in the UI colour at all times; only the true peak turns accent on a clip
         self.setc(false);
-        self.cv.text(cx, 234.0, "RMS");
+        self.cv.text(cx, 224.0, "GR");
+        let s1 = if byp { "-----dB".to_string() } else { format!("{:04.1}dB", self.rd_gr) };
+        self.cv.textr(cx, 224.0, cw, &s1);
+        self.setc(self.rd_pk > 1.0);
+        self.cv.text(cx, 236.0, if look { "TRU.PK" } else { "PK" });
+        let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
+        self.cv.textr(cx, 236.0, cw, &s1);
+        self.setc(false);
+        self.cv.text(cx, 248.0, "RMS");
         let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
-        self.cv.textr(cx, 234.0, cw, &s1);
+        self.cv.textr(cx, 248.0, cw, &s1);
 
         self.set_dk(if byp { 0.5 } else { 1.0 });
-        if self.btn(cx, 252.0, cw, 16.0, if look { "L.AHD  ON" } else { "L.AHD OFF" }, look as u8) {
+        if self.btn(cx, 262.0, cw, 16.0, if look { "L.AHEAD  ON" } else { "L.AHEAD OFF" }, look as u8) {
             self.click_set(12, if look { 0.0 } else { 1.0 });
         }
-        self.cell(8, cx, 276.0, cw, 38.0, "CEILING");
+        self.cell(8, cx, 284.0, cw, 38.0, "CEILING");
         if !editing {
-            self.cell(9, cx, 318.0, cw, 38.0, "THRESHOLD");
-            self.cell(10, cx, 360.0, cw, 38.0, "RELEASE");
-            self.cell(11, cx, 402.0, cw, 38.0, "CLIP");
-            self.cell_o(22, cx, 444.0, cw, 38.0, "OUT GAIN");
+            self.cell(9, cx, 326.0, cw, 38.0, "THRESHOLD");
+            self.cell(11, cx, 368.0, cw, 38.0, "CLIP");
+            self.cell(10, cx, 410.0, cw, 38.0, "RELEASE");
+            self.cell_o(22, cx, 452.0, cw, 38.0, "OUT GAIN");
         }
 
         self.resize_grip();

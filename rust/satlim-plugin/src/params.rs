@@ -95,7 +95,7 @@ pub struct SatLimParams {
 impl Default for SatLimParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(340, 496),
+            editor_state: EguiState::from_size(340, 504),
             palette_v2: Arc::new(AtomicI32::new(-1)),
             light: Arc::new(AtomicBool::new(false)),
             font: Arc::new(AtomicI32::new(0)),
