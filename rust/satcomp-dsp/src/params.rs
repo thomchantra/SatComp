@@ -2,7 +2,7 @@
 
 use crate::compressor::CompParams;
 use crate::saturator::SatParams;
-use crate::shapers::Curve;
+use crate::shapers::{Curve, SHAPER_COUNT};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct EqBandParams {
@@ -33,6 +33,8 @@ pub struct Params {
     // SAT
     pub shape: i32,       // 1   0..14 (14 = custom curve, Rust only)
     pub curve: Curve,     // user-drawn transfer curve, used when shape == 14
+    /// ASYM per shaper, 0..100 %: how much of the shaper's even part is kept (the part that carries DC / sub-audio pulses)
+    pub asym: [f64; SHAPER_COUNT],
     pub drive: f64,       // 2   0..100 %
     pub bias: f64,        // 3   -100..100 %
     pub sat_hp: f64,      // 4   20..2000 Hz (<=20.5 = off)
@@ -89,7 +91,7 @@ impl Params {
             os: self.os,
             mix: self.sat_mix,
             out_db: self.sat_out,
-            asym: None,
+            asym: Some(self.asym[(self.shape.max(0) as usize).min(SHAPER_COUNT - 1)]),
         }
     }
 
@@ -117,6 +119,7 @@ impl Default for Params {
         Self {
             shape: 0,
             curve: Curve::linear(),
+            asym: [100.0; SHAPER_COUNT],
             drive: 0.0,
             bias: 0.0,
             sat_hp: 20.0,

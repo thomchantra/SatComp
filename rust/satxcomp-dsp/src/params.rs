@@ -2,8 +2,7 @@
 
 use satcomp_dsp::shapers::Curve;
 
-/// Number of waveshapers (14 built-in + custom).
-pub const SHAPER_COUNT: usize = 15;
+pub use satcomp_dsp::shapers::SHAPER_COUNT;
 
 /// One band's saturator + compressor + output stage.
 #[derive(Clone, Copy, PartialEq, Debug)]

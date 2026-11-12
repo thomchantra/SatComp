@@ -5,6 +5,20 @@ pub const SHAPER_NAMES: [&str; 15] = [
     "Tube", "Soft", "Rational", "Atan", "Hard", "Tri Fold", "Sine Fold", "Crossover", "Cheby", "Wrap",
     "Rectify", "Bitcrush", "Asym Fold", "Diode", "Custom",
 ];
+/// Number of waveshapers (14 built-in + custom).
+pub const SHAPER_COUNT: usize = SHAPER_NAMES.len();
+
+/// Persisted per-shaper ASYM values (0..100 %) -> the DSP array (missing / non-finite entries = 100 %, clamped).
+pub fn asym_from(v: &[f32]) -> [f64; SHAPER_COUNT] {
+    let mut a = [100.0; SHAPER_COUNT];
+    for (d, s) in a.iter_mut().zip(v) {
+        if s.is_finite() {
+            *d = (*s as f64).clamp(0.0, 100.0);
+        }
+    }
+    a
+}
+
 /// Shaper index of the user-drawn curve.
 pub const CUSTOM: i32 = 14;
 
