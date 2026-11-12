@@ -3,13 +3,20 @@
   "version": 1,
   "name": "Drums_Crunch",
   "params": {
-    "shape": 1.0,
+    "shape": 13.0,
     "drive": 30.0,
+    "bias": 0.0,
+    "sat_hp": 20.0,
+    "sat_lp": 20000.0,
+    "tone": 20000.0,
+    "sat_mix": 30.0,
+    "sat_gain": 0.0,
+    "os": 2.0,
+    "lookahead": 0.0,
     "ceiling": -1.0,
     "threshold": -6.0,
     "release": 30.0,
-    "clip": 45.0,
-    "lookahead": 0.0,
-    "os": 2.0
+    "clip": 20.0,
+    "out_gain": 0.0
   }
 }
