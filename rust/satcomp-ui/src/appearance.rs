@@ -389,8 +389,12 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
     /// About / Appearance / Changelog inside `r` (tab row 22 units above it).
     fn draw_about(&mut self, r: Rect, byp: bool) {
         let ty = r.y - 22.0;
-        for (dx, l, id) in [(0.0, "ABOUT", 1u8), (115.0, "APPEARANCE", 3u8), (230.0, "CHANGELOG", 2u8)] {
-            if self.btn(r.x + dx, ty, 114.0, 16.0, l, (self.app_ref().about == id) as u8) {
+        // a narrow page (SatLim) fits three abutting tabs and a single cross icon, with no spacing; wider pages keep the labelled button
+        let narrow = r.w < 360.0;
+        let tw = ((r.w - 16.0) / 3.0).floor();
+        for (i, (l, id)) in [("ABOUT", 1u8), ("APPEARANCE", 3u8), ("CHANGELOG", 2u8)].into_iter().enumerate() {
+            let (dx, w) = if narrow { (i as f32 * tw, tw + 1.0) } else { (i as f32 * 115.0, 114.0) };
+            if self.btn(r.x + dx, ty, w, 16.0, l, (self.app_ref().about == id) as u8) {
                 let pal = self.pal();
                 let a = self.app();
                 a.about = id;
@@ -400,10 +404,17 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
                 }
             }
         }
-        if self.btn(r.x + r.w - 62.0, ty, 62.0, 16.0, "X CLOSE", 0) {
+        let (cx0, cw0) = if narrow { (r.x + 3.0 * tw, r.w - 3.0 * tw) } else { (r.x + r.w - 62.0, 62.0) };
+        if self.btn(cx0, ty, cw0, 16.0, if narrow { "" } else { "X CLOSE" }, 0) {
             let a = self.app();
             a.about = 0;
             a.about_scroll = 0;
+        }
+        if narrow {
+            self.setc(false);
+            let (mx, my) = (cx0 + (cw0 * 0.5).floor(), ty + 8.0);
+            self.cv().line(mx - 3.0, my - 3.0, mx + 3.0, my + 3.0);
+            self.cv().line(mx - 3.0, my + 3.0, mx + 3.0, my - 3.0);
         }
         self.setc(false);
         self.cv().set_font(1);

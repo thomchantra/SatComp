@@ -103,7 +103,7 @@ impl Default for SatLimParams {
             light: Arc::new(AtomicBool::new(false)),
             font: Arc::new(AtomicI32::new(0)),
             fft_solid: Arc::new(AtomicBool::new(true)),
-            scope: Arc::new(AtomicI32::new((5 << 4) | (2 << 8))),
+            scope: Arc::new(AtomicI32::new((5 << 4) | (8 << 8))),
             custom_theme: Arc::new(parking_lot::Mutex::new(String::new())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),

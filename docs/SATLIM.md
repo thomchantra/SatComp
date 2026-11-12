@@ -21,6 +21,7 @@ presets `*.satlim` in `~/Library/Application Support/SatLim/Presets`.
 - **Cells** top to bottom: CEILING, THRESHOLD, GRAB, RELEASE, OUT GAIN (SAT GAIN in the sat module).
 - **Meters:** segmented sat out (clip block at the top, held 1 s), GR with its value on top, stereo out VU (click the bars to cycle 48 / 24 / 12 / 6 dB, click the top block to reset the clip lamp and the peak readout).
 - **SAT readout** (plot corner): click = measure the saturator's loudness change for 3 s, then write the SAT GAIN that cancels it (click again to cancel).
+- **Scope:** CEIL runs +10 dB to -14 dB (default +2) so heavy clipping above 0 dBFS stays visible. Columns sit on a fixed grid in absolute time and the read position eases toward the newest bucket, so the picture scrolls steadily instead of flickering with each host block.
 - **SCOPE FILL** (About > Appearance): solid bars (default) or an outline stroke along the peaks, like SatXComp's spectrum fill.
 - **DELTA** = what the clipper and limiter removed (pre-clip signal minus limiter output, before OUT GAIN). **BYPASS** = the input at the
   same latency.

@@ -40,6 +40,9 @@ struct Rig {
     st: State,
     t: f64,
     hash: u64,
+    /// hash of the last frame alone, and whether the fake audio thread keeps pushing scope buckets
+    last: u64,
+    feed: bool,
 }
 
 impl Rig {
@@ -54,13 +57,13 @@ impl Rig {
         let mut p = SatLimParams::default();
         tweak(&mut p);
         let params = Arc::new(p);
-        Self { ctx, host: Arc::new(FakeHost::default()), shared: Arc::new(Shared::new()), st: State::new(0, false, 0, &params), params, t: 1.0, hash: 0xcbf29ce484222325 }
+        Self { ctx, host: Arc::new(FakeHost::default()), shared: Arc::new(Shared::new()), st: State::new(0, false, 0, &params), params, t: 1.0, hash: 0xcbf29ce484222325, last: 0, feed: true }
     }
 
     fn frame(&mut self, events: Vec<Event>) {
         self.t += 0.03;
         // some audio-side telemetry so meters and the scope draw
-        let n = (self.t * 10.0) as f32;
+        let n = if self.feed { (self.t * 10.0) as f32 } else { 3.0 }; // frozen telemetry once the fake audio stops
         let ord = std::sync::atomic::Ordering::Relaxed;
         self.shared.opk[0].store(0.5 + 0.3 * n.sin(), ord);
         self.shared.opk[1].store(0.4 + 0.3 * n.cos(), ord);
@@ -69,19 +72,28 @@ impl Rig {
         self.shared.sat_pk.store(0.5, ord);
         self.shared.sat_vz.store(0.4, ord);
         self.shared.fms.store(0.05, ord);
-        for i in 0..400 {
-            let v = 0.3 + 0.2 * ((i as f32 + n * 5.0) * 0.1).sin();
-            self.shared.scope.push(v, v * 1.5);
+        if self.feed {
+            // buckets arrive in host-block sized chunks of 5-9, each a pure function of its absolute index
+            let chunk = 5 + (n as usize % 5);
+            for _ in 0..chunk {
+                let i = self.shared.scope.head() as f32;
+                let v = 0.3 + 0.2 * (i * 0.1).sin() + 0.1 * (i * 0.37).sin();
+                self.shared.scope.push(v, v * 1.5);
+            }
         }
         let raw = RawInput { time: Some(self.t), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(510.0, 756.0))), events, ..Default::default() };
         let setter = ParamSetter::new(&*self.host);
         let (p, sh) = (self.params.clone(), self.shared.clone());
         let st = &mut self.st;
         let full = self.ctx.run(raw, |ctx| super::run_frame(ctx, &setter, st, &p, &sh));
+        let mut fh: u64 = 0xcbf29ce484222325;
         for b in format!("{:?}", full.shapes).bytes() {
             self.hash ^= b as u64;
             self.hash = self.hash.wrapping_mul(0x100000001b3);
+            fh ^= b as u64;
+            fh = fh.wrapping_mul(0x100000001b3);
         }
+        self.last = fh;
     }
 
     /// logical (1.5 px per unit) position
@@ -133,7 +145,7 @@ fn script() -> (u64, Vec<String>) {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.click(317.0, 208.0); // oversampling x8
+    r.click(317.0, 196.0); // oversampling x8
     r.drag(41.0, 388.0, 41.0, 358.0); // DRIVE
     r.click(281.0, 270.0); // L.AHEAD off
     r.drag(281.0, 303.0, 281.0, 288.0); // CEILING
@@ -178,7 +190,7 @@ fn the_oversampling_buttons_write_x8() {
     for _ in 0..3 {
         r.frame(vec![]);
     }
-    r.click(317.0, 208.0);
+    r.click(317.0, 196.0);
     let log = r.log();
     // x8 = 3 of 0..3 -> normalised 1.0
     assert!(log.iter().any(|l| l.starts_with("Oversampling") && l.ends_with("1.000")), "{log:?}");
@@ -259,4 +271,40 @@ fn the_appearance_page_has_the_scope_fill_switch_on_its_own_row() {
     r.click(210.0, 86.0); // SOLID
     assert!(r.params.fft_solid.load(std::sync::atomic::Ordering::Relaxed));
     assert!(r.log().is_empty(), "UI-only setting, no host writes: {:?}", r.log());
+}
+
+#[test]
+fn the_scope_holds_perfectly_still_when_the_audio_stops() {
+    let mut r = Rig::new();
+    for _ in 0..80 {
+        r.frame(vec![]);
+    }
+    r.feed = false;
+    for _ in 0..300 {
+        r.frame(vec![]); // the eased read position settles on the head
+    }
+    r.frame(vec![]);
+    let a = r.last;
+    for _ in 0..5 {
+        r.frame(vec![]);
+        assert_eq!(r.last, a, "the picture moved with no new audio");
+    }
+}
+
+#[test]
+fn the_scope_advances_while_audio_runs_without_redrawing_old_columns() {
+    // two rigs fed the same buckets, one frame apart in time: after the second has had longer to settle, both pictures are
+    // made of the same stable columns shifted along, so an unchanged tail of the picture exists. Cheap proxy: the number of
+    // distinct frame hashes over a run stays at most one per frame (never a flicker pair within one frame), and the picture
+    // changes on most frames while running.
+    let mut r = Rig::new();
+    for _ in 0..40 {
+        r.frame(vec![]);
+    }
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..60 {
+        r.frame(vec![]);
+        seen.insert(r.last);
+    }
+    assert!(seen.len() >= 40, "the picture should advance on most frames: {} distinct of 60", seen.len());
 }

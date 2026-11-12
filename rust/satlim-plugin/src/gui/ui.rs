@@ -66,6 +66,9 @@ pub struct State {
     scope_cfg: i32,
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
     scope_drag: (f32, f32, usize, usize),
+    /// eased read position in the scope ring (buckets) and the time of the last scope frame
+    scope_pos: f64,
+    scope_t: f64,
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
     asym_drag: (f32, f32),
     /// colour themes, theme editor and About-page state (satcomp-ui)
@@ -149,6 +152,7 @@ impl State {
             self.gr_hold_t = now;
             self.sat_clip_t = -10.0;
             self.hold_until = now;
+            self.scope_t = now;
         }
     }
 
@@ -182,6 +186,8 @@ impl State {
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_drag: (0.0, 0.0, 0, 0),
+            scope_pos: 0.0,
+            scope_t: 0.0,
             asym_drag: (0.0, 0.0),
             app: AppState::new(),
             dummy_params: Arc::new(SatLimParams::default()),
@@ -1670,49 +1676,50 @@ impl<'a> Gui<'a> {
             self.out_vu(198.0, 208.0, 26.0, mh);
         }
 
-        // ---------- limiter column: oversampling, readouts, L.AHEAD, cells
+        // ---------- limiter column: oversampling, readouts, L.AHEAD, cells (the thin About layout hides them)
         self.set_dk(1.0);
         let (cx, cw) = (232.0, 98.0);
         if !ab {
+            // OVERSAMPL sits on the shape selector's row, centred over the meter bars; x1..x8 share that row at the column width
             self.setc(false);
             self.cv.set_font(1);
-            self.cv.textc(cx, 190.0, cw, "OVERSAMPL");
+            self.cv.textc(146.0, 192.0, 78.0, "OVERSAMPL");
             self.set_dk(if byp { 0.5 } else { 1.0 });
             let os_i = (self.sget(7) + 0.5).floor() as i32;
             for i in 0..4 {
                 let l = ["x1", "x2", "x4", "x8"][i as usize];
                 let (bx, bx2) = (cx + (cw * i as f32 / 4.0).floor(), cx + (cw * (i + 1) as f32 / 4.0).floor());
-                if self.btn(bx, 200.0, bx2 - bx + 1.0, 16.0, l, (os_i == i) as u8) {
+                if self.btn(bx, 188.0, bx2 - bx + 1.0, 16.0, l, (os_i == i) as u8) {
                     self.click_set(7, i as f32);
                 }
             }
             self.set_dk(1.0);
-        }
-        self.cv.set_font(1);
-        // GR stays in the UI colour at all times; only the true peak turns accent on a clip
-        self.setc(false);
-        self.cv.text(cx, 224.0, "GR");
-        let s1 = if byp { "-----dB".to_string() } else { format!("{:04.1}dB", self.rd_gr) };
-        self.cv.textr(cx, 224.0, cw, &s1);
-        self.setc(self.rd_pk > 1.0);
-        self.cv.text(cx, 236.0, if look { "TRU.PK" } else { "PK" });
-        let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
-        self.cv.textr(cx, 236.0, cw, &s1);
-        self.setc(false);
-        self.cv.text(cx, 248.0, "RMS");
-        let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
-        self.cv.textr(cx, 248.0, cw, &s1);
+            self.cv.set_font(1);
+            // GR stays in the UI colour at all times; only the true peak turns accent on a clip
+            self.setc(false);
+            self.cv.text(cx, 224.0, "GR");
+            let s1 = if byp { "-----dB".to_string() } else { format!("{:04.1}dB", self.rd_gr) };
+            self.cv.textr(cx, 224.0, cw, &s1);
+            self.setc(self.rd_pk > 1.0);
+            self.cv.text(cx, 236.0, if look { "TRU.PK" } else { "PK" });
+            let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
+            self.cv.textr(cx, 236.0, cw, &s1);
+            self.setc(false);
+            self.cv.text(cx, 248.0, "RMS");
+            let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
+            self.cv.textr(cx, 248.0, cw, &s1);
 
-        self.set_dk(if byp { 0.5 } else { 1.0 });
-        if self.btn(cx, 262.0, cw, 16.0, if look { "L.AHEAD  ON" } else { "L.AHEAD OFF" }, look as u8) {
-            self.click_set(12, if look { 0.0 } else { 1.0 });
-        }
-        self.cell(8, cx, 284.0, cw, 38.0, "CEILING");
-        if !editing {
-            self.cell(9, cx, 326.0, cw, 38.0, "THRESHOLD");
-            self.cell(11, cx, 368.0, cw, 38.0, "GRAB");
-            self.cell(10, cx, 410.0, cw, 38.0, "RELEASE");
-            self.cell_o(22, cx, 452.0, cw, 38.0, "OUT GAIN");
+            self.set_dk(if byp { 0.5 } else { 1.0 });
+            if self.btn(cx, 262.0, cw, 16.0, if look { "L.AHEAD  ON" } else { "L.AHEAD OFF" }, look as u8) {
+                self.click_set(12, if look { 0.0 } else { 1.0 });
+            }
+            self.cell(8, cx, 284.0, cw, 38.0, "CEILING");
+            if !editing {
+                self.cell(9, cx, 326.0, cw, 38.0, "THRESHOLD");
+                self.cell(11, cx, 368.0, cw, 38.0, "GRAB");
+                self.cell(10, cx, 410.0, cw, 38.0, "RELEASE");
+                self.cell_o(22, cx, 452.0, cw, 38.0, "OUT GAIN");
+            }
         }
 
         self.resize_grip();

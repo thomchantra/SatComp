@@ -8,18 +8,38 @@ const WAVE: [&str; 2] = ["HALF", "FULL"];
 /// time window steps (seconds) and their labels
 const WIN_S: [f32; 10] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
 const WIN_L: [&str; 10] = ["250ms", "0.5s", "0.75s", "1s", "1.5s", "2s", "3s", "4s", "6s", "8s"];
-/// ceiling steps: +4 dB (room to watch inter-sample overshoots over a limiter's ceiling) down to -14 dB; the default step is +2 dB
-const CEIL_N: usize = 19;
+/// ceiling steps: +10 dB (this plug-in is meant to clip heavily, so there is room to watch what the clipper does above 0 dBFS)
+/// down to -14 dB; the default step is +2 dB
+const CEIL_N: usize = 25;
 
 fn ceil_db(i: usize) -> i32 {
-    4 - i as i32
+    10 - i as i32
+}
+
+/// (output peak, peak with the removed part added back) of absolute column `j` on a grid of `k` buckets per column, read from a
+/// ring whose newest bucket index is `head - 1`. Pure in (ring contents, j, k): once a column is complete it never changes.
+fn scope_col(ring: &satcomp_dsp::ScopeRing, head: usize, j: i64, k: f64) -> (f32, f32) {
+    let len = satcomp_dsp::ScopeRing::LEN as i64;
+    let b0 = j as f64 * k;
+    let i0 = b0.floor() as i64;
+    let i1 = ((b0 + k).floor() as i64).max(i0 + 1);
+    let (mut o, mut p) = (0.0f32, 0.0f32);
+    for i in i0..i1 {
+        if i < 0 || head as i64 - i >= len {
+            continue;
+        }
+        let (a, b) = ring.get(i as usize);
+        o = o.max(a);
+        p = p.max(b);
+    }
+    (o, p.max(o))
 }
 
 fn fmt_db(db: i32) -> String {
     if db > 0 { format!("+{db}dB") } else { format!("{db}dB") }
 }
 
-// Packed settings (params.scope, default (5 << 4) | (2 << 8) = 2 s window, +2 dB ceiling): bit 0 on, bits 1-2 source,
+// Packed settings (params.scope, default (5 << 4) | (8 << 8) = 2 s window, +2 dB ceiling): bit 0 on, bits 1-2 source,
 // bit 3 full wave, bits 4-7 window step, bits 8-12 ceiling step (ceil_db).
 
 impl<'a> Gui<'a> {
@@ -58,23 +78,24 @@ impl<'a> Gui<'a> {
         let ring = self.env.shared.scope.clone();
         let head = ring.head();
         let ncol = (w - 2.0) as usize;
-        let k = WIN_S[win] / satcomp_dsp::ScopeRing::BUCKET_S as f32 / ncol as f32;
+        let k = WIN_S[win] as f64 / satcomp_dsp::ScopeRing::BUCKET_S / ncol as f64; // buckets per column (fractional)
         let len = satcomp_dsp::ScopeRing::LEN as i64;
+        // Steady scrolling: the audio thread delivers buckets in host-block chunks, and a column grouped relative to the newest
+        // bucket changes every frame. So (1) the read position eases toward the head instead of jumping with each chunk, and
+        // (2) columns sit on a fixed grid in absolute bucket time and only complete ones are drawn: a column's content never
+        // changes once it exists, the picture just advances.
+        let target = head as f64 - 4.0;
+        let dt = (self.now - self.scope_t).clamp(0.0, 0.25);
+        self.scope_t = self.now;
+        if self.scope_pos <= 0.0 || (target - self.scope_pos).abs() > 4000.0 {
+            self.scope_pos = target;
+        } else {
+            self.scope_pos += (target - self.scope_pos) * (1.0 - (-dt * 10.0).exp());
+        }
+        let last = (self.scope_pos / k).floor() as i64 - 1; // newest complete column
         let mut cols = vec![(0.0f32, 0.0f32); ncol];
         for (c, col) in cols.iter_mut().enumerate() {
-            let b0 = head as f32 - (ncol - c) as f32 * k;
-            let i0 = b0.floor() as i64;
-            let i1 = ((b0 + k).floor() as i64).max(i0 + 1);
-            let (mut o, mut p) = (0.0f32, 0.0f32);
-            for i in i0..i1 {
-                if i < 0 || head as i64 - i >= len {
-                    continue;
-                }
-                let (a, b) = ring.get(i as usize);
-                o = o.max(a);
-                p = p.max(b);
-            }
-            *col = (o, p.max(o));
+            *col = scope_col(&ring, head, last - (ncol - 1 - c) as i64, k);
         }
         let span = if full { ((h - 2.0) * 0.5).floor() } else { h - 2.0 };
         let hpx = |v: f32| ((v * zoom).min(1.0) * span).floor();
@@ -232,5 +253,33 @@ impl<'a> Gui<'a> {
             self.setc(false);
             cx += w - 1.0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_complete_column_does_not_change_as_new_buckets_arrive() {
+        let ring = satcomp_dsp::ScopeRing::new();
+        let val = |i: usize| 0.2 + 0.3 * ((i as f32 * 0.37).sin().abs());
+        for i in 0..2000 {
+            ring.push(val(i), val(i) * 1.5);
+        }
+        // k = 3.7 buckets per column (a fractional window), the same columns read at three different heads
+        let k = 3.7;
+        let head0 = ring.head();
+        let before: Vec<_> = (400..420).map(|j| scope_col(&ring, head0, j, k)).collect();
+        for i in 2000..2013 {
+            ring.push(val(i), val(i) * 1.5);
+        }
+        let after: Vec<_> = (400..420).map(|j| scope_col(&ring, ring.head(), j, k)).collect();
+        assert_eq!(before, after);
+        // and a column reads the maximum of the buckets it spans
+        let (o, _) = scope_col(&ring, ring.head(), 500, k);
+        // column 500 spans buckets [1850, floor(1853.7)) = 1850..1853
+        let want = (1850..1853).map(val).fold(0.0f32, f32::max);
+        assert!((o - want).abs() < 1e-6, "{o} vs {want}");
     }
 }
