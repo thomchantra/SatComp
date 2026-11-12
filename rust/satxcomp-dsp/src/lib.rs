@@ -1,5 +1,6 @@
 //! DSP for SatXComp, the 4-band multiband version of SatComp, built from the shared `satcomp-dsp` blocks.
 
+pub mod confine;
 pub mod engine;
 pub mod params;
 pub mod strip;

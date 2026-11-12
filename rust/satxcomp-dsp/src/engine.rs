@@ -267,8 +267,12 @@ impl XEngine {
         self.xo.set(xf, xs, sr, snap);
         self.key_xo.set(xf, xs, sr, snap);
         self.key.derive(p.sc_gain, p.sc_hp, p.sc_lp, sr);
+        // each band's saturator is band-limited by the band's own crossover edges
+        let xf = Crossover4::order(xf);
         for b in 0..NB {
-            self.strips[b].derive(&p.bands[b], p.os, self.la_s, p.key_mix, sr, snap, self.smoothing);
+            let lo = if b == 0 { None } else { Some((xf[b - 1], xs[b - 1])) };
+            let hi = if b == NB - 1 { None } else { Some((xf[b], xs[b])) };
+            self.strips[b].derive(&p.bands[b], p.os, self.la_s, p.key_mix, (lo, hi), sr, snap, self.smoothing);
         }
         self.any_solo = p.bands.iter().any(|b| b.solo);
         let any = eq_setup(&mut self.eq.bank, &p.eq, sr);
@@ -307,7 +311,7 @@ impl XEngine {
         self.xo.begin_block(n);
         self.key_xo.begin_block(n);
         for s in self.strips.iter_mut() {
-            s.begin_block();
+            s.begin_block(n);
         }
         self.eq.begin_block(n);
 
@@ -913,5 +917,30 @@ mod tests {
             let y = run(&mut e, &x);
             assert!(y.iter().all(|v| v.is_finite() && v.abs() < 8.0));
         }
+    }
+
+    #[test]
+    fn a_bands_harmonics_stay_inside_its_edges() {
+        // 50 Hz through the hard-driven low band (edge 150 Hz, 24 dB/oct): the 5th and 7th harmonic (250 / 350 Hz) the
+        // shaper creates are far below the fundamental, and the rest of the bands add nothing there
+        let tone: Vec<f64> = (0..96000).map(|i| 0.5 * (2.0 * PI * 50.0 * i as f64 / SR).sin()).collect();
+        let bin = |y: &[f64], f: f64| {
+            let (mut re, mut im) = (0.0, 0.0);
+            for (n, v) in y.iter().enumerate() {
+                let w = 2.0 * PI * f * n as f64 / SR;
+                re += v * w.cos();
+                im += v * w.sin();
+            }
+            (re * re + im * im).sqrt() / y.len() as f64 * 2.0
+        };
+        let mut p = neutral();
+        p.bands[0].drive = 100.0;
+        p.bands[0].shape = 3;
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        let y = run(&mut e, &tone);
+        let y = &y[48000..];
+        let (f1, h5, h7) = (bin(y, 50.0), bin(y, 250.0), bin(y, 350.0));
+        assert!(h5 < f1 * 0.035 && h7 < f1 * 0.01, "fund {f1} h5 {h5} h7 {h7}");
     }
 }

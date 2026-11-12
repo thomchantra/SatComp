@@ -1,5 +1,6 @@
 //! One band's channel strip: saturator -> lookahead -> compressor -> parallel mix and gain, with a latency-aligned bypass.
 
+use crate::confine::{Confine, Edge};
 use crate::params::BandParams;
 use satcomp_dsp::delay::StereoDelay;
 use satcomp_dsp::level::{one_pole, LN10_20};
@@ -20,6 +21,7 @@ pub struct StripOut {
 pub struct Strip {
     pub sat: Saturator,
     pub comp: Compressor,
+    confine: Confine,
     lk: StereoDelay<4096>,
     dry: StereoDelay<4096>,
     la_s: usize,
@@ -48,6 +50,7 @@ impl Strip {
         Self {
             sat: Saturator::new(),
             comp: Compressor::new(),
+            confine: Confine::new(),
             lk: StereoDelay::new(),
             dry: StereoDelay::new(),
             la_s: 0,
@@ -65,7 +68,7 @@ impl Strip {
     }
 
     pub fn sat_params(p: &BandParams, os: i32) -> SatParams {
-        SatParams { shape: p.shape, curve: p.curve, drive: p.drive, bias: p.bias, hp: p.hp, lp: p.lp, tone: p.tone, os, mix: p.sat_mix, out_db: p.sat_gain, asym: Some(p.asym[(p.shape.max(0) as usize).min(p.asym.len() - 1)]) }
+        SatParams { shape: p.shape, curve: p.curve, drive: p.drive, bias: p.bias, hp: p.hp, lp: p.lp, tone: p.tone, os, mix: p.sat_mix, out_db: p.sat_gain, asym: Some(p.asym[(p.shape.max(0) as usize).min(p.asym.len() - 1)]), steep: true }
     }
 
     pub fn comp_params(p: &BandParams, key_mix: f64) -> CompParams {
@@ -89,7 +92,8 @@ impl Strip {
         self.sat.latency() + self.la_s
     }
 
-    pub fn derive(&mut self, p: &BandParams, os: i32, la_s: usize, key_mix: f64, sr: f64, snap: bool, smoothing: bool) {
+    pub fn derive(&mut self, p: &BandParams, os: i32, la_s: usize, key_mix: f64, edges: (Edge, Edge), sr: f64, snap: bool, smoothing: bool) {
+        self.confine.set(edges.0, edges.1, sr, snap);
         self.sat.derive(&Self::sat_params(p, os), sr, snap, smoothing);
         // Saturator::derive only latches SAT OUT on a snap; the target has to follow the parameter every time
         self.sat.set_out_db(p.sat_gain);
@@ -107,8 +111,9 @@ impl Strip {
         }
     }
 
-    pub fn begin_block(&mut self) {
+    pub fn begin_block(&mut self, n: usize) {
         self.sat.begin_block();
+        self.confine.begin_block(n);
     }
 
     #[inline]
@@ -118,7 +123,11 @@ impl Strip {
         self.dry.advance();
         self.dry.put(inp);
         let dd = self.dry.tap(self.latency());
-        let cc = self.sat.tick(inp, smoothing);
+        // the saturator's added content stays inside the band (see `confine`); the clean signal bypasses the filter
+        let (raw, clean) = self.sat.tick_split(inp, smoothing);
+        let add = self.confine.tick([raw[0] - clean[0], raw[1] - clean[1]]);
+        let g = self.sat.gain_step();
+        let cc = [(clean[0] + add[0]) * g, (clean[1] + add[1]) * g];
         self.sat_pk = self.sat_pk.max(cc[0].abs().max(cc[1].abs()));
         self.lk.advance();
         self.lk.put(cc);

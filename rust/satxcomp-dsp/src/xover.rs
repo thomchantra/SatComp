@@ -23,7 +23,7 @@ const Q8: [f64; 4] = [0.509_795_579_104_159_3, 0.601_344_886_935_045_2, 0.899_97
 /// Number of slope steps and their names (dB/oct).
 pub const SLOPES: usize = 4;
 pub const SLOPE_DB: [u32; SLOPES] = [12, 24, 48, 96];
-const MAX_SEC: usize = 8; // LR8x2: 4 biquads, squared
+pub(crate) const MAX_SEC: usize = 8; // LR8x2: 4 biquads, squared
 const AP_SEC: usize = 4;
 /// filter slots: per split an LP chain then an HP chain, then the all-pass chains
 /// (low band at splits 2 and 3, low-mid band at split 3)
@@ -39,7 +39,7 @@ const N_AP: usize = 3;
 const N: usize = AP0 + N_AP * AP_SEC;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Lp,
     Hp,
     Ap,
@@ -64,7 +64,7 @@ fn section(kind: Kind, f: f64, q: f64, sr: f64) -> Coef {
 }
 
 /// Fills `out` (unused sections become identity) with the Butterworth order `1 << slope` sections of `kind`, `repeat` times over.
-fn fill(out: &mut [Coef], kind: Kind, f: f64, slope: usize, repeat: usize, sr: f64) {
+pub(crate) fn fill(out: &mut [Coef], kind: Kind, f: f64, slope: usize, repeat: usize, sr: f64) {
     for c in out.iter_mut() {
         *c = IDENTITY;
     }

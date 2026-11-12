@@ -92,6 +92,7 @@ impl Params {
             mix: self.sat_mix,
             out_db: self.sat_out,
             asym: Some(self.asym[(self.shape.max(0) as usize).min(SHAPER_COUNT - 1)]),
+            steep: false,
         }
     }
 

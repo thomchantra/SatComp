@@ -35,14 +35,19 @@ pub struct SatParams {
     /// a * (even part high-passed at `EVEN_HP_HZ`). The even part of an asymmetric curve is what carries DC and
     /// envelope-following sub-audio pulses (they sink the waveform into the headroom); 0 % drops it altogether.
     pub asym: Option<f64>,
+    /// HP / LP as 48 dB/oct Butterworth (8th order, flat passband, no corner peak) instead of the legacy 12 dB biquad.
+    pub steep: bool,
 }
+
+/// Section Qs of an 8th-order Butterworth (48 dB/oct): maximally flat, the high-Q sections cancel each other's peaks.
+const BUTTER8_Q: [f64; 4] = [0.509_795_579_104_159_3, 0.601_344_886_935_045_2, 0.899_976_223_136_415_6, 2.562_915_447_741_505];
 
 /// Corner of the high-pass on the even part of the shaper (2nd order), Hz.
 pub const EVEN_HP_HZ: f64 = 25.0;
 
 impl Default for SatParams {
     fn default() -> Self {
-        Self { shape: 0, curve: Curve::linear(), drive: 25.0, bias: 0.0, hp: 20.0, lp: 20000.0, tone: 20000.0, os: 0, mix: 100.0, out_db: 0.0, asym: None }
+        Self { shape: 0, curve: Curve::linear(), drive: 25.0, bias: 0.0, hp: 20.0, lp: 20000.0, tone: 20000.0, os: 0, mix: 100.0, out_db: 0.0, asym: None, steep: false }
     }
 }
 
@@ -64,11 +69,13 @@ pub struct Saturator {
     use_hp: bool,
     use_lp: bool,
     use_tone: bool,
-    hpc: Coef,
-    lpc: Coef,
+    hpc: [Coef; 4],
+    lpc: [Coef; 4],
+    /// sections used by the HP / LP: 1 (12 dB) or 4 (48 dB)
+    n_filt: usize,
     tnc: Coef,
-    hps: [[f64; 2]; 2],
-    lps: [[f64; 2]; 2],
+    hps: [[[f64; 2]; 4]; 2],
+    lps: [[[f64; 2]; 4]; 2],
     tns: [[f64; 2]; 2],
     os: i32,
     last_os: i32,
@@ -121,11 +128,12 @@ impl Saturator {
             use_hp: false,
             use_lp: false,
             use_tone: false,
-            hpc: biquad::IDENTITY,
-            lpc: biquad::IDENTITY,
+            hpc: [biquad::IDENTITY; 4],
+            lpc: [biquad::IDENTITY; 4],
+            n_filt: 1,
             tnc: biquad::IDENTITY,
-            hps: [[0.0; 2]; 2],
-            lps: [[0.0; 2]; 2],
+            hps: [[[0.0; 2]; 4]; 2],
+            lps: [[[0.0; 2]; 4]; 2],
             tns: [[0.0; 2]; 2],
             os: 0,
             last_os: -1,
@@ -173,12 +181,17 @@ impl Saturator {
         self.bias_t = p.bias * 0.01;
         self.on = p.drive > 0.0 || p.bias != 0.0;
         self.use_hp = p.hp > 20.5;
+        self.n_filt = if p.steep { 4 } else { 1 };
         if self.use_hp {
-            self.hpc = biquad::hp(p.hp, 0.70710678, sr);
+            for k in 0..self.n_filt {
+                self.hpc[k] = biquad::hp(p.hp, if p.steep { BUTTER8_Q[k] } else { 0.70710678 }, sr);
+            }
         }
         self.use_lp = p.lp < 19900.0;
         if self.use_lp {
-            self.lpc = biquad::lp(p.lp, 0.70710678, sr);
+            for k in 0..self.n_filt {
+                self.lpc[k] = biquad::lp(p.lp, if p.steep { BUTTER8_Q[k] } else { 0.70710678 }, sr);
+            }
         }
         self.use_tone = p.tone < 19900.0;
         if self.use_tone {
@@ -225,6 +238,22 @@ impl Saturator {
     /// One stereo sample in -> shaped stereo sample out (after SAT OUT), delayed by `latency()`.
     #[inline]
     pub fn tick(&mut self, inp: [f64; 2], smoothing: bool) -> [f64; 2] {
+        let (cc, _) = self.tick_split(inp, smoothing);
+        let g = self.gain_step();
+        [cc[0] * g, cc[1] * g]
+    }
+
+    /// The SAT OUT gain for this sample (smoothed). `tick` = `tick_split` then this.
+    #[inline]
+    pub fn gain_step(&mut self) -> f64 {
+        self.gain += (self.gain_t - self.gain) * self.gain_c;
+        self.gain
+    }
+
+    /// As `tick`, but before SAT OUT and also returning the clean (unsaturated) input delayed by `latency()`:
+    /// `(shaped, clean)`. Their difference is the content the saturator added (the owner may filter it).
+    #[inline]
+    pub fn tick_split(&mut self, inp: [f64; 2], smoothing: bool) -> ([f64; 2], [f64; 2]) {
         self.lut_cnt += 1;
         if self.lut_cnt >= crate::shapers::FADE_EVERY {
             self.lut_cnt = 0;
@@ -252,12 +281,16 @@ impl Saturator {
             let mut bp = inp;
             if self.use_hp {
                 for c in 0..2 {
-                    bp[c] = bq(&mut self.hps[c], &self.hpc, bp[c]);
+                    for k in 0..self.n_filt {
+                        bp[c] = bq(&mut self.hps[c][k], &self.hpc[k], bp[c]);
+                    }
                 }
             }
             if self.use_lp {
                 for c in 0..2 {
-                    bp[c] = bq(&mut self.lps[c], &self.lpc, bp[c]);
+                    for k in 0..self.n_filt {
+                        bp[c] = bq(&mut self.lps[c][k], &self.lpc[k], bp[c]);
+                    }
                 }
             }
             self.res.put([inp[0] - bp[0], inp[1] - bp[1]]);
@@ -311,8 +344,7 @@ impl Saturator {
         }
 
         ms_step(&mut self.ms, cc[0], cc[1], self.ms_c);
-        self.gain += (self.gain_t - self.gain) * self.gain_c;
-        [cc[0] * self.gain, cc[1] * self.gain]
+        (cc, dl)
     }
 }
 
