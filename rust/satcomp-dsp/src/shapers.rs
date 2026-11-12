@@ -91,6 +91,37 @@ impl Curve {
         c
     }
 
+    /// True when the curve is (nearly) odd, `f(-x) = -f(x)`: the symmetry tool can edit it without changing it.
+    pub fn is_odd(&self) -> bool {
+        (0..=20).all(|i| {
+            let x = i as f64 * 0.05;
+            (self.eval(x) + self.eval(-x)).abs() < 0.02
+        })
+    }
+
+    /// The right half of the curve's odd part: points at the |x| of its interior points (at most `MAX_PTS / 2 - 1`) and at
+    /// x = 1, with y = (f(x) - f(-x)) / 2. Feed it to `from_odd_half`.
+    pub fn odd_half(&self) -> Vec<(f32, f32)> {
+        let mut xs: Vec<f32> = self.pts().iter().filter(|p| p.0 > -1.0 && p.0 < 1.0).map(|p| p.0.abs()).filter(|x| *x >= MIN_GAP).collect();
+        xs.sort_by(|a, b| a.total_cmp(b));
+        let mut keep: Vec<f32> = Vec::new();
+        for x in xs {
+            if keep.last().map_or(true, |l| x - l >= MIN_GAP) && x <= 1.0 - MIN_GAP {
+                keep.push(x);
+            }
+        }
+        keep.truncate(MAX_PTS / 2 - 1);
+        keep.push(1.0);
+        keep.into_iter().map(|x| (x, ((self.eval(x as f64) - self.eval(-x as f64)) * 0.5) as f32)).collect()
+    }
+
+    /// The full odd curve of a right half (x > 0, ending at x = 1): the left half is the point-mirror image.
+    pub fn from_odd_half(h: &[(f32, f32)]) -> Self {
+        let mut v: Vec<(f32, f32)> = h.iter().rev().map(|&(x, y)| (-x, -y)).collect();
+        v.extend_from_slice(h);
+        Self::from_points(&v)
+    }
+
     /// Value of the monotone cubic (Fritsch-Carlson) through the points; flat beyond the ends.
     /// Never overshoots between points, so the transfer curve stays single-valued and tame.
     pub fn eval(&self, x: f64) -> f64 {
@@ -392,5 +423,17 @@ mod tests {
         assert!((lut.eval(9.3) - shaper(6, 9.3)).abs() < 1e-3);
         let soft = ShaperLut::new(1);
         assert!((soft.eval(50.0) - shaper(1, 7.999)).abs() < 1e-3); // clamped, not folded
+    }
+
+    #[test]
+    fn odd_half_round_trips_and_folds_a_lopsided_curve() {
+        let lop = Curve::from_points(&[(-1.0, -0.6), (-0.4, -0.1), (0.5, 0.8), (1.0, 1.0)]);
+        assert!(!lop.is_odd());
+        let odd = Curve::from_odd_half(&lop.odd_half());
+        assert!(odd.is_odd(), "{:?}", odd.pts());
+        // the odd part is what the fold keeps: f(1) = (1.0 + 0.6) / 2
+        assert!((odd.eval(1.0) - 0.8).abs() < 1e-6 && (odd.eval(-1.0) + 0.8).abs() < 1e-6);
+        assert!(Curve::linear().is_odd());
+        assert_eq!(Curve::from_odd_half(&Curve::linear().odd_half()).pts(), Curve::linear().pts());
     }
 }

@@ -140,6 +140,8 @@ pub struct State {
     lut: ShaperLut,
     /// custom-curve draw mode (pencil) and the point being dragged
     curve_edit: bool,
+    /// draw view tool: true = symmetry (odd curve), false = free draw
+    sym_mode: bool,
     /// shape was observed as Custom since the draw view opened (host writes land a frame or more later)
     edit_seen: bool,
     cpt: usize,
@@ -293,6 +295,7 @@ impl State {
             fwin,
             lut: ShaperLut::new(0),
             curve_edit: false,
+            sym_mode: true,
             edit_seen: false,
             cpt: 0,
             resizing: false,
@@ -957,6 +960,8 @@ impl<'a> Gui<'a> {
             self.edit_seen = false;
             if self.curve_edit {
                 self.click_set(1, CUSTOM as f32);
+                // symmetry is the default tool, unless the stored curve is lopsided: opening must not alter it
+                self.sym_mode = self.env.params.curve_snapshot().is_odd();
             }
             self.press = false;
         }
@@ -988,7 +993,11 @@ impl<'a> Gui<'a> {
         for i in 0..(h / 2.0).floor() as i32 {
             self.cv.fill(x + (w / 2.0).floor(), y + i as f32 * 2.0, 1.0, 1.0);
         }
-        self.pencil_glyph(x + w - 14.0, y + 2.0, self.curve_edit, pen);
+        if self.curve_edit {
+            self.close_glyph(x + w - 14.0, y + 2.0, pen);
+        } else {
+            self.pencil_glyph(x + w - 14.0, y + 2.0, false, pen);
+        }
         if self.curve_edit {
             self.draw_curve_edit(x, y, w, h);
             return;
@@ -1056,50 +1065,75 @@ impl<'a> Gui<'a> {
         self.setc(false);
     }
 
-    /// Draw view of the custom curve (unity input, independent of drive/bias).
+    /// Draw view of the custom curve (unity input, independent of drive/bias). Tools (top right, left of the close cross):
+    /// symmetry (default) draws the right half and mirrors it through the origin, `f(-x) = -f(x)`, the pencil draws free.
     /// Left click empty space = add a point (and drag it), drag = move, double click = remove.
     /// The two end points are fixed in x and cannot be removed.
     fn draw_curve_edit(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let mut c = self.env.params.curve_snapshot();
         let before = c;
-        // domain [-1,1]^2 is inset so end points and the pencil never collide (symmetric margins keep the centre cross true)
+        // tool icons left of the close cross: free draw (pencil), symmetry
+        let (pen_x, sym_x) = (x + w - 28.0, x + w - 42.0);
+        let (hp, hs) = (self.hit(pen_x, y + 2.0, 12.0, 12.0), self.hit(sym_x, y + 2.0, 12.0, 12.0));
+        if self.press && self.act == 0 {
+            if hp && self.sym_mode {
+                self.sym_mode = false;
+                self.press = false;
+            } else if hs && !self.sym_mode {
+                // free -> symmetric keeps the odd part of the curve (what a symmetric curve can hold)
+                c = Curve::from_odd_half(&c.odd_half());
+                self.sym_mode = true;
+                self.press = false;
+            }
+        }
+        let sym = self.sym_mode;
+        // domain [-1,1]^2 is inset so end points and the icons never collide (symmetric margins keep the centre cross true)
         let (ex, ey, ew, eh) = (x + 9.0, y + 14.0, w - 18.0, h - 28.0);
         let (px, py) = (|vx: f32| ex + (vx + 1.0) * 0.5 * (ew - 1.0), |vy: f32| ey + (1.0 - (vy + 1.0) * 0.5) * (eh - 1.0));
         let to_v = |mx: f32, my: f32| (((mx - ex) / (ew - 1.0)) * 2.0 - 1.0, 1.0 - ((my - ey) / (eh - 1.0)) * 2.0);
-        let pick = |s: &Self, c: &Curve| -> Option<usize> {
+        // working list: the whole curve, or in symmetry mode its right half (x > 0, ending at x = 1); the left is derived
+        let mut hv: Vec<(f32, f32)> = if sym { c.pts().iter().cloned().filter(|p| p.0 > 0.0).collect() } else { c.pts().to_vec() };
+        if sym && hv.is_empty() {
+            hv.push((1.0, 1.0));
+        }
+        let cap = if sym { MAX_PTS / 2 } else { MAX_PTS };
+        let interior = |i: usize, n: usize| if sym { i + 1 < n } else { i > 0 && i + 1 < n };
+        let xlo = |hv: &Vec<(f32, f32)>, i: usize| if i == 0 { if sym { 0.0 } else { -1.0 } } else { hv[i - 1].0 };
+        // a point is picked on its own spot, or in symmetry mode on its mirror image
+        let pick = |s: &Self, hv: &Vec<(f32, f32)>| -> Option<usize> {
             let mut best: Option<(usize, f32)> = None;
-            for (i, &(vx, vy)) in c.pts().iter().enumerate() {
-                let d = ((s.mx - px(vx)).powi(2) + (s.my - py(vy)).powi(2)).sqrt();
+            for (i, &(vx, vy)) in hv.iter().enumerate() {
+                let mut d = ((s.kit.mx - px(vx)).powi(2) + (s.kit.my - py(vy)).powi(2)).sqrt();
+                if sym {
+                    d = d.min(((s.kit.mx - px(-vx)).powi(2) + (s.kit.my - py(-vy)).powi(2)).sqrt());
+                }
                 if d <= 6.0 && best.map_or(true, |b| d < b.1) {
                     best = Some((i, d));
                 }
             }
             best.map(|b| b.0)
         };
-        let in_box = self.hit(x, y, w, h) && !self.hit(x + w - 14.0, y + 2.0, 12.0, 12.0);
+        let in_box = self.hit(x, y, w, h) && !self.hit(sym_x, y + 2.0, 56.0, 12.0);
         if in_box && self.press && self.act == 0 {
-            if let Some(i) = pick(self, &c) {
-                let interior = i > 0 && i + 1 < c.n;
-                if self.dbl(200 + i as i32) && interior {
-                    for k in i..c.n - 1 {
-                        c.p[k] = c.p[k + 1];
-                    }
-                    c.n -= 1;
+            let n = hv.len();
+            if let Some(i) = pick(self, &hv) {
+                if self.dbl(200 + i as i32) && interior(i, n) {
+                    hv.remove(i);
                     self.last_clk_n = 0;
                 } else {
                     self.act = 160;
                     self.cpt = i;
                 }
-            } else if c.n < MAX_PTS {
-                let (vx, vy) = to_v(self.mx, self.my);
-                let at = (1..c.n).find(|&k| c.p[k].0 > vx).unwrap_or(c.n - 1);
-                let room = vx - c.p[at - 1].0 >= MIN_GAP && c.p[at].0 - vx >= MIN_GAP;
+            } else if n < cap {
+                let (mut vx, mut vy) = to_v(self.mx, self.my);
+                if sym && vx < 0.0 {
+                    vx = -vx;
+                    vy = -vy;
+                }
+                let at = if sym { hv.iter().position(|p| p.0 > vx) } else { (1..n).find(|&k| hv[k].0 > vx) }.unwrap_or(n - 1);
+                let room = vx - xlo(&hv, at) >= MIN_GAP && hv[at].0 - vx >= MIN_GAP;
                 if room {
-                    for k in (at..c.n).rev() {
-                        c.p[k + 1] = c.p[k];
-                    }
-                    c.p[at] = (vx, vy.clamp(-1.0, 1.0));
-                    c.n += 1;
+                    hv.insert(at, (vx, vy.clamp(-1.0, 1.0)));
                     self.act = 160;
                     self.cpt = at;
                     self.last_clk_n = 0; // a creating click never counts towards a double click
@@ -1109,14 +1143,23 @@ impl<'a> Gui<'a> {
             self.vt2 = 0;
             self.press = false;
         }
-        if self.act == 160 && self.down && self.cpt < c.n {
-            let (vx, vy) = to_v(self.mx, self.my);
+        if self.act == 160 && self.down && self.cpt < hv.len() {
+            let (mut vx, mut vy) = to_v(self.mx, self.my);
             let i = self.cpt;
-            if i > 0 && i + 1 < c.n {
-                c.p[i].0 = vx.clamp(c.p[i - 1].0 + MIN_GAP, c.p[i + 1].0 - MIN_GAP);
+            if sym {
+                // dragging the ghost half moves the real point the other way round
+                if vx < 0.0 {
+                    vx = -vx;
+                    vy = -vy;
+                }
             }
-            c.p[i].1 = vy.clamp(-1.0, 1.0);
+            let n = hv.len();
+            if interior(i, n) {
+                hv[i].0 = vx.clamp(xlo(&hv, i) + MIN_GAP, hv[i + 1].0 - MIN_GAP);
+            }
+            hv[i].1 = vy.clamp(-1.0, 1.0);
         }
+        c = if sym { Curve::from_odd_half(&hv) } else { Curve::from_points(&hv) };
         if c != before {
             *self.env.params.custom_curve.lock() = c.pts().to_vec();
         }
@@ -1142,17 +1185,30 @@ impl<'a> Gui<'a> {
             lx = qx;
             ly = qy;
         }
-        let hot = if self.act == 160 { Some(self.cpt) } else { pick(self, &c) };
-        for (i, &(vx, vy)) in c.pts().iter().enumerate() {
+        let hot = if self.act == 160 { Some(self.cpt) } else { pick(self, &hv) };
+        let nh = hv.len();
+        for (i, &(vx, vy)) in hv.iter().enumerate() {
             let (qx, qy) = (px(vx).round(), py(vy).round());
             self.setc(hot == Some(i));
-            if i == 0 || i + 1 == c.n {
+            let end = if sym { i + 1 == nh } else { i == 0 || i + 1 == nh };
+            if end {
                 self.cv.boxr(qx - 2.0, qy - 2.0, 5.0, 5.0); // y-only end points
             } else {
                 self.cv.fill(qx - 2.0, qy - 2.0, 5.0, 5.0);
             }
+            if sym {
+                // the mirrored partner: a dim outline you can grab just the same
+                let (gx, gy) = (px(-vx).round(), py(-vy).round());
+                let pd = self.dk;
+                self.set_dk(pd * 0.6);
+                self.cv.boxr(gx - 2.0, gy - 2.0, 5.0, 5.0);
+                self.set_dk(pd);
+            }
         }
         self.setc(false);
+        // tools: pencil (free draw), symmetry
+        self.pencil_glyph(pen_x, y + 2.0, !sym, hp);
+        self.sym_glyph(sym_x, y + 2.0, sym, hs);
         self.cv.set_font(1);
         self.cv.text(x + 3.0, y + 3.0, "DRAW");
         self.cv.textr(x, y + h - 11.0, w - 3.0, &format!("{}/{} PTS", c.n, MAX_PTS));

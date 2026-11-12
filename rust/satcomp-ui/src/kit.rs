@@ -413,6 +413,30 @@ pub trait Widgets<'c> {
         clicked
     }
 
+    /// 12x12 close cross (draw view corner); bright on hover.
+    fn close_glyph(&mut self, x: f32, y: f32, hover: bool) {
+        let prev = self.kit().dk;
+        self.set_dk(prev * if hover { 1.0 } else { 0.6 });
+        self.setc(false);
+        self.cv().line(x + 1.0, y + 1.0, x + 10.0, y + 10.0);
+        self.cv().line(x + 10.0, y + 1.0, x + 1.0, y + 10.0);
+        self.set_dk(prev);
+    }
+
+    /// 12x12 symmetry glyph: an odd S-curve through a centre dot (the curve is mirrored through the origin).
+    fn sym_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
+        let prev = self.kit().dk;
+        self.set_dk(prev * if on || hover { 1.0 } else { 0.6 });
+        self.setc(on);
+        let pts = [(0.0, 10.0), (3.0, 10.0), (5.0, 8.0), (6.0, 5.0), (7.0, 2.0), (9.0, 0.0), (12.0, 0.0)];
+        for w in pts.windows(2) {
+            self.cv().line(x + w[0].0, y + w[0].1, x + w[1].0, y + w[1].1);
+        }
+        self.cv().fill(x + 5.0, y + 5.0, 2.0, 2.0);
+        self.set_dk(prev);
+        self.setc(false);
+    }
+
     /// module-active square: filled = active, outline = untouched; byp = outlined with an X
     fn sqind(&mut self, x: f32, y: f32, s: f32, on: bool, lit: bool, byp: bool) {
         if lit {

@@ -150,37 +150,6 @@ pub enum Dlg {
     Saved(String),
 }
 
-/// True when the curve is (nearly) odd, `f(-x) = -f(x)`: the symmetry tool can edit it without changing it.
-fn curve_is_odd(c: &Curve) -> bool {
-    (0..=20).all(|i| {
-        let x = i as f64 * 0.05;
-        (c.eval(x) + c.eval(-x)).abs() < 0.02
-    })
-}
-
-/// The right half of a curve's odd part: points at the |x| of its interior points (at most `MAX_PTS / 2 - 1`) and at x = 1,
-/// with y = (f(x) - f(-x)) / 2.
-fn odd_half(c: &Curve) -> Vec<(f32, f32)> {
-    let mut xs: Vec<f32> = c.pts().iter().filter(|p| p.0 > -1.0 && p.0 < 1.0).map(|p| p.0.abs()).filter(|x| *x >= MIN_GAP).collect();
-    xs.sort_by(|a, b| a.total_cmp(b));
-    let mut keep: Vec<f32> = Vec::new();
-    for x in xs {
-        if keep.last().map_or(true, |l| x - l >= MIN_GAP) && x <= 1.0 - MIN_GAP {
-            keep.push(x);
-        }
-    }
-    keep.truncate(MAX_PTS / 2 - 1);
-    keep.push(1.0);
-    keep.into_iter().map(|x| (x, ((c.eval(x as f64) - c.eval(-x as f64)) * 0.5) as f32)).collect()
-}
-
-/// The full odd curve of a right half (x > 0, ending at x = 1): the left half is the point-mirror image.
-fn build_sym(h: &[(f32, f32)]) -> Curve {
-    let mut v: Vec<(f32, f32)> = h.iter().rev().map(|&(x, y)| (-x, -y)).collect();
-    v.extend_from_slice(h);
-    Curve::from_points(&v)
-}
-
 const KIND_NAMES: [&str; 8] = ["HPF", "LPF", "LO SHELF", "HI SHELF", "BAND", "ALLPASS", "BANDPASS", "NOTCH"];
 
 const BAND_NAMES: [&str; NB] = ["LOW", "ML", "MH", "HI"];
@@ -1806,30 +1775,6 @@ impl<'a> Gui<'a> {
         self.setc(false);
     }
 
-    /// 12x12 close cross for the draw view's corner; bright on hover.
-    fn close_glyph(&mut self, x: f32, y: f32, hover: bool) {
-        let prev = self.kit.dk;
-        self.set_dk(prev * if hover { 1.0 } else { 0.6 });
-        self.setc(false);
-        self.cv.line(x + 1.0, y + 1.0, x + 10.0, y + 10.0);
-        self.cv.line(x + 10.0, y + 1.0, x + 1.0, y + 10.0);
-        self.set_dk(prev);
-    }
-
-    /// 12x12 symmetry glyph: an odd S-curve through a centre dot (the curve is mirrored through the origin).
-    fn sym_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
-        let prev = self.kit.dk;
-        self.set_dk(prev * if on || hover { 1.0 } else { 0.6 });
-        self.setc(on);
-        let pts = [(0.0, 10.0), (3.0, 10.0), (5.0, 8.0), (6.0, 5.0), (7.0, 2.0), (9.0, 0.0), (12.0, 0.0)];
-        for w in pts.windows(2) {
-            self.cv.line(x + w[0].0, y + w[0].1, x + w[1].0, y + w[1].1);
-        }
-        self.cv.fill(x + 5.0, y + 5.0, 2.0, 2.0);
-        self.set_dk(prev);
-        self.setc(false);
-    }
-
     /// Transfer curve of the selected band's saturator at its current drive and bias. Drag in the plot = SAT GAIN (marker on
     /// the left edge), pencil (top right) = draw the band's custom curve, live input peak marked on the curve.
     fn draw_sat_plot(&mut self, x: f32, y: f32, w: f32, h: f32) {
@@ -1856,7 +1801,7 @@ impl<'a> Gui<'a> {
             if self.curve_edit {
                 self.click_set(o + SHAPE, CUSTOM as f32);
                 // symmetry is the default tool, unless the stored curve is lopsided: opening must not alter it
-                self.sym_mode = curve_is_odd(&self.env.params.curve_snapshot(b));
+                self.sym_mode = self.env.params.curve_snapshot(b).is_odd();
             }
             self.kit.press = false;
         }
@@ -1948,7 +1893,7 @@ impl<'a> Gui<'a> {
                 self.kit.press = false;
             } else if hs && !self.sym_mode {
                 // free -> symmetric keeps the odd part of the curve (what a symmetric curve can hold)
-                c = build_sym(&odd_half(&c));
+                c = Curve::from_odd_half(&c.odd_half());
                 self.sym_mode = true;
                 self.kit.press = false;
             }
@@ -2024,7 +1969,7 @@ impl<'a> Gui<'a> {
             }
             hv[i].1 = vy.clamp(-1.0, 1.0);
         }
-        c = if sym { build_sym(&hv) } else { Curve::from_points(&hv) };
+        c = if sym { Curve::from_odd_half(&hv) } else { Curve::from_points(&hv) };
         if c != before {
             let cell = self.curve_cell(b);
             *cell.lock() = c.pts().to_vec();
