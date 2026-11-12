@@ -51,6 +51,7 @@ pub struct LimEngine {
     sc_len: usize,
     sc_n: usize,
     sc_o: f64,
+    sc_m: f64,
     sc_p: f64,
     // telemetry, audio -> UI. The shell takes the peaks with fetch_max and clears them.
     /// output peak per channel (after OUT GAIN), linear
@@ -63,6 +64,8 @@ pub struct LimEngine {
     pub sat_vz: f64,
     /// limiter gain reduction peak, dB positive
     pub gr_pk: f64,
+    /// what the clipper took off the loudest peak, dB positive (0 with CLIP off)
+    pub clip_gr_pk: f64,
     /// smoothed output mean-square (RMS readout)
     pub fms: f64,
     /// loudness change across the saturator (before SAT GAIN), dB: the plot's SAT readout
@@ -108,12 +111,14 @@ impl LimEngine {
             sc_len: 96,
             sc_n: 0,
             sc_o: 0.0,
+            sc_m: 0.0,
             sc_p: 0.0,
             opk: [0.0; 2],
             tpk: 0.0,
             sat_out: 0.0,
             sat_vz: 0.0,
             gr_pk: 0.0,
+            clip_gr_pk: 0.0,
             fms: 1e-9,
             sat_db: 0.0,
             ims: 1e-9,
@@ -279,6 +284,15 @@ impl LimEngine {
             cl[ch] = self.ov[ch].process_fn(&self.taps, self.os, t[ch], |v| if on { (v * k).clamp(-c, c) } else { v });
         }
 
+        // what the clipper took off: the pre-clip peak against the clipped one (both at the same instant)
+        if on {
+            let td = self.pre.tap(halfband::latency(self.os));
+            let (pt, pc) = (td[0].abs().max(td[1].abs()), cl[0].abs().max(cl[1].abs()));
+            if pt > pc * 1.0001 && pc > 1e-9 {
+                self.clip_gr_pk = self.clip_gr_pk.max(8.6858896 * (pt / pc).ln());
+            }
+        }
+
         // LIMITER
         let lo = self.lim.tick(cl, true);
         let lat_pre = halfband::latency(self.os) + self.lim.latency();
@@ -303,12 +317,16 @@ impl LimEngine {
         self.tpk = self.tpk.max(pkv);
         ms_step(&mut self.fms, out[0], out[1], self.rms_c);
         let ao = out[0].abs().max(out[1].abs());
+        // scope: output, the peak the limiter was handed (after the clipper), the peak before the clipper
+        let am = self.lim.last_in[0].abs().max(self.lim.last_in[1].abs()) * self.og;
         self.sc_o = self.sc_o.max(ao);
-        self.sc_p = self.sc_p.max((pd[0].abs().max(pd[1].abs())) * self.og).max(ao);
+        self.sc_m = self.sc_m.max(am).max(ao);
+        self.sc_p = self.sc_p.max((pd[0].abs().max(pd[1].abs())) * self.og).max(am).max(ao);
         self.sc_n += 1;
         if self.sc_n >= self.sc_len {
-            self.scope.push(self.sc_o as f32, self.sc_p as f32);
+            self.scope.push3(self.sc_o as f32, self.sc_m as f32, self.sc_p as f32);
             self.sc_o = 0.0;
+            self.sc_m = 0.0;
             self.sc_p = 0.0;
             self.sc_n = 0;
         }
@@ -479,5 +497,46 @@ mod tests {
         assert!(v < -1.0 && v > -24.0, "drive 60 on noise is louder, the match turns it down: {v}");
         assert!((v + e.sat_db).abs() < 0.6, "match {v} vs measured change {}", e.sat_db);
         assert!(e.take_sat_result().is_none());
+    }
+
+    #[test]
+    fn the_clipper_and_the_limiter_report_their_own_reduction() {
+        let mut x = vec![0.0f32; 48000];
+        for (i, v) in x.iter_mut().enumerate() {
+            *v = (0.3 * (2.0 * PI * 200.0 * i as f64 / SR).sin()) as f32;
+            if i % 4800 == 2400 {
+                *v += 3.0;
+            }
+        }
+        let base = LimParams { ceiling: -1.0, ..LimParams::default() };
+        let (_, off) = run(&LimParams { clip: 0.0, ..base }, &x);
+        let (_, on) = run(&LimParams { clip: 100.0, ..base }, &x);
+        assert!(off.clip_gr_pk < 0.01, "no clip, no clip reduction: {}", off.clip_gr_pk);
+        assert!(off.gr_pk > 6.0);
+        assert!(on.clip_gr_pk > 6.0, "the clipper takes the spike: {}", on.clip_gr_pk);
+        assert!(on.gr_pk < off.gr_pk * 0.6, "so the limiter has less to do: {} vs {}", on.gr_pk, off.gr_pk);
+    }
+
+    #[test]
+    fn the_scope_buckets_are_ordered_output_then_limiter_then_clipper() {
+        let mut x = vec![0.0f32; 24000];
+        for (i, v) in x.iter_mut().enumerate() {
+            *v = (0.4 * (2.0 * PI * 300.0 * i as f64 / SR).sin()) as f32;
+            if i % 2400 == 1200 {
+                *v += 2.5;
+            }
+        }
+        for (clip, want_lim, want_clip) in [(0.0, true, false), (100.0, false, true)] {
+            let (_, e) = run(&LimParams { ceiling: -1.0, clip, ..LimParams::default() }, &x);
+            let head = e.scope.head();
+            let (mut saw_lim, mut saw_clip) = (false, false);
+            for i in 20..head {
+                let (o, m, p) = e.scope.get3(i);
+                assert!(o <= m + 1e-6 && m <= p + 1e-6, "clip {clip} bucket {i}: {o} {m} {p}");
+                saw_lim |= m > o * 1.05;
+                saw_clip |= p > m * 1.05;
+            }
+            assert_eq!((saw_lim, saw_clip), (want_lim, want_clip), "clip {clip}");
+        }
     }
 }

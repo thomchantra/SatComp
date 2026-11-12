@@ -50,6 +50,8 @@ impl Default for TapRing {
 pub struct ScopeRing {
     out: Vec<AtomicU32>,
     pre: Vec<AtomicU32>,
+    /// peak between the output and `pre` (SatLim: after the clipper, before the limiter's gain); `push` makes it equal to `pre`
+    mid: Vec<AtomicU32>,
     w: AtomicUsize,
 }
 
@@ -61,13 +63,20 @@ impl ScopeRing {
         Self {
             out: (0..Self::LEN).map(|_| AtomicU32::new(0)).collect(),
             pre: (0..Self::LEN).map(|_| AtomicU32::new(0)).collect(),
+            mid: (0..Self::LEN).map(|_| AtomicU32::new(0)).collect(),
             w: AtomicUsize::new(0),
         }
     }
     pub fn push(&self, o: f32, p: f32) {
+        self.push3(o, p, p);
+    }
+    /// Output peak, the peak with only the first removal added back (`m`), and the peak with everything added back (`p`).
+    pub fn push3(&self, o: f32, m: f32, p: f32) {
         let w = self.w.load(Ordering::Relaxed);
-        self.out[w & (Self::LEN - 1)].store(o.to_bits(), Ordering::Relaxed);
-        self.pre[w & (Self::LEN - 1)].store(p.to_bits(), Ordering::Relaxed);
+        let k = w & (Self::LEN - 1);
+        self.out[k].store(o.to_bits(), Ordering::Relaxed);
+        self.mid[k].store(m.to_bits(), Ordering::Relaxed);
+        self.pre[k].store(p.to_bits(), Ordering::Relaxed);
         self.w.store(w.wrapping_add(1), Ordering::Release);
     }
     /// number of buckets written so far (bucket `head - 1` is the newest)
@@ -77,6 +86,15 @@ impl ScopeRing {
     pub fn get(&self, i: usize) -> (f32, f32) {
         let k = i & (Self::LEN - 1);
         (f32::from_bits(self.out[k].load(Ordering::Relaxed)), f32::from_bits(self.pre[k].load(Ordering::Relaxed)))
+    }
+    /// (output, middle, pre)
+    pub fn get3(&self, i: usize) -> (f32, f32, f32) {
+        let k = i & (Self::LEN - 1);
+        (
+            f32::from_bits(self.out[k].load(Ordering::Relaxed)),
+            f32::from_bits(self.mid[k].load(Ordering::Relaxed)),
+            f32::from_bits(self.pre[k].load(Ordering::Relaxed)),
+        )
     }
 }
 
