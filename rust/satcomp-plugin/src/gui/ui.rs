@@ -2400,7 +2400,7 @@ impl<'a> Gui<'a> {
         self.cell2(4, 5, 10.0, 240.0, 62.0, 38.0, "HP", "LP");
         self.cell(6, 78.0, 240.0, 62.0, 38.0, "TONE");
         self.cell(25, 10.0, 284.0, 62.0, 38.0, "SAT MIX");
-        self.cell_o(27, 78.0, 284.0, 62.0, 38.0, "OUT GAIN");
+        self.cell_o(27, 78.0, 284.0, 62.0, 38.0, "SAT GAIN");
         self.sat_vu(144.0, 196.0, 5.0, 126.0);
 
         // ---------- COMP cells (or the EQ page's cells)

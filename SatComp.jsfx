@@ -1561,7 +1561,7 @@ cell(3, 78, 196, 62, 38, "BIAS");
 cell2(4, 5, 10, 240, 62, 38, "HP", "LP");
 cell(6, 78, 240, 62, 38, "TONE");
 cell(25, 10, 284, 62, 38, "SAT MIX");
-cell_o(27, 78, 284, 62, 38, "OUT GAIN");          // sat module out gain (also draggable on the plot); inverted = a gain stage
+cell_o(27, 78, 284, 62, 38, "SAT GAIN");          // sat module out gain (also draggable on the plot); inverted = a gain stage
 
 // ---------- COMP cells (or the EQ page's cells). 152,284 = lookahead (replaces the retired stereo link)
 eq_page ? (
