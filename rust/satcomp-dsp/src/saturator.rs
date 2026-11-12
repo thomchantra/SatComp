@@ -25,7 +25,7 @@ pub struct SatParams {
     pub lp: f64,
     /// 1000..20000 Hz (>= 19900 = off)
     pub tone: f64,
-    /// 0 off, 1 x2, 2 x4
+    /// 0 off, 1 x2, 2 x4 (3 = x8, SatLim only)
     pub os: i32,
     /// 0..100 %
     pub mix: f64,
@@ -210,11 +210,7 @@ impl Saturator {
             self.ove[1].clear();
             self.res.clear();
         }
-        self.lat = match self.os {
-            0 => 0,
-            1 => 24,
-            _ => 28,
-        };
+        self.lat = crate::halfband::latency(self.os);
         self.dc_r = 1.0 - 2.0 * PI * 5.0 / sr;
         self.mix_t = p.mix * 0.01;
         self.gain_c = one_pole(sr, 0.02);

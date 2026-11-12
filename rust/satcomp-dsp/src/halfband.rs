@@ -1,5 +1,5 @@
-//! Kaiser halfband filters + the shaper oversampling wrapper (x2: K=24 / x4: +K=8).
-//! Port of mk_taps / hb_up / hb_down / sh_proc; latency 24 (x2) / 28 (x4) samples.
+//! Kaiser halfband filters + the shaper oversampling wrapper (x2: K=24 / x4: +K=8 / x8: +K=8 again).
+//! Port of mk_taps / hb_up / hb_down / sh_proc; latency 24 (x2) / 28 (x4) / 30 (x8, SatLim only) samples.
 
 use crate::shapers::ShaperLut;
 
@@ -77,11 +77,22 @@ impl Hb {
     }
 }
 
-/// Per-channel oversampling state (A = x2 stage, B = x4 stage).
+/// Per-channel oversampling state (A = x2 stage, B = x4 stage, C = x8 stage).
 #[derive(Clone, Default)]
 pub struct Oversampler {
     a: Hb,
     b: Hb,
+    c: Hb,
+}
+
+/// PDC latency (base-rate samples) of the oversampling chain for `os`: 0 off, 1 x2, 2 x4, 3 x8.
+pub fn latency(os: i32) -> usize {
+    match os {
+        0 => 0,
+        1 => 24,
+        2 => 28,
+        _ => 30,
+    }
 }
 
 pub struct Taps {
@@ -106,22 +117,44 @@ impl Oversampler {
         *self = Self::default();
     }
 
-    /// os: 0 off, 1 x2, 2 x4.
+    /// os: 0 off, 1 x2, 2 x4, 3 x8.
     #[inline]
     pub fn process(&mut self, taps: &Taps, lut: &ShaperLut, os: i32, x: f64) -> f64 {
+        self.process_fn(taps, os, x, |v| lut.eval(v))
+    }
+
+    /// As `process`, with any memoryless nonlinearity `f` run at the oversampled rate.
+    #[inline]
+    pub fn process_fn(&mut self, taps: &Taps, os: i32, x: f64, f: impl Fn(f64) -> f64) -> f64 {
         match os {
-            0 => lut.eval(x),
+            0 => f(x),
             1 => {
                 let (a0, a1) = self.a.up(&taps.a, 24, 31, x);
-                self.a.down(&taps.a, 24, 63, lut.eval(a0), lut.eval(a1))
+                self.a.down(&taps.a, 24, 63, f(a0), f(a1))
+            }
+            2 => {
+                let (a0, a1) = self.a.up(&taps.a, 24, 31, x);
+                let (b0, b1) = self.b.up(&taps.b, 8, 7, a0);
+                let (b2, b3) = self.b.up(&taps.b, 8, 7, a1);
+                let c0 = self.b.down(&taps.b, 8, 15, f(b0), f(b1));
+                let c1 = self.b.down(&taps.b, 8, 15, f(b2), f(b3));
+                self.a.down(&taps.a, 24, 63, c0, c1)
             }
             _ => {
                 let (a0, a1) = self.a.up(&taps.a, 24, 31, x);
                 let (b0, b1) = self.b.up(&taps.b, 8, 7, a0);
                 let (b2, b3) = self.b.up(&taps.b, 8, 7, a1);
-                let c0 = self.b.down(&taps.b, 8, 15, lut.eval(b0), lut.eval(b1));
-                let c1 = self.b.down(&taps.b, 8, 15, lut.eval(b2), lut.eval(b3));
-                self.a.down(&taps.a, 24, 63, c0, c1)
+                let (c0, c1) = self.c.up(&taps.b, 8, 7, b0);
+                let (c2, c3) = self.c.up(&taps.b, 8, 7, b1);
+                let (c4, c5) = self.c.up(&taps.b, 8, 7, b2);
+                let (c6, c7) = self.c.up(&taps.b, 8, 7, b3);
+                let d0 = self.c.down(&taps.b, 8, 15, f(c0), f(c1));
+                let d1 = self.c.down(&taps.b, 8, 15, f(c2), f(c3));
+                let d2 = self.c.down(&taps.b, 8, 15, f(c4), f(c5));
+                let d3 = self.c.down(&taps.b, 8, 15, f(c6), f(c7));
+                let e0 = self.b.down(&taps.b, 8, 15, d0, d1);
+                let e1 = self.b.down(&taps.b, 8, 15, d2, d3);
+                self.a.down(&taps.a, 24, 63, e0, e1)
             }
         }
     }
@@ -141,7 +174,7 @@ impl Oversampler {
                 let e = eb.a.down(&taps.a, 24, 63, ev(a0), ev(a1));
                 (f, e)
             }
-            _ => {
+            2 => {
                 let (a0, a1) = self.a.up(&taps.a, 24, 31, x);
                 let (b0, b1) = self.b.up(&taps.b, 8, 7, a0);
                 let (b2, b3) = self.b.up(&taps.b, 8, 7, a1);
@@ -151,6 +184,31 @@ impl Oversampler {
                 let d0 = eb.b.down(&taps.b, 8, 15, ev(b0), ev(b1));
                 let d1 = eb.b.down(&taps.b, 8, 15, ev(b2), ev(b3));
                 let e = eb.a.down(&taps.a, 24, 63, d0, d1);
+                (f, e)
+            }
+            _ => {
+                let (a0, a1) = self.a.up(&taps.a, 24, 31, x);
+                let (b0, b1) = self.b.up(&taps.b, 8, 7, a0);
+                let (b2, b3) = self.b.up(&taps.b, 8, 7, a1);
+                let u = [b0, b1, b2, b3];
+                let mut c = [0.0f64; 8];
+                for (i, v) in u.iter().enumerate() {
+                    let (p, q) = self.c.up(&taps.b, 8, 7, *v);
+                    c[2 * i] = p;
+                    c[2 * i + 1] = q;
+                }
+                let mut d = [0.0f64; 4];
+                let mut de = [0.0f64; 4];
+                for i in 0..4 {
+                    d[i] = self.c.down(&taps.b, 8, 15, lut.eval(c[2 * i]), lut.eval(c[2 * i + 1]));
+                    de[i] = eb.c.down(&taps.b, 8, 15, ev(c[2 * i]), ev(c[2 * i + 1]));
+                }
+                let e0 = self.b.down(&taps.b, 8, 15, d[0], d[1]);
+                let e1 = self.b.down(&taps.b, 8, 15, d[2], d[3]);
+                let f = self.a.down(&taps.a, 24, 63, e0, e1);
+                let g0 = eb.b.down(&taps.b, 8, 15, de[0], de[1]);
+                let g1 = eb.b.down(&taps.b, 8, 15, de[2], de[3]);
+                let e = eb.a.down(&taps.a, 24, 63, g0, g1);
                 (f, e)
             }
         }
@@ -178,7 +236,8 @@ mod tests {
         }
         lut.periodic = false;
         let taps = Taps::new();
-        for (os, lat) in [(1, 24usize), (2, 28usize)] {
+        for (os, lat) in [(1, 24usize), (2, 28usize), (3, 30usize)] {
+            assert_eq!(latency(os), lat);
             let mut ov = Oversampler::default();
             let n = 400;
             // 300 Hz-ish sine at 48k, well inside the passband
