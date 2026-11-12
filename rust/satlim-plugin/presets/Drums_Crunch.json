@@ -1,0 +1,15 @@
+{
+  "format": "satlim-preset",
+  "version": 1,
+  "name": "Drums_Crunch",
+  "params": {
+    "shape": 1.0,
+    "drive": 30.0,
+    "ceiling": -1.0,
+    "threshold": -6.0,
+    "release": 30.0,
+    "clip": 45.0,
+    "lookahead": 0.0,
+    "os": 2.0
+  }
+}

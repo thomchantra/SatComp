@@ -1,5 +1,5 @@
 [workspace]
-members = ["satcomp-dsp", "satcomp-ui", "satcomp-plugin", "satxcomp-dsp", "satxcomp-plugin", "satlim-dsp", "xtask"]
+members = ["satcomp-dsp", "satcomp-ui", "satcomp-plugin", "satxcomp-dsp", "satxcomp-plugin", "satlim-dsp", "satlim-plugin", "xtask"]
 exclude = ["vendor"]
 resolver = "2"
 

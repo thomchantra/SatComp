@@ -1,0 +1,32 @@
+[package]
+name = "satlim"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["vst3"] }
+satcomp-dsp = { path = "../satcomp-dsp" }
+satlim-dsp = { path = "../satlim-dsp" }
+satcomp-ui = { path = "../satcomp-ui" }
+nih_plug_egui = { path = "../vendor/nih_plug_egui" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+include_dir = "0.7"
+
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+rfd = { version = "0.15", default-features = false }
+
+[features]
+# `cargo run -p satlim --features standalone --bin satlim-standalone` opens the editor in a plain window (dev aid)
+standalone = ["nih_plug/standalone"]
+
+[[bin]]
+name = "satlim-standalone"
+path = "src/standalone.rs"
+required-features = ["standalone"]

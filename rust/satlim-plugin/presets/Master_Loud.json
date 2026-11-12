@@ -1,0 +1,13 @@
+{
+  "format": "satlim-preset",
+  "version": 1,
+  "name": "Master_Loud",
+  "params": {
+    "ceiling": -0.5,
+    "threshold": -8.0,
+    "release": 40.0,
+    "clip": 60.0,
+    "lookahead": 1.0,
+    "os": 3.0
+  }
+}

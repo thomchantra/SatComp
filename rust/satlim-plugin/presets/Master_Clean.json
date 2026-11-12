@@ -1,0 +1,12 @@
+{
+  "format": "satlim-preset",
+  "version": 1,
+  "name": "Master_Clean",
+  "params": {
+    "ceiling": -1.0,
+    "threshold": -4.0,
+    "release": 80.0,
+    "lookahead": 1.0,
+    "os": 2.0
+  }
+}
