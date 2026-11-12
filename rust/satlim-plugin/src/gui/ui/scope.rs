@@ -79,35 +79,71 @@ impl<'a> Gui<'a> {
         let span = if full { ((h - 2.0) * 0.5).floor() } else { h - 2.0 };
         let hpx = |v: f32| ((v * zoom).min(1.0) * span).floor();
         let base = if full { y + (h * 0.5).floor() } else { y + h - 1.0 };
-        // output (UI colour)
-        if src < 2 {
-            self.setc(false);
-            for (c, &(o, _)) in cols.iter().enumerate() {
-                let ho = hpx(o);
-                if ho > 0.0 {
-                    let cx = x + 1.0 + c as f32;
-                    if full {
-                        self.cv.fill(cx, base - ho, 1.0, 2.0 * ho + 1.0);
-                    } else {
-                        self.cv.fill(cx, base - ho, 1.0, ho + 1.0);
+        let solid = self.env.params.fft_solid.load(Ordering::Relaxed);
+        if solid {
+            // output (UI colour)
+            if src < 2 {
+                self.setc(false);
+                for (c, &(o, _)) in cols.iter().enumerate() {
+                    let ho = hpx(o);
+                    if ho > 0.0 {
+                        let cx = x + 1.0 + c as f32;
+                        if full {
+                            self.cv.fill(cx, base - ho, 1.0, 2.0 * ho + 1.0);
+                        } else {
+                            self.cv.fill(cx, base - ho, 1.0, ho + 1.0);
+                        }
                     }
                 }
             }
-        }
-        // reduction (accent): what the compressor took off, stacked on the output (or alone from the baseline)
-        if src != 1 {
-            self.setc(true);
-            for (c, &(o, p)) in cols.iter().enumerate() {
-                let cx = x + 1.0 + c as f32;
-                let (lo, hi) = if src == 0 { (hpx(o), hpx(p)) } else { (0.0, hpx(p - o)) };
-                if hi > lo {
-                    if full {
-                        self.cv.fill(cx, base - hi, 1.0, hi - lo);
-                        self.cv.fill(cx, base + lo + 1.0, 1.0, hi - lo);
-                    } else {
-                        self.cv.fill(cx, base - hi, 1.0, hi - lo);
+            // reduction (accent): what the compressor took off, stacked on the output (or alone from the baseline)
+            if src != 1 {
+                self.setc(true);
+                for (c, &(o, p)) in cols.iter().enumerate() {
+                    let cx = x + 1.0 + c as f32;
+                    let (lo, hi) = if src == 0 { (hpx(o), hpx(p)) } else { (0.0, hpx(p - o)) };
+                    if hi > lo {
+                        if full {
+                            self.cv.fill(cx, base - hi, 1.0, hi - lo);
+                            self.cv.fill(cx, base + lo + 1.0, 1.0, hi - lo);
+                        } else {
+                            self.cv.fill(cx, base - hi, 1.0, hi - lo);
+                        }
                     }
                 }
+            }
+        } else {
+            // outline: a 1 px stroke along the peaks, joined to the previous column so steep edges stay connected; the output in
+            // the UI colour, what the clipper and limiter removed as an accent stroke on top
+            let stroke = |s: &mut Self, accent: bool, tops: &[Option<f32>], mirror: bool| {
+                s.setc(accent);
+                let mut prev: Option<f32> = None;
+                for (c, t) in tops.iter().enumerate() {
+                    let cx = x + 1.0 + c as f32;
+                    if let Some(t) = *t {
+                        let p = prev.unwrap_or(t);
+                        let (lo, hi) = (t.min(p), t.max(p));
+                        s.cv.fill(cx, base - hi, 1.0, hi - lo + 1.0);
+                        if mirror {
+                            s.cv.fill(cx, base + lo, 1.0, hi - lo + 1.0);
+                        }
+                    }
+                    prev = *t;
+                }
+            };
+            if src < 2 {
+                let tops: Vec<Option<f32>> = cols.iter().map(|&(o, _)| Some(hpx(o))).collect();
+                stroke(self, false, &tops, full);
+            }
+            if src != 1 {
+                let tops: Vec<Option<f32>> = cols
+                    .iter()
+                    .map(|&(o, p)| {
+                        let (lo, hi) = if src == 0 { (hpx(o), hpx(p)) } else { (0.0, hpx(p - o)) };
+                        if hi > lo { Some(hi) } else { None }
+                    })
+                    .collect();
+                stroke(self, true, &tops, full);
             }
         }
         self.setc(false);

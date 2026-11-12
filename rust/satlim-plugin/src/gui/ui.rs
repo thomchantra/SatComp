@@ -345,6 +345,15 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
         self.env.params.font.store(face as i32, Ordering::Relaxed);
         self.cv.face = face;
     }
+    fn fft_solid(&self) -> Option<bool> {
+        Some(self.env.params.fft_solid.load(Ordering::Relaxed))
+    }
+    fn commit_fft_solid(&mut self, solid: bool) {
+        self.env.params.fft_solid.store(solid, Ordering::Relaxed);
+    }
+    fn fill_label(&self) -> &'static str {
+        "SCOPE FILL"
+    }
     fn about_paras(&self) -> &'static [&'static [&'static str]] {
         ABOUT_TEXT
     }
@@ -372,17 +381,19 @@ impl<'a> DerefMut for Gui<'a> {
     }
 }
 
-/// About page copy. Each inner slice is one paragraph, each string one source line.
+/// About page copy (docs/abouttextcopy.md). Each inner slice is one paragraph, each string one source line.
 const ABOUT_TEXT: &[&[&str]] = &[
-    &["A waveshaping saturator into a clipper and a true-peak limiter", "Made with bricking intentions (:"],
-    &["Use the saturator module to give the limiter more spice to squash.", "Left-click on the top-right pencil icon to enter custom draw mode."],
-    &["THRESHOLD lifts the signal onto the CEILING. CLIP adds an oversampled hard clip at the ceiling so the limiter has less to do. Switch L.AHD off for zero latency."],
-    &["Double-click slider to reset parameter to its default value", "Left/Right-click top-left icon for more color ways", "Double-click top-left icon to switch between dark and light mode"],
+    &["A 2-stage clipper/limiter with waveshaping saturator", "When you need to nuke it from orbit B)"],
+    &["Use tube with low drive for warm saturation, opt for destruction with tri-fold, or annihilate with custom asymmetric waveshape.", "Left-click on the top-right pencil icon to enter custom draw mode."],
+    &["The lower the threshold, the more cooked it gets."],
+    &["Grab exposes more transients in the mix, then set release tail to taste."],
+    &["Double-click slider to reset parameter to its default value"],
+    &["Left/Right-click top-left icon for more color ways", "Double-click top-left icon to switch between dark and light mode"],
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
-    ("v0.1", &["First version: the SatComp saturator, an oversampled clipper (x1 to x8) and a true-peak brickwall limiter with a transient scope.", "L.AHD off gives a zero-latency limiter. OUT GAIN sits after the limiter on purpose."]),
+    ("v0.1", &["First version: the SatComp saturator, an oversampled clipper (GRAB, x1 to x8) and a true-peak brickwall limiter with a transient scope.", "L.AHD off gives a zero-latency limiter. OUT GAIN sits after the limiter on purpose."]),
 ];
 
 /// Crate version for the header: "0.4" for 0.4.0, "0.4.1" for a patch release.
@@ -1622,9 +1633,11 @@ impl<'a> Gui<'a> {
             self.click_set(26, if byp { 0.0 } else { 1.0 });
         }
 
-        // ---------- preset row
-        self.preset_bar();
+        // ---------- preset row (the About tabs take its place while the About page is open)
         let ab = self.app.about > 0;
+        if !ab {
+            self.preset_bar();
+        }
         self.set_dk(if byp { 0.5 } else { 1.0 });
         if ab {
             self.draw_about(Rect::new(10.0, 52.0, 320.0, 440.0), byp);
@@ -1697,7 +1710,7 @@ impl<'a> Gui<'a> {
         self.cell(8, cx, 284.0, cw, 38.0, "CEILING");
         if !editing {
             self.cell(9, cx, 326.0, cw, 38.0, "THRESHOLD");
-            self.cell(11, cx, 368.0, cw, 38.0, "CLIP");
+            self.cell(11, cx, 368.0, cw, 38.0, "GRAB");
             self.cell(10, cx, 410.0, cw, 38.0, "RELEASE");
             self.cell_o(22, cx, 452.0, cw, 38.0, "OUT GAIN");
         }

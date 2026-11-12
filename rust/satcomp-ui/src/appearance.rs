@@ -305,6 +305,10 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         None
     }
     fn commit_fft_solid(&mut self, _solid: bool) {}
+    /// Label of that switch (plug-ins that draw a scope rather than a spectrum can say so).
+    fn fill_label(&self) -> &'static str {
+        "SPECTRUM FILL"
+    }
 
     /// About page copy: paragraphs of source lines.
     fn about_paras(&self) -> &'static [&'static [&'static str]];
@@ -448,9 +452,12 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
     /// Appearance tab: colour mode switch, scrollable scheme list with swatches, font choice. Everything applies at once.
     fn draw_appearance(&mut self, r: Rect) {
         const RH: f32 = 20.0;
-        let rows = ((r.h - 266.0) / RH).floor().max(0.0) as usize + 5;
+        // a narrow page puts the fill switch on a row of its own under COLOR MODE (everything below moves down)
+        let narrow = r.w < 460.0 && self.fft_solid().is_some();
+        let hx = if narrow { 22.0 } else { 0.0 };
+        let rows = ((r.h - 266.0 - hx) / RH).floor().max(0.0) as usize + 5;
         let extra = (rows - 5) as f32 * RH;
-        let (lx, ly, lw) = (r.x + 8.0, r.y + 42.0, r.w - 16.0);
+        let (lx, ly, lw) = (r.x + 8.0, r.y + 42.0 + hx, r.w - 16.0);
         self.cv().boxr(r.x, r.y, r.w, r.h);
         self.setc(false);
         self.cv().set_font(1);
@@ -463,9 +470,11 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         }
         if let Some(solid) = self.fft_solid() {
             self.setc(false);
-            self.cv().text(r.x + 262.0, r.y + 8.0, "FFT FILL");
-            for (dx, l, sd) in [(322.0, "OUTLINE", false), (396.0, "SOLID", true)] {
-                if self.btn(r.x + dx, r.y + 4.0, if sd { 56.0 } else { 72.0 }, 16.0, l, (solid == sd) as u8) {
+            let (ly0, lx0, bx0) = if narrow { (r.y + 26.0, lx, r.x + 100.0) } else { (r.y + 4.0, r.x + 240.0, r.x + 330.0) };
+            let label = self.fill_label();
+            self.cv().text(lx0, ly0 + 4.0, label);
+            for (dx, l, sd) in [(0.0, "OUTLINE", false), (74.0, "SOLID", true)] {
+                if self.btn(bx0 + dx, ly0, if sd { 56.0 } else { 72.0 }, 16.0, l, (solid == sd) as u8) {
                     self.commit_fft_solid(sd);
                 }
             }
@@ -473,11 +482,11 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
 
         // ---- scheme list
         self.setc(false);
-        self.cv().text(lx, r.y + 30.0, "COLOR SCHEME");
+        self.cv().text(lx, r.y + 30.0 + hx, "COLOR SCHEME");
         let pal = self.pal();
         let user_sel = pal >= PALETTES.len();
         let bx = r.x + r.w - 170.0;
-        if self.btn(bx, r.y + 26.0, 82.0, 14.0, "NEW THEME", 0) {
+        if self.btn(bx, r.y + 26.0 + hx, 82.0, 14.0, "NEW THEME", 0) {
             self.begin_edit(None);
             return;
         }
@@ -487,8 +496,8 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         }
         let now = self.kit_ref().now;
         let armed = now - self.app_ref().del_arm < 3.0;
-        let edit_hit = self.btn(bx + 84.0, r.y + 26.0, 38.0, 14.0, "EDIT", 0);
-        let del_hit = self.btn(bx + 124.0, r.y + 26.0, 38.0, 14.0, if armed && user_sel { "SURE?" } else { "DEL" }, (armed && user_sel) as u8 * 2);
+        let edit_hit = self.btn(bx + 84.0, r.y + 26.0 + hx, 38.0, 14.0, "EDIT", 0);
+        let del_hit = self.btn(bx + 124.0, r.y + 26.0 + hx, 38.0, 14.0, if armed && user_sel { "SURE?" } else { "DEL" }, (armed && user_sel) as u8 * 2);
         self.set_dk(prev_dk);
         if user_sel {
             if edit_hit {
@@ -568,7 +577,7 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         self.setc(false);
 
         // ---- font
-        let fy = r.y + 152.0 + extra;
+        let fy = r.y + 152.0 + extra + hx;
         self.cv().text(lx, fy, "FONT");
         let face = self.face();
         let fw = ((lw - 8.0) * 0.5).floor();

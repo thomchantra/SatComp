@@ -40,6 +40,9 @@ pub struct SatLimParams {
     /// Light mode (the inverted palette of the scheme); UI-only, saved with the project.
     #[persist = "light-mode"]
     pub light: Arc<AtomicBool>,
+    /// Scope fill: true = solid UI-colour bars, false = outline stroke along the peaks; UI-only.
+    #[persist = "fft-solid"]
+    pub fft_solid: Arc<AtomicBool>,
     /// UI font index (see `satcomp_ui::canvas::FONT_NAMES`); UI-only, saved with the project.
     #[persist = "ui-font"]
     pub font: Arc<AtomicI32>,
@@ -99,6 +102,7 @@ impl Default for SatLimParams {
             palette_v2: Arc::new(AtomicI32::new(-1)),
             light: Arc::new(AtomicBool::new(false)),
             font: Arc::new(AtomicI32::new(0)),
+            fft_solid: Arc::new(AtomicBool::new(true)),
             scope: Arc::new(AtomicI32::new((5 << 4) | (2 << 8))),
             custom_theme: Arc::new(parking_lot::Mutex::new(String::new())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
@@ -117,7 +121,7 @@ impl Default for SatLimParams {
             ceiling: FloatParam::new("Ceiling", -0.3, FloatRange::Linear { min: -24.0, max: 0.0 }).with_unit(" dB").with_step_size(0.1),
             threshold: FloatParam::new("Threshold", 0.0, FloatRange::Linear { min: -30.0, max: 0.0 }).with_unit(" dB").with_step_size(0.1),
             release: FloatParam::new("Release", 80.0, FloatRange::Linear { min: 15.0, max: 80.0 }).with_unit(" ms").with_step_size(1.0),
-            clip: FloatParam::new("Clip", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            clip: FloatParam::new("Grab", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             out_gain: FloatParam::new("Out Gain", 0.0, FloatRange::Linear { min: -24.0, max: 12.0 }).with_unit(" dB").with_step_size(0.1),
             bypass: BoolParam::new("Bypass", false),
         }

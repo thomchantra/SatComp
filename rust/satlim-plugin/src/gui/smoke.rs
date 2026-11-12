@@ -167,7 +167,7 @@ fn the_editor_runs_scripted_input_and_is_deterministic() {
     let (h1, _) = script();
     let (h2, log) = script();
     assert_eq!(h1, h2, "frames differ between two identical runs");
-    for want in ["Oversampling", "Drive", "Lookahead", "Ceiling", "Threshold", "Clip", "Out Gain", "Bypass"] {
+    for want in ["Oversampling", "Drive", "Lookahead", "Ceiling", "Threshold", "Grab", "Out Gain", "Bypass"] {
         assert!(log.iter().any(|l| l.starts_with(want)), "no write to {want}: {log:?}");
     }
 }
@@ -230,4 +230,33 @@ fn clicking_the_output_bars_cycles_the_range_without_writing_parameters() {
         r.click(205.0, 300.0);
     }
     assert!(r.log().is_empty(), "{:?}", r.log());
+}
+
+#[test]
+fn the_scope_outline_mode_draws_and_differs_from_solid() {
+    let run = |solid: bool| {
+        let mut r = Rig::with_params(|p| p.fft_solid = Arc::new(std::sync::atomic::AtomicBool::new(solid)));
+        for _ in 0..6 {
+            r.frame(vec![]);
+        }
+        r.hash
+    };
+    assert_ne!(run(true), run(false), "outline and solid should draw differently");
+    assert_eq!(run(false), run(false));
+}
+
+#[test]
+fn the_appearance_page_has_the_scope_fill_switch_on_its_own_row() {
+    let mut r = Rig::new();
+    r.click(60.0, 12.0); // About
+    r.click(182.0, 38.0); // APPEARANCE tab
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    assert!(r.params.fft_solid.load(std::sync::atomic::Ordering::Relaxed), "solid by default");
+    r.click(146.0, 86.0); // OUTLINE (second row under COLOR MODE)
+    assert!(!r.params.fft_solid.load(std::sync::atomic::Ordering::Relaxed), "OUTLINE should switch the fill off");
+    r.click(210.0, 86.0); // SOLID
+    assert!(r.params.fft_solid.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(r.log().is_empty(), "UI-only setting, no host writes: {:?}", r.log());
 }
