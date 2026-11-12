@@ -95,6 +95,7 @@ pub struct SatComp {
     last_latency: u32,
     /// last custom curve read on the audio thread (reused while the UI holds the curve lock)
     last_curve: satcomp_dsp::shapers::Curve,
+    last_asym: [f64; satcomp_dsp::shapers::SHAPER_COUNT],
 }
 
 impl Default for SatComp {
@@ -103,7 +104,7 @@ impl Default for SatComp {
         let mut engine = Engine::new(48000.0);
         engine.tap = shared.tap.clone();
         engine.scope = shared.scope.clone();
-        Self { params: Arc::new(SatCompParams::default()), shared, engine, last_latency: u32::MAX, last_curve: satcomp_dsp::shapers::Curve::linear() }
+        Self { params: Arc::new(SatCompParams::default()), shared, engine, last_latency: u32::MAX, last_curve: satcomp_dsp::shapers::Curve::linear(), last_asym: [100.0; satcomp_dsp::shapers::SHAPER_COUNT] }
     }
 }
 
@@ -166,7 +167,7 @@ impl Plugin for SatComp {
         engine.tap = self.shared.tap.clone();
         engine.scope = self.shared.scope.clone();
         engine.match_trim = self.params.match_trim.load(Ordering::Relaxed) as f64;
-        engine.set_params(&self.params.to_dsp_rt(&mut self.last_curve));
+        engine.set_params(&self.params.to_dsp_rt(&mut self.last_curve, &mut self.last_asym));
         self.engine = engine;
     }
 
@@ -177,7 +178,7 @@ impl Plugin for SatComp {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let sh = &self.shared;
-        self.engine.set_params(&self.params.to_dsp_rt(&mut self.last_curve));
+        self.engine.set_params(&self.params.to_dsp_rt(&mut self.last_curve, &mut self.last_asym));
         let lat = self.engine.latency();
         if lat != self.last_latency {
             self.last_latency = lat;

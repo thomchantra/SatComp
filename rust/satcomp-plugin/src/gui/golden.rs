@@ -406,3 +406,23 @@ fn ui_script_is_deterministic() {
     let b = script();
     assert_eq!(a, b);
 }
+
+/// ASYM is the bottom half of the BIAS / ASYM group: a drag lowers the value of the current shaper only, double-click resets it,
+/// and it writes no host parameter (stored in the project / presets).
+#[test]
+fn asym_slider_writes_the_shapers_value() {
+    let mut r = Rig::new(1.0);
+    r.idle("boot", 3, 0.016);
+    assert_eq!(r.params.asym_snapshot()[0], 100.0);
+    r.drag("asym", 110.0, 225.0, 245.0, 5); // drag down = lower (bottom half of the BIAS / ASYM group)
+    let a = r.params.asym_snapshot();
+    assert!(a[0] < 100.0, "dragging ASYM changed nothing: {:?}", &a[..3]);
+    assert_eq!(a[1], 100.0, "other shapers keep their own value");
+    assert!(!r.writes.iter().any(|w| w.contains("Asym")), "ASYM is not a host parameter: {:?}", r.writes);
+    r.click("asym_a", 110.0, 225.0);
+    r.click("asym_b", 110.0, 225.0); // double-click = reset
+    assert_eq!(r.params.asym_snapshot()[0], 100.0);
+    // the top half is still BIAS
+    r.drag("bias", 110.0, 207.0, 187.0, 5);
+    assert!(r.writes.iter().any(|w| w.starts_with("set Bias")), "BIAS half wrote nothing: {:?}", r.writes);
+}

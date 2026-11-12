@@ -2,7 +2,7 @@
 
 use nih_plug::prelude::*;
 use nih_plug_egui::EguiState;
-use satcomp_dsp::shapers::Curve;
+use satcomp_dsp::shapers::{asym_from, Curve, SHAPER_COUNT};
 use satcomp_dsp::{EqBandParams, EqStageParams};
 use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
@@ -104,6 +104,9 @@ pub struct SatCompParams {
     /// User-drawn waveshaper curve (points on [-1,1]^2, shaper 14 "Custom"); saved with the project and presets.
     #[persist = "custom-curve"]
     pub custom_curve: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,
+    /// ASYM per waveshaper (0..100 %, index = shaper); saved with the project and presets (absent = all 100 %).
+    #[persist = "asym"]
+    pub asym: Arc<parking_lot::Mutex<Vec<f32>>>,
     /// Out-stage gain-match trim (dB) written by the 3 s measurement; saved with the project.
     #[persist = "match-trim"]
     pub match_trim: Arc<AtomicF32>,
@@ -251,6 +254,7 @@ impl Default for SatCompParams {
             custom_theme: Arc::new(parking_lot::Mutex::new(String::new())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
+            asym: Arc::new(parking_lot::Mutex::new(Vec::new())),
             match_trim: Arc::new(AtomicF32::new(0.0)),
             shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 14 }),
             drive: FloatParam::new("Drive", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
@@ -327,26 +331,34 @@ impl SatCompParams {
         Curve::from_points(&self.custom_curve.lock())
     }
 
+    /// ASYM per shaper, sanitised (short / missing = 100 %).
+    pub fn asym_snapshot(&self) -> [f64; SHAPER_COUNT] {
+        asym_from(&self.asym.lock())
+    }
+
     /// Snapshot for the DSP engine (UI side: may wait briefly for the curve lock).
     pub fn to_dsp(&self) -> satcomp_dsp::Params {
-        self.to_dsp_with(self.curve_snapshot())
+        self.to_dsp_with(self.curve_snapshot(), self.asym_snapshot())
     }
 
     /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.
-    pub fn to_dsp_rt(&self, last: &mut satcomp_dsp::shapers::Curve) -> satcomp_dsp::Params {
+    pub fn to_dsp_rt(&self, last: &mut satcomp_dsp::shapers::Curve, last_asym: &mut [f64; SHAPER_COUNT]) -> satcomp_dsp::Params {
         if let Some(g) = self.custom_curve.try_lock() {
             *last = satcomp_dsp::shapers::Curve::from_points(&g);
         }
-        self.to_dsp_with(*last)
+        if let Some(g) = self.asym.try_lock() {
+            *last_asym = asym_from(&g);
+        }
+        self.to_dsp_with(*last, *last_asym)
     }
 
-    fn to_dsp_with(&self, curve: satcomp_dsp::shapers::Curve) -> satcomp_dsp::Params {
+    fn to_dsp_with(&self, curve: satcomp_dsp::shapers::Curve, asym: [f64; SHAPER_COUNT]) -> satcomp_dsp::Params {
         let stage = |bands: [(&IntParam, &FloatParam, &FloatParam, &FloatParam); 3], tilt: &FloatParam, pivot: &FloatParam, og: &FloatParam| EqStageParams {
             bands: [0, 1, 2].map(|i| EqBandParams { ty: bands[i].0.value() as f64, freq: bands[i].1.value() as f64, gain: bands[i].2.value() as f64, q: bands[i].3.value() as f64 }),
             tilt: tilt.value() as f64, pivot: pivot.value() as f64, out_gain: og.value() as f64,
         };
         satcomp_dsp::Params {
-            shape: self.shape.value(), curve, drive: self.drive.value() as f64, bias: self.bias.value() as f64,
+            shape: self.shape.value(), curve, asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,
             sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64, os: self.os.value(),
             thresh: self.thresh.value() as f64, ratio: self.ratio.value() as f64, attack: self.attack.value() as f64,
             release: self.release.value() as f64, speed: self.speed.value() as f64, knee: self.knee.value() as f64,

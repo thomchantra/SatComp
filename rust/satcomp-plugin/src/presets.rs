@@ -23,11 +23,14 @@ pub struct Preset {
     /// Custom waveshaper curve points (absent in older presets = linear). Backward compatible: version stays 1.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curve: Vec<(f32, f32)>,
+    /// ASYM (0..100 %) per waveshaper (absent / empty = all 100 %). Backward compatible: version stays 1.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asym: Vec<f32>,
 }
 
 impl Preset {
     pub fn new(name: &str, params: BTreeMap<String, f32>) -> Self {
-        Self { format: "satcomp-preset".into(), version: 1, name: name.into(), params, curve: Vec::new() }
+        Self { format: "satcomp-preset".into(), version: 1, name: name.into(), params, curve: Vec::new(), asym: Vec::new() }
     }
 
     /// All defaults.
@@ -150,6 +153,19 @@ mod tests {
         let q = Preset::from_json(&p.to_json()).unwrap();
         assert_eq!(q.params, p.params);
         assert!(Preset::from_json("{\"format\":\"nope\"}").is_none());
+    }
+
+    #[test]
+    fn asym_roundtrips_and_old_presets_load_without_it() {
+        let mut p = Preset::init();
+        assert!(!p.to_json().contains("asym"));
+        p.asym = vec![100.0, 35.0];
+        let q = Preset::from_json(&p.to_json()).unwrap();
+        assert_eq!(q.asym, p.asym);
+        let a = satcomp_dsp::shapers::asym_from(&q.asym);
+        assert_eq!((a[0], a[1], a[14]), (100.0, 35.0, 100.0));
+        let old = r#"{"format":"satcomp-preset","version":1,"name":"x","params":{}}"#;
+        assert!(Preset::from_json(old).unwrap().asym.is_empty());
     }
 
     #[test]

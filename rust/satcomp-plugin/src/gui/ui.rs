@@ -32,6 +32,8 @@ struct MItem {
     id: i32,
 }
 
+/// ASYM slider drag (viewport-style act id: released with the mouse)
+const ACT_ASYM: i32 = 145;
 const MENU_ROWS: usize = 18;
 const MENU_ROW_H: f32 = 14.0;
 
@@ -64,6 +66,8 @@ pub struct State {
     scope_cfg: i32,
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
     scope_drag: (f32, f32, usize, usize),
+    /// ASYM drag anchor: (mouse y, value 0..1) at the press
+    asym_drag: (f32, f32),
     /// colour themes, theme editor and About-page state (satcomp-ui)
     pub app: AppState,
     pub dummy_params: Arc<SatCompParams>,
@@ -231,6 +235,7 @@ impl State {
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_drag: (0.0, 0.0, 0, 0),
+            asym_drag: (0.0, 0.0),
             app: AppState::new(),
             dummy_params: Arc::new(SatCompParams::default()),
             dummy_shared: Arc::new(Shared::new()),
@@ -458,6 +463,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
+    ("v0.5.3", &["Better saturator: the even-order part of the waveshaper no longer drags DC and sub-bass pulses into the signal, so lopsided shapers and custom curves keep their grit with far calmer peaks. New ASYM slider under the plot sets how much of the even part each shaper keeps (stored per shaper, saved with presets).", "INIT sounds slightly cleaner in the lows with Tube, Diode, Rectify, Asym Fold and Custom."]),
     ("v0.5.2", &["New output limiter: a true-peak brickwall at -0.2 dBTP, on by default (LIM button). Its gain reduction shows in the LIM readout, and it adds about 2 ms of latency that is always reported to the host.", "New thin level meter after the saturator that turns accent when it clips. The compressor GR number now sits at the top of the GR meter.", "The signal flow shows the limiter. INIT now starts with drive 0 and threshold 0."]),
     ("v0.5.1", &["Fixed a loud thump when the plug-in is enabled or the window regains focus.", "New Appearance tab under About: colour mode, a scheme list with swatches, six fonts and a custom theme editor with a colour picker.", "New waveform scope (transient meter): click the icon in the compressor plot corner for a half or full wave view with the gain reduction stacked in the accent colour. Drag the view to change the window and ceiling (+2 dB to -14 dB).", "Sulfur and Matcha were replaced by Genesis and Suika.", "The oversampling OFF button now reads x1."]),
     ("v0.5", &["Added a sidechain input with key gain, HP, LP, a solo monitor and KEY MIX.", "Every colour scheme now has a light mode: double-click the icon or use the scheme menu.", "LP filters now reach down to 200 Hz."]),
@@ -867,6 +873,70 @@ impl<'a> Gui<'a> {
     }
 
     // ------------------------------------------------------------------ sat plot
+    /// BIAS over ASYM as one stacked group (like HP / LP). ASYM is the current shaper's share of its even part (the part that
+    /// carries DC and sub-audio pulses): one value per shaper, stored in the project / presets (not a host parameter).
+    /// Drag, wheel, double-click = 100 %.
+    fn bias_asym(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let hh = (h * 0.5).floor();
+        let shape = ((self.sget(1) + 0.5).floor() as i32).clamp(0, CUSTOM) as usize;
+        let cell = self.env.params.asym.clone();
+        let get = || satcomp_dsp::shapers::asym_from(&cell.lock())[shape] as f32;
+        let set = |v: f32| {
+            let mut g = cell.lock();
+            if g.len() < SHAPER_NAMES.len() {
+                g.resize(SHAPER_NAMES.len(), 100.0);
+            }
+            g[shape] = v.clamp(0.0, 100.0);
+        };
+        // top half: BIAS (an ordinary slider)
+        let ha = self.hit(x, y, w, hh);
+        if ha && self.press && self.act == 0 {
+            self.begin_drag(3);
+        }
+        if ha && self.wheel != 0 {
+            self.wheel_adj(3);
+        }
+        // bottom half: ASYM
+        let hb = self.hit(x, y + hh, w, h - hh);
+        if hb && self.press && self.act == 0 {
+            if self.dbl(170) {
+                set(100.0);
+            } else {
+                self.act = ACT_ASYM;
+                self.asym_drag = (self.my, get() * 0.01);
+            }
+            self.press = false;
+        }
+        if hb && self.wheel != 0 {
+            let d = if self.wheel > 0 { 1.0 } else { -1.0 } * if self.shift { 0.5 } else { 3.0 };
+            set((get() + d).round());
+        }
+        if self.act == ACT_ASYM && self.down {
+            let k = if self.shift { 0.0008 } else { 0.006 };
+            let t = (self.asym_drag.1 + (self.asym_drag.0 - self.my) * k).clamp(0.0, 1.0);
+            set((t * 100.0).round());
+        }
+        let act = self.act;
+        self.setc(act == 3 || act == ACT_ASYM);
+        self.cv.boxr(x, y, w, h);
+        self.setc(false);
+        self.cv.fill(x, y + hh, w, 1.0);
+        self.cv.set_font(1);
+        self.setc(act == 3);
+        let vb = self.sget(3);
+        let sb = self.fmt(3, vb);
+        let tb = self.n2t(3, vb);
+        self.cv.text(x + 3.0, y + 3.0, "BIAS");
+        self.cv.textr(x, y + 3.0, w - 3.0, &sb);
+        self.cv.fill(x + 2.0, y + hh - 3.0, ((tb * (w - 4.0)).floor()).max(1.0), 1.0);
+        self.setc(act == ACT_ASYM);
+        let v = get();
+        self.cv.text(x + 3.0, y + hh + 3.0, "ASYM");
+        self.cv.textr(x, y + hh + 3.0, w - 3.0, &format!("{:.0}%", v));
+        self.cv.fill(x + 2.0, y + h - 4.0, (((v * 0.01) * (w - 4.0)).floor()).max(1.0), 2.0);
+        self.setc(false);
+    }
+
     fn draw_plot(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let sh = self.env.shared;
         let dsp = self.env.dsp;
@@ -874,6 +944,12 @@ impl<'a> Gui<'a> {
         let pre = (dsp.drive * 0.01 * 36.0 * 0.11512925).exp() as f32;
         let bias = (dsp.bias * 0.01) as f32;
         self.lut.sync(dsp.shape, &dsp.curve);
+        // static curve as heard: the shaper minus the part of its even half that ASYM removes
+        let ak = dsp.asym[(dsp.shape.max(0) as usize).min(dsp.asym.len() - 1)] * 0.01;
+        let eff = move |l: &ShaperLut, v: f64| {
+            let r = 0.5 * (1.0 - ak);
+            l.eval(v) * (1.0 - r) - r * l.eval(-v)
+        };
         // pencil (top right): toggles the custom-curve draw view; entering selects the Custom shaper so edits are audible
         let pen = self.hit(x + w - 14.0, y + 2.0, 12.0, 12.0);
         if pen && self.press && self.act == 0 {
@@ -922,7 +998,7 @@ impl<'a> Gui<'a> {
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
             let vx = -1.0 + 2.0 * i as f32 / n as f32;
-            let mut vy = if sat_on { self.lut.eval((vx * pre + bias) as f64) as f32 } else { vx };
+            let mut vy = if sat_on { eff(&self.lut, (vx * pre + bias) as f64) as f32 } else { vx };
             vy = vy.clamp(-1.0, 1.0);
             let px = x + (vx + 1.0) * 0.5 * (w - 1.0);
             let py = y + (1.0 - (vy + 1.0) * 0.5) * (h - 1.0);
@@ -935,9 +1011,9 @@ impl<'a> Gui<'a> {
         }
         if sat_on && pk > 0.002 {
             self.setc(true);
-            let vy = (self.lut.eval((pk * pre + bias) as f64) as f32).clamp(-1.0, 1.0);
+            let vy = (eff(&self.lut, (pk * pre + bias) as f64) as f32).clamp(-1.0, 1.0);
             self.cv.fill(x + (pk + 1.0) * 0.5 * (w - 1.0) - 1.0, y + (1.0 - (vy + 1.0) * 0.5) * (h - 1.0) - 1.0, 3.0, 3.0);
-            let vy = (self.lut.eval((-pk * pre + bias) as f64) as f32).clamp(-1.0, 1.0);
+            let vy = (eff(&self.lut, (-pk * pre + bias) as f64) as f32).clamp(-1.0, 1.0);
             self.cv.fill(x + (1.0 - pk) * 0.5 * (w - 1.0) - 1.0, y + (1.0 - (vy + 1.0) * 0.5) * (h - 1.0) - 1.0, 3.0, 3.0);
             self.setc(false);
         }
@@ -1741,6 +1817,7 @@ impl<'a> Gui<'a> {
         // absent curve = linear (deterministic: loading a preset never keeps the previous preset's curve)
         let c = Curve::from_points(&p.curve);
         *self.env.params.custom_curve.lock() = c.pts().to_vec();
+        *self.env.params.asym.lock() = satcomp_dsp::shapers::asym_from(&p.asym).iter().map(|&v| v as f32).collect();
         self.set_preset_name(&p.name);
         self.base = None;
         self.hold_until = self.now + 0.6;
@@ -1772,7 +1849,7 @@ impl<'a> Gui<'a> {
                 return true;
             }
         }
-        Curve::from_points(&b.curve) != self.env.params.curve_snapshot()
+        Curve::from_points(&b.curve) != self.env.params.curve_snapshot() || satcomp_dsp::shapers::asym_from(&b.asym) != self.env.params.asym_snapshot()
     }
 
     fn capture(&self, name: &str) -> Preset {
@@ -1785,6 +1862,10 @@ impl<'a> Gui<'a> {
         let c = self.env.params.curve_snapshot();
         if c != Curve::linear() {
             p.curve = c.pts().to_vec();
+        }
+        let a = self.env.params.asym_snapshot();
+        if a.iter().any(|&v| v != 100.0) {
+            p.asym = a.iter().map(|&v| v as f32).collect();
         }
         p
     }
@@ -2259,7 +2340,7 @@ impl<'a> Gui<'a> {
         // ---------- SAT cells
         if !ab {
         self.cell(2, 10.0, 196.0, 62.0, 38.0, "DRIVE");
-        self.cell(3, 78.0, 196.0, 62.0, 38.0, "BIAS");
+        self.bias_asym(78.0, 196.0, 62.0, 38.0);
         self.cell2(4, 5, 10.0, 240.0, 62.0, 38.0, "HP", "LP");
         self.cell(6, 78.0, 240.0, 62.0, 38.0, "TONE");
         self.cell(25, 10.0, 284.0, 62.0, 38.0, "SAT MIX");
