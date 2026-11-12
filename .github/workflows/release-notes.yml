@@ -1,7 +1,7 @@
 name: release-notes
 
 # Applies docs/releases/<tag>.md as the description of the matching GitHub release (when that release exists).
-# Tags: vX.Y.Z (SatComp / the whole-suite bundle), satxcomp-vX.Y.Z, sateq-vX.Y.Z.
+# Tags: vX.Y.Z (SatComp / the whole-suite bundle), satxcomp-vX.Y.Z, satlim-vX.Y.Z, sateq-vX.Y.Z.
 on:
   push:
     branches: [main]

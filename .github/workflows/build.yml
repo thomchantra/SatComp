@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     # v* = SatComp (and the whole-suite bundle release); <plugin>-v* = one sibling plug-in on its own release page
-    tags: ["v*", "satxcomp-v*", "sateq-v*"]
+    tags: ["v*", "satxcomp-v*", "satlim-v*", "sateq-v*"]
   pull_request:
   workflow_dispatch:
 
@@ -37,10 +37,12 @@ jobs:
           ref="${GITHUB_REF_NAME}"
           case "$ref" in
             satxcomp-v*) list='["satxcomp"]' ;;
+            satlim-v*)   list='["satlim"]' ;;
             sateq-v*)    list='["sateq"]' ;;
             *)
               list='["satcomp"'
               [ -d rust/satxcomp-plugin ] && list="$list,\"satxcomp\""
+              [ -d rust/satlim-plugin ] && list="$list,\"satlim\""
               [ -d rust/sateq-plugin ] && list="$list,\"sateq\""
               list="$list]"
               ;;
@@ -79,7 +81,7 @@ jobs:
         run: |
           # zip name = <Display>-<plug-in version from its Cargo.toml>-<platform>; the plug-in's own version, not the tag
           plugin="${{ matrix.plugin }}"
-          case "$plugin" in satcomp) disp=SatComp ;; satxcomp) disp=SatXComp ;; sateq) disp=SatEQ ;; esac
+          case "$plugin" in satcomp) disp=SatComp ;; satxcomp) disp=SatXComp ;; satlim) disp=SatLim ;; sateq) disp=SatEQ ;; esac
           ver=$(grep -m1 '^version' "rust/${plugin}-plugin/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
           mkdir -p dist
           cp LICENSE dist/
