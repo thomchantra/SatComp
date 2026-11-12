@@ -2322,6 +2322,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "satlim"
+version = "0.1.0"
+dependencies = [
+ "include_dir",
+ "nih_plug",
+ "nih_plug_egui",
+ "parking_lot",
+ "rfd",
+ "satcomp-dsp",
+ "satcomp-ui",
+ "satlim-dsp",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "satlim-dsp"
 version = "0.1.0"
 dependencies = [

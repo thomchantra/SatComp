@@ -54,9 +54,12 @@ scheme menu (right-click the icon). Not verified in REAPER (clicks go through th
 | `rust/satcomp-dsp` | DSP blocks + the SatComp engine + tests. `Engine::begin_block(n)` = JSFX `@block`, `tick` = `@sample` (see Architecture) |
 | `rust/satcomp-ui` | shared egui toolkit: `canvas` (drawing, 20 palettes, font list), `kit` (`Kit` interaction state + `Widgets` trait), `fft`, `init_ctx` + the embedded fonts in `assets/fonts/` |
 | `rust/satcomp-plugin` | nih-plug shell (`lib.rs`), generated `params.rs`, `presets.rs`, `gui/{ui,mod,golden}.rs` + `gui/ui/{scope,theme}.rs` (the SatComp pages), `presets/*.json` (factory bank) |
+| `rust/satxcomp-dsp` / `rust/satxcomp-plugin` | SatXComp (4-band multiband): `XEngine`, crossover, strips; shell + generated `params.rs` (`tools/gen_xparams.py`) + editor |
+| `rust/satlim-dsp` / `rust/satlim-plugin` | SatLim: `LimEngine` (sat -> clip -> true-peak limiter -> out gain); shell + generated `params.rs` (`tools/gen_lparams.py`); presets `*.satlim` |
 | `rust/vendor/nih_plug_egui` | patched copy (see below) |
 | `rust/xtask` | `cargo xtask bundle satcomp --release` |
 | `rust/tools/gen_params.py` | generates `params.rs` |
+| `rust/tools/gen_xparams.py` / `gen_lparams.py` | generate the SatXComp / SatLim `params.rs` |
 | `rust/tools/wavdiff.py` | null-test two WAV renders (peak/RMS of the difference); see Regression nets |
 | `rust/tools/gen_palettes.py` | rewrites `PALETTES` in `satcomp-ui/src/canvas.rs` from `docs/colorscheme.md` |
 
