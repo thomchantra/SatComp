@@ -9,7 +9,7 @@
 use crate::params::LimParams;
 use satcomp_dsp::delay::StereoDelay;
 use satcomp_dsp::halfband::{self, Oversampler, Taps};
-use satcomp_dsp::level::{ms_step, one_pole, DB_AMP, LN10_20};
+use satcomp_dsp::level::{ms_step, one_pole, Matcher, DB_AMP, LN10_20};
 use satcomp_dsp::{Limiter, SatParams, Saturator, ScopeRing, TruePeak};
 use std::sync::Arc;
 
@@ -68,6 +68,9 @@ pub struct LimEngine {
     /// loudness change across the saturator (before SAT GAIN), dB: the plot's SAT readout
     pub sat_db: f64,
     ims: f64,
+    sat_m: Matcher,
+    sat_req: bool,
+    sat_result: Option<f64>,
     pub clip_f: bool,
 }
 
@@ -114,6 +117,9 @@ impl LimEngine {
             fms: 1e-9,
             sat_db: 0.0,
             ims: 1e-9,
+            sat_m: Matcher::default(),
+            sat_req: false,
+            sat_result: None,
             clip_f: false,
         };
         e.derive();
@@ -189,6 +195,25 @@ impl LimEngine {
         }
     }
 
+    /// Measure the saturator's loudness change for 3 s, then report the SAT GAIN that cancels it (a second call cancels).
+    pub fn request_sat_match(&mut self) {
+        self.sat_req = true;
+    }
+
+    pub fn sat_matching(&self) -> bool {
+        self.sat_m.active
+    }
+
+    /// Seconds measured so far (0..3).
+    pub fn sat_match_progress(&self) -> f64 {
+        self.sat_m.t
+    }
+
+    /// The finished match, once (the shell writes it to the SAT GAIN parameter).
+    pub fn take_sat_result(&mut self) -> Option<f64> {
+        self.sat_result.take()
+    }
+
     pub fn begin_block(&mut self, n: usize) {
         if self.dirty || self.sr != self.sr_prev {
             self.derive();
@@ -197,7 +222,26 @@ impl LimEngine {
         let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
         self.sat_vz = self.sat.blk.max(self.sat_vz * vz_d);
         self.sat.blk = 0.0;
-        self.sat_db = 4.3429448 * (self.sat.ms.max(1e-12) / self.ims.max(1e-12)).ln();
+        // loudness change across the saturator, and the 3 s level match that writes SAT GAIN (only while there is signal)
+        let gate = self.ims > 0.000001;
+        if gate {
+            self.sat_db = 4.3429448 * (self.sat.ms.max(1e-12) / self.ims.max(1e-12)).ln();
+        }
+        if self.sat_req {
+            let was = self.sat_m.active;
+            self.sat_m.start();
+            if was {
+                self.sat_m.stop(); // a second click cancels
+            }
+            self.sat_req = false;
+        }
+        if self.sat_m.active && gate {
+            if let Some(avg) = self.sat_m.step(self.sat_db, n as f64 / self.sr) {
+                let v = (avg.clamp(-24.0, 12.0) * 10.0 + 0.5).floor() * 0.1;
+                self.sat.set_out_db(v);
+                self.sat_result = Some(v);
+            }
+        }
     }
 
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
@@ -414,5 +458,26 @@ mod tests {
         assert!(e.gr_pk > 3.0, "{}", e.gr_pk);
         assert!(e.sat_out > 0.2 && e.opk[0] > 0.5 && e.tpk >= e.opk[0] as f64 - 1e-9, "{} {:?} {}", e.sat_out, e.opk, e.tpk);
         assert!(e.scope.head() > 100);
+    }
+
+    #[test]
+    fn sat_match_measures_for_three_seconds_then_reports_the_gain_that_cancels_the_change() {
+        let p = LimParams { drive: 60.0, ceiling: 0.0, ..LimParams::default() };
+        let mut e = LimEngine::new(SR);
+        e.set_params(&p);
+        e.request_sat_match();
+        let x = noise(48000 * 4, 29, 0.3);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        let mut got = None;
+        for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            e.process(cl, cr);
+            if let Some(v) = e.take_sat_result() {
+                got = Some(v);
+            }
+        }
+        let v = got.expect("the measurement finishes within 4 s");
+        assert!(v < -1.0 && v > -24.0, "drive 60 on noise is louder, the match turns it down: {v}");
+        assert!((v + e.sat_db).abs() < 0.6, "match {v} vs measured change {}", e.sat_db);
+        assert!(e.take_sat_result().is_none());
     }
 }

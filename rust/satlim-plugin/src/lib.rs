@@ -37,8 +37,14 @@ pub struct Shared {
     pub fms: AtomicF32,
     /// loudness change across the saturator (before SAT GAIN), dB
     pub sat_db: AtomicF32,
+    /// sat level match: measuring (audio -> UI), progress seconds, finished result (set once, UI writes SAT GAIN)
+    pub sat_meas: AtomicBool,
+    pub sat_mt: AtomicF32,
+    pub sat_result: AtomicF32,
+    pub sat_result_new: AtomicBool,
     // UI -> audio
     pub delta_on: AtomicBool,
+    pub sat_req: AtomicBool,
 }
 
 impl Shared {
@@ -55,7 +61,12 @@ impl Shared {
             sat_vz: AtomicF32::new(0.0),
             fms: AtomicF32::new(1e-9),
             sat_db: AtomicF32::new(0.0),
+            sat_meas: AtomicBool::new(false),
+            sat_mt: AtomicF32::new(0.0),
+            sat_result: AtomicF32::new(0.0),
+            sat_result_new: AtomicBool::new(false),
             delta_on: AtomicBool::new(false),
+            sat_req: AtomicBool::new(false),
         }
     }
 }
@@ -150,6 +161,9 @@ impl Plugin for SatLim {
             context.set_latency_samples(lat);
         }
         self.engine.delta_on = sh.delta_on.load(Ordering::Relaxed);
+        if sh.sat_req.swap(false, Ordering::Relaxed) {
+            self.engine.request_sat_match();
+        }
         if let [l, r] = buffer.as_slice() {
             self.engine.process(l, r);
         }
@@ -170,6 +184,12 @@ impl Plugin for SatLim {
         sh.sat_vz.store(e.sat_vz as f32, Ordering::Relaxed);
         sh.fms.store(e.fms as f32, Ordering::Relaxed);
         sh.sat_db.store(e.sat_db as f32, Ordering::Relaxed);
+        sh.sat_meas.store(e.sat_matching(), Ordering::Relaxed);
+        sh.sat_mt.store(e.sat_match_progress() as f32, Ordering::Relaxed);
+        if let Some(v) = e.take_sat_result() {
+            sh.sat_result.store(v as f32, Ordering::Relaxed);
+            sh.sat_result_new.store(true, Ordering::Release);
+        }
         ProcessStatus::Normal
     }
 }
