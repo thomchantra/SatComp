@@ -121,7 +121,7 @@ impl Default for SatLimParams {
             ceiling: FloatParam::new("Ceiling", -0.3, FloatRange::Linear { min: -24.0, max: 0.0 }).with_unit(" dB").with_step_size(0.1),
             threshold: FloatParam::new("Threshold", 0.0, FloatRange::Linear { min: -30.0, max: 0.0 }).with_unit(" dB").with_step_size(0.1),
             release: FloatParam::new("Release", 80.0, FloatRange::Linear { min: 15.0, max: 80.0 }).with_unit(" ms").with_step_size(1.0),
-            clip: FloatParam::new("Grab", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            clip: FloatParam::new("Clip", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             out_gain: FloatParam::new("Out Gain", 0.0, FloatRange::Linear { min: -24.0, max: 12.0 }).with_unit(" dB").with_step_size(0.1),
             bypass: BoolParam::new("Bypass", false),
         }

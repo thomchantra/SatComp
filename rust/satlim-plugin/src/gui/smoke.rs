@@ -179,7 +179,7 @@ fn the_editor_runs_scripted_input_and_is_deterministic() {
     let (h1, _) = script();
     let (h2, log) = script();
     assert_eq!(h1, h2, "frames differ between two identical runs");
-    for want in ["Oversampling", "Drive", "Lookahead", "Ceiling", "Threshold", "Grab", "Out Gain", "Bypass"] {
+    for want in ["Oversampling", "Drive", "Lookahead", "Ceiling", "Threshold", "Clip", "Out Gain", "Bypass"] {
         assert!(log.iter().any(|l| l.starts_with(want)), "no write to {want}: {log:?}");
     }
 }

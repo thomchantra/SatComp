@@ -399,7 +399,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
-    ("v0.1", &["First version: the SatComp saturator, an oversampled clipper (GRAB, x1 to x8) and a true-peak brickwall limiter with a transient scope.", "L.AHD off gives a zero-latency limiter. OUT GAIN sits after the limiter on purpose."]),
+    ("v0.1", &["First version: the SatComp saturator, an oversampled clipper (CLIP, x1 to x8) and a true-peak brickwall limiter with a transient scope.", "L.AHD off gives a zero-latency limiter. OUT GAIN sits after the limiter on purpose."]),
 ];
 
 /// Crate version for the header: "0.4" for 0.4.0, "0.4.1" for a patch release.
@@ -1716,7 +1716,7 @@ impl<'a> Gui<'a> {
             self.cell(8, cx, 284.0, cw, 38.0, "CEILING");
             if !editing {
                 self.cell(9, cx, 326.0, cw, 38.0, "THRESHOLD");
-                self.cell(11, cx, 368.0, cw, 38.0, "GRAB");
+                self.cell(11, cx, 368.0, cw, 38.0, "CLIP");
                 self.cell(10, cx, 410.0, cw, 38.0, "RELEASE");
                 self.cell_o(22, cx, 452.0, cw, 38.0, "OUT GAIN");
             }

@@ -22,7 +22,7 @@ add(12, "lookahead", "Lookahead", "bool", 0, 1, 1)    # off = zero latency, samp
 add(8, "ceiling", "Ceiling", "f", -24, 0, -0.3, 0.1, " dB")
 add(9, "threshold", "Threshold", "f", -30, 0, 0, 0.1, " dB")
 add(10, "release", "Release", "f", 15, 80, 80, 1, " ms")
-add(11, "clip", "Grab", "f", 0, 100, 0, 1, " %")
+add(11, "clip", "Clip", "f", 0, 100, 0, 1, " %")
 add(22, "out_gain", "Out Gain", "f", -24, 12, 0, 0.1, " dB")
 add(26, "bypass", "Bypass", "bool", 0, 1, 0)
 

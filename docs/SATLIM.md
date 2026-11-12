@@ -10,7 +10,7 @@ presets `*.satlim` in `~/Library/Application Support/SatLim/Presets`.
 - **OUT GAIN is after the limiter, on purpose.** The ceiling is what the limiter holds; the output gain is free (a clipped -0.4 dBTP
   can still have inter-sample peaks a downstream converter sees, so the owner pulls the output back).
 - **THRESHOLD** is the input level that lands on the ceiling: the signal is lifted by `CEILING - THRESHOLD` dB. Lowering it pushes harder.
-- **GRAB** (param id `clip`) 0-100 %: 0 = off. Otherwise a hard clamp at the ceiling, run at the oversampled rate, driven up to +6 dB into it. With the
+- **CLIP** 0-100 %: 0 = off. Otherwise a hard clamp at the ceiling, run at the oversampled rate, driven up to +6 dB into it. With the
   clip on the limiter mostly handles inter-sample excess.
 - **L.AHEAD** on: 1.5 ms lookahead + 4x interpolated true-peak detection (constant latency, reported). Off: zero limiter latency, the gain
   follows the *sample* peak instantly (attack 0), so inter-sample overs can pass. The readout reads **TRU.PK** when on and **PK** when off (accent only when it clips; GR stays in the UI colour).
@@ -18,7 +18,7 @@ presets `*.satlim` in `~/Library/Application Support/SatLim/Presets`.
 - **x1..x8** (OVERSAMPL, top of the limiter column) oversample the saturator and the clipper (latency 0 / 24 / 28 / 30 samples each). The limiter's own detection is always
   true-peak (L.AHD on).
 - **Latency** = saturator oversampler + clipper oversampler + limiter lookahead, always reported; it changes with x1..x8 and L.AHD.
-- **Cells** top to bottom: CEILING, THRESHOLD, GRAB, RELEASE, OUT GAIN (SAT GAIN in the sat module).
+- **Cells** top to bottom: CEILING, THRESHOLD, CLIP, RELEASE, OUT GAIN (SAT GAIN in the sat module).
 - **Meters:** segmented sat out (clip block at the top, held 1 s), GR with its value on top, stereo out VU (click the bars to cycle 48 / 24 / 12 / 6 dB, click the top block to reset the clip lamp and the peak readout).
 - **SAT readout** (plot corner): click = measure the saturator's loudness change for 3 s, then write the SAT GAIN that cancels it (click again to cancel).
 - **Scope:** CEIL runs +10 dB to -14 dB (default +2) so heavy clipping above 0 dBFS stays visible. Columns sit on a fixed grid in absolute time and the read position eases toward the newest bucket, so the picture scrolls steadily instead of flickering with each host block.
@@ -41,7 +41,7 @@ presets `*.satlim` in `~/Library/Application Support/SatLim/Presets`.
 | 8 | ceiling | -24-0 dB | -0.3 |
 | 9 | threshold | -30-0 dB | 0 |
 | 10 | release | 15-80 ms | 80 |
-| 11 | clip (GRAB) | 0-100 % | 0 |
+| 11 | clip | 0-100 % | 0 |
 | 22 | out_gain | -24-12 dB | 0 |
 | 26 | bypass | on / off | off (never in presets) |
 
