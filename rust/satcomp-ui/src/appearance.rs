@@ -300,6 +300,11 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
     fn commit_scheme(&mut self, pal: usize, encoded: String);
     fn commit_light(&mut self, light: bool);
     fn commit_face(&mut self, face: usize);
+    /// Spectrum fill style (`Some(solid)`), for plug-ins that draw a spectrum; `None` hides the switch on the Appearance page.
+    fn fft_solid(&self) -> Option<bool> {
+        None
+    }
+    fn commit_fft_solid(&mut self, _solid: bool) {}
 
     /// About page copy: paragraphs of source lines.
     fn about_paras(&self) -> &'static [&'static [&'static str]];
@@ -454,6 +459,15 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         for (dx, l, lt) in [(100.0, "DARK", false), (166.0, "LIGHT", true)] {
             if self.btn(r.x + dx, r.y + 4.0, 64.0, 16.0, l, (light == lt) as u8) {
                 self.set_light(lt);
+            }
+        }
+        if let Some(solid) = self.fft_solid() {
+            self.setc(false);
+            self.cv().text(r.x + 262.0, r.y + 8.0, "FFT FILL");
+            for (dx, l, sd) in [(322.0, "OUTLINE", false), (396.0, "SOLID", true)] {
+                if self.btn(r.x + dx, r.y + 4.0, if sd { 56.0 } else { 72.0 }, 16.0, l, (solid == sd) as u8) {
+                    self.commit_fft_solid(sd);
+                }
             }
         }
 

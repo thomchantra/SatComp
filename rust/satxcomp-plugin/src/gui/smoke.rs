@@ -133,10 +133,10 @@ fn script() -> (u64, Vec<String>) {
     r.click(594.0, 184.0); // oversampling x2 (right column, bottom row)
     r.click(634.0, 184.0); // oversampling x4
     r.drag(41.0, 248.0, 41.0, 223.0); // DRIVE row of the selected band
-    r.click(200.0, 206.0); // band row: select MID (click on the tab)
-    r.drag(41.0, 248.0, 41.0, 233.0); // DRIVE of MID
+    r.click(165.0, 206.0); // band row: select ML (click on the tab, four tabs of 104 px)
+    r.drag(41.0, 248.0, 41.0, 233.0); // DRIVE of ML
     r.drag(100.0, 100.0, 150.0, 100.0); // viewport: grab a crossover line / marker area
-    r.click(350.0, 206.0); // band row: HI tab
+    r.click(373.0, 206.0); // band row: HI tab
     r.click(452.0, 206.0); // DELTA of the band
     r.click(500.0, 206.0); // SOLO of the band
     r.click(514.0, 16.0); // EQ page (header)
@@ -157,7 +157,7 @@ fn editor_runs_both_pages_and_writes_parameters() {
     let joined = log.join("\n");
     assert!(joined.contains("Sat Oversampling"), "oversampling click should reach the host:\n{joined}");
     assert!(joined.contains("Lo Drive"), "dragging DRIVE should write the selected band's drive:\n{joined}");
-    assert!(joined.contains("Mid Drive"), "after selecting MID its drive must be the one written:\n{joined}");
+    assert!(joined.contains("ML Drive"), "after selecting ML its drive must be the one written:\n{joined}");
     assert!(joined.contains("Hi Delta") && joined.contains("Hi Solo"), "band DELTA / SOLO act on the selected band:\n{joined}");
     assert!(joined.contains("EQ2 On") || joined.contains("EQ4 On"), "EQ band toggle should reach the host:\n{joined}");
     assert!(joined.contains("EQ1 Type"), "type glyph click should write the EQ type:\n{joined}");
@@ -204,20 +204,22 @@ fn main_page_controls_of_the_wide_layout_write_parameters() {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    // (x, y, drag dy, parameter): the crossover rows are 16 high at y 100 / 138, L.AHEAD is the small row at the end of the band row
-    for (x, y, dy, name) in [(584.0, 108.0, -25.0, "X-Over 1"), (584.0, 146.0, -25.0, "X-Over 2"), (584.0, 206.0, -25.0, "Lookahead")] {
+    // (x, y, drag dy, parameter): the crossover rows are 16 high at y 110 / 132 / 154, L.AHEAD is the small row at the end of the band row
+    for (x, y, dy, name) in [(560.0, 118.0, -25.0, "X-Over 1"), (560.0, 140.0, -25.0, "X-Over 2"), (560.0, 162.0, -25.0, "X-Over 3"), (584.0, 206.0, -25.0, "Lookahead")] {
         let n0 = r.log().len();
         r.drag(x, y, x, y + dy);
         let new: Vec<String> = r.log()[n0..].to_vec();
         assert!(new.iter().any(|l| l.starts_with(name)), "dragging {name} wrote nothing: {new:?}");
         assert!(new.iter().all(|l| l.starts_with(name)), "dragging {name} also wrote other parameters: {new:?}");
     }
-    // slope buttons: 12 / 24 / 48 / 96, 30 wide from x 550, under each crossover
-    for (x, y, name) in [(609.0, 124.0, "X-Slope 1"), (549.0, 162.0, "X-Slope 2")] {
+    // slope buttons at the right end of each crossover row: a click opens the 12 / 24 / 48 / 96 list, a pick writes the slope
+    for (y, name) in [(118.0, "X-Slope 1"), (140.0, "X-Slope 2"), (162.0, "X-Slope 3")] {
         let n0 = r.log().len();
-        r.click(x, y);
+        r.click(637.0, y);
+        assert!(r.log()[n0..].is_empty(), "opening the slope list must not write: {:?}", &r.log()[n0..]);
+        r.click(595.0, y + 8.0 + 1.0 + 14.0 * 2.0 + 7.0); // third entry = 48 dB/oct
         let new: Vec<String> = r.log()[n0..].to_vec();
-        assert!(new.iter().any(|l| l.starts_with(name)) && new.iter().all(|l| l.starts_with(name)), "clicking a {name} button: {new:?}");
+        assert!(new.iter().any(|l| l.starts_with(name) && l.contains("0.667")) && new.iter().all(|l| l.starts_with(name)), "picking a {name} entry: {new:?}");
     }
     // oversampling lives under the crossover group
     let n0 = r.log().len();
@@ -262,7 +264,7 @@ fn header_sidechain_scale_menu_and_preset_menu() {
     r.click(200.0, 24.0 + 1.0 + 7.0);
     let new: Vec<String> = r.log()[n0..].to_vec();
     assert!(new.len() >= 100, "initialise should write every stored parameter: {} writes", new.len());
-    assert!(new.iter().any(|l| l.starts_with("Lo Drive 0.000")) && new.iter().any(|l| l.starts_with("Mid Thresh 1.000")), "init values");
+    assert!(new.iter().any(|l| l.starts_with("Lo Drive 0.000")) && new.iter().any(|l| l.starts_with("ML Thresh 1.000")), "init values");
     for banned in ["Bypass", "Gain Match", "Sidechain"] {
         assert!(!new.iter().any(|l| l.starts_with(banned)), "{banned} must not be part of a preset");
     }
@@ -412,7 +414,7 @@ fn icon_double_click_toggles_light_and_right_click_lists_schemes() {
     assert_eq!(r.params.palette_v2.load(Relaxed), 2);
 }
 
-/// ASYM sits right of DRIVE: drag lowers / wheel changes the selected band's value for the current shaper (stored in the project).
+/// ASYM heads the first stack of the saturator's right column (TONE under it): drag lowers / wheel changes the selected band's value for the current shaper (stored in the project).
 #[test]
 fn asym_slider_writes_the_selected_shapers_value() {
     let mut r = Rig::new();
@@ -420,13 +422,13 @@ fn asym_slider_writes_the_selected_shapers_value() {
         r.frame(vec![]);
     }
     assert_eq!(r.params.asym_snapshot(0)[0], 100.0);
-    r.drag(105.0, 248.0, 105.0, 268.0); // drag down = lower
+    r.drag(180.0, 228.0, 180.0, 248.0); // drag down = lower
     let a = r.params.asym_snapshot(0);
     assert!(a[0] < 100.0, "dragging ASYM changed nothing: {:?}", &a[..3]);
     assert_eq!(a[1], 100.0, "other shapers keep their own value");
     assert_eq!(r.params.asym_snapshot(1)[0], 100.0, "other bands keep their own value");
-    r.click(105.0, 248.0);
-    r.click(105.0, 248.0); // double-click = reset
+    r.click(180.0, 228.0);
+    r.click(180.0, 228.0); // double-click = reset
     assert_eq!(r.params.asym_snapshot(0)[0], 100.0);
 }
 
@@ -465,4 +467,47 @@ fn scope_icon_switches_the_view_and_drag_changes_window_and_ceiling() {
     assert_eq!(r.log().len(), n0, "the scope writes no parameters");
     r.click(514.0, 43.0);
     assert_eq!(r.params.scope.load(Relaxed) & 1, 0, "icon turns it off again");
+}
+
+/// The saturator's controls: BIAS beside DRIVE, ASYM over TONE and HP over LP in the right column, all writing the selected band.
+#[test]
+fn bias_tone_hp_lp_cells_write_the_selected_band() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    // (x, y, drag dy, parameter): selector 220-239, DRIVE | BIAS 239-258; stacks at x 142-216 from y 220 (halves 19 / 20 high)
+    for (x, y, dy, name) in [
+        (85.0, 248.0, -25.0, "Lo Bias"),
+        (180.0, 250.0, 25.0, "Lo Tone"),
+        (180.0, 266.0, -25.0, "Lo HP"),
+        (180.0, 284.0, 25.0, "Lo LP"),
+    ] {
+        let n0 = r.log().len();
+        r.drag(x, y, x, y + dy);
+        let new: Vec<String> = r.log()[n0..].to_vec();
+        assert!(new.iter().any(|l| l.starts_with(name)), "dragging {name} wrote nothing: {new:?}");
+        assert!(new.iter().all(|l| l.starts_with(name)), "dragging {name} also wrote other parameters: {new:?}");
+    }
+}
+
+/// Four bands: every tab selects its own band, the third crossover line can be dragged and moves only X-Over 3.
+#[test]
+fn four_band_tabs_and_the_third_crossover_line() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    for (i, x) in [60.0, 165.0, 270.0, 373.0].into_iter().enumerate() {
+        r.click(x, 206.0);
+        assert_eq!(r.params.sel_band.load(std::sync::atomic::Ordering::Relaxed), i as i32, "tab {i}");
+    }
+    // the dotted crossover line at 3.5 kHz: drag it left, only X-Over 3 may change
+    let px = satcomp_ui::spectrum::freq_to_x(3500.0, 11.0, 512.0); // viewport x 10, width 514
+    let n0 = r.log().len();
+    r.drag(px, 60.0, px - 30.0, 60.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(!new.is_empty() && new.iter().all(|l| l.starts_with("X-Over 3")), "{new:?}");
+    let last: f32 = new.last().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
+    assert!(last < (3500.0 - 200.0) / 19800.0, "dragging left must lower X-Over 3: {new:?}");
 }

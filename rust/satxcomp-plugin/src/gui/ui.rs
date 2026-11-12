@@ -1,4 +1,4 @@
-//! SatXComp pages: header, tab row, spectrum / crossover viewport, the three band tabs with their saturator and compressor
+//! SatXComp pages: header, tab row, spectrum / crossover viewport, the four band tabs with their saturator and compressor
 //! cells, and the output column. Widgets (cells, buttons, drag logic) come from `satcomp_ui::kit`.
 
 use crate::params::{SatXCompParams, SLOTS, TABLE};
@@ -11,7 +11,7 @@ use satcomp_ui::appearance::{self, AppState, AppearanceUi, CellGrid, Rect};
 use satcomp_ui::canvas::{Canvas, PALETTES};
 use satcomp_ui::kit::{Kit, Meta, Widgets};
 use satcomp_ui::spectrum::{freq_to_x, x_to_freq, Spectrum};
-use satxcomp_dsp::{eq_kind, XParams, EQ_KINDS};
+use satxcomp_dsp::{eq_kind, XParams, EQ_KINDS, NB};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -42,24 +42,27 @@ const FF_FB: usize = 17;
 const GR_DIST: usize = 18;
 const COMP_MIX: usize = 19;
 const COMP_GAIN: usize = 20;
+const HP: usize = 21;
+const LP: usize = 22;
 
 /// first UI slot of EQ band `i`: on, type, freq, q, gain
 const fn eq_base(i: usize) -> usize {
-    90 + 5 * i
+    120 + 5 * i
 }
-const EQ_TILT: usize = 115;
-const EQ_PIVOT: usize = 116;
-const EQ_MIX: usize = 117;
-const EQ_GAIN: usize = 118;
-const EQ_BYPASS: usize = 119;
-const X1_SLOPE: usize = 82;
-const X2_SLOPE: usize = 83;
-const SC_ON: usize = 84;
-const SC_GAIN: usize = 85;
-const SC_HP: usize = 86;
-const SC_LP: usize = 87;
-const SC_MIX: usize = 88;
-const LIM_ON: usize = 120;
+const EQ_TILT: usize = 145;
+const EQ_PIVOT: usize = 146;
+const EQ_MIX: usize = 147;
+const EQ_GAIN: usize = 148;
+const EQ_BYPASS: usize = 149;
+/// crossover frequency slots (1, 2, 9) and slope slots, by split
+const XOV: [usize; 3] = [1, 2, 9];
+const XOV_SLOPE: [usize; 3] = [106, 107, 108];
+const SC_ON: usize = 110;
+const SC_GAIN: usize = 111;
+const SC_HP: usize = 112;
+const SC_LP: usize = 113;
+const SC_MIX: usize = 114;
+const LIM_ON: usize = 150;
 /// height of the sidechain control row under the spectrum
 const SC_ROW_H: f32 = 17.0;
 // ---- layout (logical units; the window is W x H = 680 x 480)
@@ -79,18 +82,18 @@ const CELL_H: f32 = 38.0;
 const CELL_P: f32 = 44.0;
 /// band module cells (saturator / compressor)
 const CELL_W: f32 = 74.0;
-/// spectrum look: true = solid UI-colour fill under the output, false = background fill with a stroke (accent shows the gap to dry)
-const FFT_SOLID_FILL: bool = false;
 /// EQ page columns: five bands plus the pivot column, across the viewport width
 const EQ_W: f32 = 80.0;
 const EQ_P: f32 = 86.0;
 const EQ_PW: f32 = VW - 5.0 * EQ_P;
 /// window scale steps (x the 664 x 400 base)
 const SIZES: [f32; 6] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5];
-/// `kit.act` values: 1..VIEW_ACT are parameter slots (vertical drag, slots run to 119); VIEW_ACT and up are viewport drags
+/// `kit.act` values: 1..VIEW_ACT are parameter slots (vertical drag, slots run to 150); VIEW_ACT and up are viewport drags
 const VIEW_ACT: i32 = 1000;
 const ACT_X1: i32 = VIEW_ACT + 1;
 const ACT_X2: i32 = VIEW_ACT + 2;
+/// third crossover line (the EQ nodes take VIEW_ACT + 3..7)
+const ACT_X3: i32 = VIEW_ACT + 8;
 /// EQ node `b` is ACT_NODE + b
 const ACT_NODE: i32 = VIEW_ACT + 3;
 /// EQ viewport: drag the dashed pivot line / drag empty space sideways for tilt
@@ -117,6 +120,8 @@ enum MenuKind {
     Preset,
     /// colour scheme list (the icon's right-click menu)
     Palette,
+    /// crossover slope list of split `k`
+    Slope(usize),
 }
 
 /// kind: 0 selectable item, 1 header (dim, not selectable), 2 separator
@@ -147,8 +152,8 @@ pub enum Dlg {
 
 const KIND_NAMES: [&str; 8] = ["HPF", "LPF", "LO SHELF", "HI SHELF", "BAND", "ALLPASS", "BANDPASS", "NOTCH"];
 
-const BAND_NAMES: [&str; 3] = ["LOW", "MID", "HI"];
-const BAND_LETTERS: [&str; 3] = ["L", "M", "H"];
+const BAND_NAMES: [&str; NB] = ["LOW", "ML", "MH", "HI"];
+const BAND_LETTERS: [&str; NB] = ["LO", "ML", "MH", "HI"];
 
 pub struct State {
     pub kit: Kit,
@@ -163,9 +168,9 @@ pub struct State {
     pub face: usize,
     spec_out: Spectrum,
     spec_dry: Spectrum,
-    gr_disp: [f32; 3],
-    gr_hold: [f32; 3],
-    gr_hold_t: [f64; 3],
+    gr_disp: [f32; NB],
+    gr_hold: [f32; NB],
+    gr_hold_t: [f64; NB],
     gr_ri: usize,
     ovl: f32,
     ovr: f32,
@@ -202,18 +207,18 @@ pub struct State {
     pending: u8,
     dlg: Option<Arc<parking_lot::Mutex<Dlg>>>,
     /// gain-reduction readouts refresh slowly (peak over the last interval) so the numbers stay readable
-    gr_txt: [f32; 3],
-    gr_txt_pk: [f32; 3],
+    gr_txt: [f32; NB],
+    gr_txt_pk: [f32; NB],
     gr_txt_t: f64,
     /// output limiter reduction: decaying peak (flow block) and a 4 Hz text value
     lim_disp: f32,
     lim_txt: f32,
     lim_txt_pk: f32,
     /// per band post-saturator meter: decaying level, hold, and the last time it clipped
-    vu: [f32; 3],
-    vu_hold: [f32; 3],
-    vu_hold_t: [f64; 3],
-    vu_clip_t: [f64; 3],
+    vu: [f32; NB],
+    vu_hold: [f32; NB],
+    vu_hold_t: [f64; NB],
+    vu_clip_t: [f64; NB],
     /// window-size grip drag and the pointer / window in host points (set by run_frame)
     resizing: bool,
     resize_off: (f32, f32),
@@ -257,15 +262,18 @@ impl State {
             kit.meta[n].snap = snap;
             kit.meta[n].step = step;
         };
-        sp(1, 1, 0, 1.0);
-        sp(2, 1, 0, 1.0);
+        for n in XOV {
+            sp(n, 1, 0, 1.0);
+        }
         sp(4, 0, 0, 0.1);
         sp(6, 0, 0, 0.1);
-        for b in 0..3 {
+        for b in 0..NB {
             let o = band_base(b);
             sp(o + DRIVE, 0, 0, 0.5);
             sp(o + BIAS, 0, 0, 1.0);
             sp(o + TONE, 1, 2, 10.0);
+            sp(o + HP, 1, 1, 1.0);
+            sp(o + LP, 1, 2, 10.0);
             sp(o + SAT_GAIN, 0, 0, 0.1);
             sp(o + THRESH, 0, 0, 0.1);
             sp(o + RATIO, 1, 2, 0.1);
@@ -302,9 +310,9 @@ impl State {
             face: (params.font.load(Ordering::Relaxed).max(0) as usize).min(satcomp_ui::canvas::FONT_NAMES.len() - 1),
             spec_out: Spectrum::new(),
             spec_dry: Spectrum::new(),
-            gr_disp: [0.0; 3],
-            gr_hold: [0.0; 3],
-            gr_hold_t: [0.0; 3],
+            gr_disp: [0.0; NB],
+            gr_hold: [0.0; NB],
+            gr_hold_t: [0.0; NB],
             gr_ri: 0,
             ovl: 0.0,
             ovr: 0.0,
@@ -335,16 +343,16 @@ impl State {
             shown_modified: false,
             pending: 0,
             dlg: None,
-            gr_txt: [0.0; 3],
-            gr_txt_pk: [0.0; 3],
+            gr_txt: [0.0; NB],
+            gr_txt_pk: [0.0; NB],
             gr_txt_t: 0.0,
             lim_disp: 0.0,
             lim_txt: 0.0,
             lim_txt_pk: 0.0,
-            vu: [0.0; 3],
-            vu_hold: [0.0; 3],
-            vu_hold_t: [0.0; 3],
-            vu_clip_t: [-10.0; 3],
+            vu: [0.0; NB],
+            vu_hold: [0.0; NB],
+            vu_hold_t: [0.0; NB],
+            vu_clip_t: [-10.0; NB],
             resizing: false,
             resize_off: (0.0, 0.0),
             ptr_pt: (0.0, 0.0),
@@ -374,11 +382,11 @@ impl State {
             self.rd_last = now;
             self.hl_l_t = now;
             self.hl_r_t = now;
-            self.gr_hold_t = [now; 3];
+            self.gr_hold_t = [now; NB];
             self.gr_txt_t = now;
             self.hold_until = now;
-            self.vu_hold_t = [now; 3];
-            self.vu_clip_t = [-10.0; 3];
+            self.vu_hold_t = [now; NB];
+            self.vu_clip_t = [-10.0; NB];
             self.spec_out.rebase(now);
             self.spec_dry.rebase(now);
             self.app.rebase();
@@ -398,7 +406,7 @@ impl State {
         d.opk[0].store(1.0, Relaxed);
         d.opk[1].store(0.5, Relaxed);
         d.clip.store(true, Relaxed);
-        for b in 0..3 {
+        for b in 0..NB {
             d.gr_pk[b].store(2.0 + b as f32 * 2.0, Relaxed);
             d.sat_vz[b].store(0.3, Relaxed);
             d.sat_out_pk[b].store(0.3 + 0.35 * b as f32, Relaxed);
@@ -481,7 +489,7 @@ impl<'a> Gui<'a> {
 
 /// About page copy (docs/abouttextcopy.md). Each inner slice is one paragraph, each string one source line.
 const ABOUT_TEXT: &[&[&str]] = &[
-    &["A 3-band compressor with waveshaping saturator and 5-band EQ", "For surgical baking intentions :3"],
+    &["A 4-band compressor with waveshaping saturator and 5-band EQ", "For surgical baking intentions :3"],
     &["Set crossover range with X-OVR sliders with 12dB, 24dB, 48dB, and 96dB slope options, then drive each band to taste."],
     &["Use sidechain mode for dynamic EQ style ducking, then cook hard with waveshaping distortion.", "Left-click on the top-right pencil icon to enter custom draw mode."],
     &["Refine tone with post-compressor 5-band EQ, or sculpt with notch, bandpass and allpass with dry signal blending."],
@@ -489,7 +497,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
-const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &["First release: three bands with 12 to 96 dB crossovers, a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.", "Colour schemes with light mode, custom themes and fonts under About > Appearance.", "ASYM next to DRIVE keeps lopsided waveshaper curves from dragging DC and sub-bass pulses into the signal. A true-peak output limiter (LIM, on by default) catches rogue peaks; its reduction shows in the LIM readout. The icon in the viewport corner opens a waveform scope (transient meter): half or full wave, with the gain reduction stacked in the accent colour; drag the view to change the window and ceiling."])];
+const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &["First release: four bands (LO, ML, MH, HI) with three 12 to 96 dB crossovers, a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.", "Colour schemes with light mode, custom themes, fonts and the spectrum fill (outline or solid) under About > Appearance.", "Saturator per band: DRIVE and BIAS side by side, ASYM over TONE and HP over LP as stacked sliders.", "Each band handle in the spectrum carries a small bar for the band's level change (left = quieter, right = louder).", "ASYM next to DRIVE keeps lopsided waveshaper curves from dragging DC and sub-bass pulses into the signal. A true-peak output limiter (LIM, on by default) catches rogue peaks; its reduction shows in the LIM readout. The icon in the viewport corner opens a waveform scope (transient meter): half or full wave, with the gain reduction stacked in the accent colour; drag the view to change the window and ceiling."])];
 
 impl<'a> AppearanceUi<'a> for Gui<'a> {
     fn app(&mut self) -> &mut AppState {
@@ -518,6 +526,12 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
         self.s.light = light;
         self.env.params.light.store(light, Ordering::Relaxed);
         self.apply_pal();
+    }
+    fn fft_solid(&self) -> Option<bool> {
+        Some(self.env.params.fft_solid.load(Ordering::Relaxed))
+    }
+    fn commit_fft_solid(&mut self, solid: bool) {
+        self.env.params.fft_solid.store(solid, Ordering::Relaxed);
     }
     fn commit_face(&mut self, face: usize) {
         self.s.face = face;
@@ -556,18 +570,29 @@ fn fmt_slot(n: usize, v: f32) -> String {
         SC_MIX => return format!("{:.0}%", v),
         _ => {}
     }
-    if n == X1_SLOPE || n == X2_SLOPE {
+    if XOV_SLOPE.contains(&n) {
         return format!("{}dB", [12, 24, 48, 96][(v + 0.5).floor().clamp(0.0, 3.0) as usize]);
     }
-    if (10..82).contains(&n) {
+    if (10..10 + 24 * NB).contains(&n) {
         return match (n - 10) % 24 {
             DRIVE | SAT_MIX | SPEED | KNEE_SHAPE | DETECTOR | FF_FB | GR_DIST | COMP_MIX => format!("{:.0}%", v),
             BIAS => format!("{:+.0}%", v),
-            TONE => {
+            TONE | LP => {
                 if v >= 19900.0 {
                     "OFF".into()
-                } else {
+                } else if v >= 1000.0 {
                     format!("{:.1}k", v * 0.001)
+                } else {
+                    format!("{:.0}", v)
+                }
+            }
+            HP => {
+                if v <= 20.5 {
+                    "OFF".into()
+                } else if v >= 1000.0 {
+                    format!("{:.1}k", v * 0.001)
+                } else {
+                    format!("{:.0}", v)
                 }
             }
             SAT_GAIN | COMP_GAIN => format!("{:+.1}dB", v),
@@ -598,8 +623,8 @@ fn fmt_slot(n: usize, v: f32) -> String {
             _ => format!("{:.1}", v),
         };
     }
-    if (90..115).contains(&n) {
-        return match (n - 90) % 5 {
+    if (120..145).contains(&n) {
+        return match (n - 120) % 5 {
             2 => hz(v),
             3 => format!("{:.2}", v),
             4 => {
@@ -616,7 +641,7 @@ fn fmt_slot(n: usize, v: f32) -> String {
         EQ_TILT | EQ_GAIN => format!("{:+.1}dB", v),
         EQ_PIVOT => hz(v),
         EQ_MIX => format!("{:.0}%", v),
-        1 | 2 => hz(v),
+        1 | 2 | 9 => hz(v),
         4 => {
             if v < 0.05 {
                 "OFF".into()
@@ -632,7 +657,7 @@ fn fmt_slot(n: usize, v: f32) -> String {
 
 impl<'a> Gui<'a> {
     fn sel(&self) -> usize {
-        (self.env.params.sel_band.load(Ordering::Relaxed).max(0) as usize).min(2)
+        (self.env.params.sel_band.load(Ordering::Relaxed).max(0) as usize).min(NB - 1)
     }
 
     // ------------------------------------------------------------------ window size
@@ -710,7 +735,7 @@ impl<'a> Gui<'a> {
             let v = p.params.get(id).copied().unwrap_or(df).clamp(mn, mx);
             self.click_set(n, v);
         }
-        for b in 0..3 {
+        for b in 0..NB {
             let c = Curve::from_points(p.curve(b));
             self.curve_cell(b).lock().clone_from(&c.pts().to_vec());
             let a = crate::params::asym_from(p.asym(b));
@@ -725,6 +750,7 @@ impl<'a> Gui<'a> {
         match b {
             0 => &self.env.params.curve_lo,
             1 => &self.env.params.curve_mid,
+            2 => &self.env.params.curve_mh,
             _ => &self.env.params.curve_hi,
         }
     }
@@ -755,7 +781,7 @@ impl<'a> Gui<'a> {
                 return true;
             }
         }
-        (0..3).any(|c| Curve::from_points(b.curve(c)) != self.env.params.curve_snapshot(c) || crate::params::asym_from(b.asym(c)) != self.env.params.asym_snapshot(c))
+        (0..NB).any(|c| Curve::from_points(b.curve(c)) != self.env.params.curve_snapshot(c) || crate::params::asym_from(b.asym(c)) != self.env.params.asym_snapshot(c))
     }
 
     fn capture(&self, name: &str) -> Preset {
@@ -765,11 +791,11 @@ impl<'a> Gui<'a> {
             .map(|e| (e.1.to_string(), self.sget(e.0)))
             .collect();
         let mut p = Preset::new(name, params);
-        let curves: Vec<Curve> = (0..3).map(|b| self.env.params.curve_snapshot(b)).collect();
+        let curves: Vec<Curve> = (0..NB).map(|b| self.env.params.curve_snapshot(b)).collect();
         if curves.iter().any(|c| *c != Curve::linear()) {
             p.curves = curves.iter().map(|c| c.pts().to_vec()).collect();
         }
-        let asyms: Vec<[f64; satxcomp_dsp::params::SHAPER_COUNT]> = (0..3).map(|b| self.env.params.asym_snapshot(b)).collect();
+        let asyms: Vec<[f64; satxcomp_dsp::params::SHAPER_COUNT]> = (0..NB).map(|b| self.env.params.asym_snapshot(b)).collect();
         if asyms.iter().any(|a| a.iter().any(|&v| v != 100.0)) {
             p.asym = asyms.iter().map(|a| a.iter().map(|&v| v as f32).collect()).collect();
         }
@@ -1090,7 +1116,7 @@ impl<'a> Gui<'a> {
     fn update_gr(&mut self) {
         let sh = self.env.shared;
         let now = self.kit.now;
-        for b in 0..3 {
+        for b in 0..NB {
             let g = sh.gr_pk[b].swap(0.0, Ordering::Relaxed);
             self.gr_disp[b] = g.max(self.gr_disp[b] * 0.9);
             if g >= self.gr_hold[b] {
@@ -1120,7 +1146,7 @@ impl<'a> Gui<'a> {
             self.lim_txt = self.lim_txt_pk;
             self.lim_txt_pk = 0.0;
             self.gr_txt = self.gr_txt_pk;
-            self.gr_txt_pk = [0.0; 3];
+            self.gr_txt_pk = [0.0; NB];
             self.gr_txt_t = now;
         }
     }
@@ -1208,6 +1234,8 @@ impl<'a> Gui<'a> {
         if (lum(inv) - lum(self.cv.bk)).abs() < 0.3 {
             inv = if lum(self.cv.bk) < 0.5 { [1.0; 3] } else { [0.0; 3] };
         }
+        // spectrum look (Appearance): solid UI-colour fill under the output, or background fill with a stroke (accent shows the gap to dry)
+        let solid = self.env.params.fft_solid.load(Ordering::Relaxed);
         self.setc(false);
         self.cv.boxr(x, y, w, h);
         let mut prev: Option<f32> = None;
@@ -1215,7 +1243,7 @@ impl<'a> Gui<'a> {
             let (ho, hd) = (hh(co[i]), hh(cd[i]));
             let (lo, hi) = (ho.min(hd), ho.max(hd));
             self.setc(false);
-            if FFT_SOLID_FILL && lo > 0.0 {
+            if solid && lo > 0.0 {
                 self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - lo, 1.0, lo);
             }
             if hi > lo {
@@ -1227,7 +1255,7 @@ impl<'a> Gui<'a> {
                 }
                 self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - hi, 1.0, hi - lo);
             }
-            if !FFT_SOLID_FILL {
+            if !solid {
                 // white stroke along the output spectrum, joined to its neighbour so steep edges stay connected
                 self.setc(false);
                 let (a, b) = match prev {
@@ -1242,51 +1270,54 @@ impl<'a> Gui<'a> {
     }
 
     fn draw_crossover(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let (f1, f2) = (self.env.dsp.x1 as f32, self.env.dsp.x2 as f32);
-        let f2 = f2.max(f1 * 1.05);
-        let (px1, px2) = (freq_to_x(f1, x + 1.0, w - 2.0), freq_to_x(f2, x + 1.0, w - 2.0));
-        // drag a crossover line
+        let mut f = [self.env.dsp.x1 as f32, self.env.dsp.x2 as f32, self.env.dsp.x3 as f32];
+        f[1] = f[1].max(f[0] * 1.05);
+        f[2] = f[2].max(f[1] * 1.05);
+        let px: Vec<f32> = f.iter().map(|&v| freq_to_x(v, x + 1.0, w - 2.0)).collect();
+        // drag a crossover line (the nearest one within 6 px)
         if self.hit(x, y, w, h) && self.kit.press && self.kit.act == 0 {
-            let (d1, d2) = ((self.kit.mx - px1).abs(), (self.kit.mx - px2).abs());
-            if d1.min(d2) < 6.0 {
-                self.kit.act = if d1 <= d2 { ACT_X1 } else { ACT_X2 };
+            let (k, d) = (0..3).map(|k| (k, (self.kit.mx - px[k]).abs())).fold((0, f32::MAX), |a, c| if c.1 < a.1 { c } else { a });
+            if d < 6.0 {
+                self.kit.act = [ACT_X1, ACT_X2, ACT_X3][k];
                 self.kit.press = false;
             }
         }
-        if self.kit.act == ACT_X1 && self.kit.down {
-            let f = x_to_freq(self.kit.mx, x + 1.0, w - 2.0);
-            self.setv(1, f.min(f2 * 0.95));
-        } else if self.kit.act == ACT_X2 && self.kit.down {
-            let f = x_to_freq(self.kit.mx, x + 1.0, w - 2.0);
-            self.setv(2, f.max(f1 * 1.05));
+        for k in 0..3 {
+            let act = [ACT_X1, ACT_X2, ACT_X3][k];
+            if self.kit.act == act && self.kit.down {
+                let v = x_to_freq(self.kit.mx, x + 1.0, w - 2.0);
+                let lo = if k == 0 { 20.0 } else { f[k - 1] * 1.05 };
+                let hi = if k == 2 { 20000.0 } else { f[k + 1] / 1.05 };
+                self.setv(XOV[k], v.clamp(lo, hi.max(lo)));
+            }
         }
         let active = self.kit.act;
         // dotted lines
         self.setc(false);
-        for (k, px) in [px1, px2].into_iter().enumerate() {
-            let lit = active == ACT_X1 + k as i32;
+        for k in 0..3 {
+            let lit = active == [ACT_X1, ACT_X2, ACT_X3][k];
             if lit {
                 self.setc(true);
             }
             let mut yy = y + 1.0;
             while yy < y + h - 2.0 {
-                self.cv.fill(px.floor(), yy, 1.0, 2.0);
+                self.cv.fill(px[k].floor(), yy, 1.0, 2.0);
                 yy += 4.0;
             }
             self.setc(false);
         }
         // Band handles. The handle sits at the band's threshold on the spectrum's dB axis: drag = threshold (double-click =
-        // default), click = select. A line marks the band's frequency range, a small bar hangs from the handle for the
-        // gain reduction and its number sits to the right.
+        // default), click = select. A line marks the band's frequency range, a small bar hangs from the handle for the gain
+        // reduction, and a horizontal bar on top of it shows the band's level change (left = quieter, right = louder).
         let sel = self.sel();
-        let centers = [(20.0 * f1).sqrt(), (f1 * f2).sqrt(), (f2 * 20000.0).sqrt()];
-        let edges = [(x + 1.0, px1), (px1, px2), (px2, x + w - 1.0)];
+        let edges = [x + 1.0, px[0], px[1], px[2], x + w - 1.0];
         let y_of = |t: f32| y + h - 1.0 - ((t + 100.0) / 95.0).clamp(0.0, 1.0) * (h - 2.0);
-        for b in 0..3 {
+        for b in 0..NB {
             let o = band_base(b);
-            let cx = freq_to_x(centers[b], x + 1.0, w - 2.0).floor();
-            let (bw, bx) = if b == sel { (26.0, cx - 13.0) } else { (14.0, cx - 7.0) };
-            let cyy = y_of(self.sget(o + THRESH)).clamp(y + 7.0, y + h - 7.0).floor();
+            let (lo_f, hi_f) = (if b == 0 { 20.0 } else { f[b - 1] }, if b == NB - 1 { 20000.0 } else { f[b] });
+            let cx = freq_to_x((lo_f * hi_f).sqrt(), x + 1.0, w - 2.0).floor();
+            let (bw, bx) = if b == sel { (26.0, cx - 13.0) } else { (18.0, cx - 9.0) };
+            let cyy = y_of(self.sget(o + THRESH)).clamp(y + 11.0, y + h - 7.0).floor();
             let by = cyy - 6.0;
             if self.hit(bx, by, bw, 12.0) && self.kit.press && self.kit.act == 0 {
                 self.select_band(b);
@@ -1306,7 +1337,7 @@ impl<'a> Gui<'a> {
             let held = self.kit.act == ACT_THR + b as i32;
             // range line
             self.setc(false);
-            let (xl, xr) = edges[b];
+            let (xl, xr) = (edges[b], edges[b + 1]);
             self.cv.fill(xl.floor(), cyy, (xr - xl).floor().max(1.0), 1.0);
             // gain reduction bar from the centre of the handle, 2 px per dB
             let gr = self.gr_disp[b];
@@ -1314,6 +1345,17 @@ impl<'a> Gui<'a> {
                 self.setc(true);
                 self.cv.fill(cx - 1.0, by + 12.0, 3.0, (gr * 2.0).min(36.0).floor().max(1.0));
             }
+            // level change across the band on top of the handle: centre tick, bar to the left (accent) or right
+            let d = if on { self.env.shared.band_diff[b].load(Ordering::Relaxed).clamp(-12.0, 12.0) } else { 0.0 };
+            let half = ((bw * 0.5 + 2.0) * d.abs() / 12.0).floor();
+            self.setc(d < -0.05);
+            if d < 0.0 {
+                self.cv.fill(cx - half, by - 4.0, half, 2.0);
+            } else {
+                self.cv.fill(cx + 1.0, by - 4.0, half, 2.0);
+            }
+            self.setc(false);
+            self.cv.fill(cx, by - 5.0, 1.0, 4.0);
             self.setc(held);
             if b == sel {
                 self.cv.fill(bx, by, bw, 12.0);
@@ -1326,13 +1368,6 @@ impl<'a> Gui<'a> {
             }
             self.cv.set_font(1);
             self.cv.textc(bx, by + 2.0, bw, BAND_LETTERS[b]);
-            // gain reduction number, right of the handle (left of it when there is no room), slow refresh
-            let g = self.gr_txt[b];
-            let txt = if g > 0.05 { format!("-{:.1}", g) } else { "0.0".to_string() };
-            let tw = self.cv.text_w(&txt);
-            let tx = if bx + bw + 3.0 + tw > x + w - 2.0 { bx - 3.0 - tw } else { bx + bw + 3.0 };
-            self.setc(g > 0.05 && on);
-            self.cv.text(tx, by + 12.0, &txt);
             self.setc(false);
         }
     }
@@ -1475,7 +1510,7 @@ impl<'a> Gui<'a> {
         let sc_on = self.sget(SC_ON) > 0.5;
         let lim_on = self.sget(LIM_ON) > 0.5;
         let (bh, bwb) = (22.0f32, 92.0f32);
-        // main line: IN, X-OVER, [three bands], SUM, EQ, LIM, OUT. The diagram is centred: the gaps share what the widths leave over
+        // main line: IN, X-OVER, [four bands], SUM, EQ, LIM, OUT. The diagram is centred: the gaps share what the widths leave over
         let w = [24.0f32, 58.0, bwb, 34.0, 30.0, 30.0, 30.0];
         let gw = [1.0f32, 2.0, 2.0, 1.2, 1.2, 1.2];
         let unit = (r.w - 24.0 - w.iter().sum::<f32>()) / gw.iter().sum::<f32>();
@@ -1485,22 +1520,25 @@ impl<'a> Gui<'a> {
             bx[i] = cx.floor();
             cx += w[i] + if i < 6 { gw[i] * unit } else { 0.0 };
         }
-        // the three band rows are centred between the title and the caption
+        // the band rows are centred between the title and the caption; the main line runs at their middle
         let mid = ((r.y + 24.0) + (r.y + r.h - 22.0)) * 0.5;
         let cy = (mid - bh * 0.5).floor();
-        let ys = [cy - 32.0, cy, cy + 32.0];
-        let ym = [ys[0] + 11.0, ys[1] + 11.0, ys[2] + 11.0];
+        let (bhb, step) = (18.0f32, 22.0f32);
+        let top = (mid - (3.0 * step + bhb) * 0.5).floor();
+        let ys: [f32; NB] = std::array::from_fn(|i| top + i as f32 * step);
+        let ym: [f32; NB] = std::array::from_fn(|i| ys[i] + bhb * 0.5);
+        let my = cy + 11.0;
         // signal levels for the flowing dots: input side (loudest band input), per band in / out, output
         let lvf = |v: f32| ((8.6858896 * v.max(1e-7).ln() + 48.0) / 48.0).clamp(0.0, 1.0);
         let lo = lvf(self.ovl.max(self.ovr));
-        let mut b_in = [0.0f32; 3];
-        let mut b_out = [0.0f32; 3];
-        for b in 0..3 {
+        let mut b_in = [0.0f32; NB];
+        let mut b_out = [0.0f32; NB];
+        for b in 0..NB {
             let on = self.sget(band_base(b) + ON) > 0.5;
             b_in[b] = lvf(sh.sat_vz[b].load(Ordering::Relaxed));
             b_out[b] = if on { (lvf(self.vu[b]) - self.gr_disp[b] / 48.0).max(0.0) } else { b_in[b] };
         }
-        let inl = b_in[0].max(b_in[1]).max(b_in[2]);
+        let inl = b_in.iter().cloned().fold(0.0, f32::max);
         let phase = ((self.kit.now * 26.0) as f32) % 6.0;
         // dots walk along a polyline, 6 px apart, sized by level (the animated "dashes" of the flow)
         let along = |c: &Canvas, pts: &[(f32, f32)], lv: f32| {
@@ -1529,30 +1567,30 @@ impl<'a> Gui<'a> {
         self.setc(false);
         let fork = (bx[1] + w[1] + ((bx[2] - bx[1] - w[1]) * 0.5).floor()).floor();
         let join = (bx[2] + bwb + ((bx[3] - bx[2] - bwb) * 0.5).floor()).floor();
-        arrow(&self.cv, bx[0] + w[0], bx[1], ym[1]);
-        self.cv.fill(bx[1] + w[1], ym[1], fork - bx[1] - w[1] + 1.0, 1.0);
-        self.cv.fill(fork, ym[0], 1.0, ym[2] - ym[0] + 1.0);
-        for i in 0..3 {
+        arrow(&self.cv, bx[0] + w[0], bx[1], my);
+        self.cv.fill(bx[1] + w[1], my, fork - bx[1] - w[1] + 1.0, 1.0);
+        self.cv.fill(fork, ym[0], 1.0, ym[NB - 1] - ym[0] + 1.0);
+        for i in 0..NB {
             arrow(&self.cv, fork, bx[2], ym[i]);
             self.cv.fill(bx[2] + bwb, ym[i], join - bx[2] - bwb + 1.0, 1.0);
         }
-        self.cv.fill(join, ym[0], 1.0, ym[2] - ym[0] + 1.0);
-        arrow(&self.cv, join, bx[3], ym[1]);
+        self.cv.fill(join, ym[0], 1.0, ym[NB - 1] - ym[0] + 1.0);
+        arrow(&self.cv, join, bx[3], my);
         for i in 3..6 {
-            arrow(&self.cv, bx[i] + w[i], bx[i + 1], ym[1]);
+            arrow(&self.cv, bx[i] + w[i], bx[i + 1], my);
         }
-        along(&self.cv, &[(bx[0] + w[0], ym[1]), (bx[1] - 4.0, ym[1])], inl);
-        along(&self.cv, &[(bx[1] + w[1], ym[1]), (fork, ym[1])], inl);
-        for i in 0..3 {
+        along(&self.cv, &[(bx[0] + w[0], my), (bx[1] - 4.0, my)], inl);
+        along(&self.cv, &[(bx[1] + w[1], my), (fork, my)], inl);
+        for i in 0..NB {
             let on = self.sget(band_base(i) + ON) > 0.5;
-            let into: Vec<(f32, f32)> = if i == 1 { vec![(fork, ym[1]), (bx[2] - 4.0, ym[1])] } else { vec![(fork, ym[1]), (fork, ym[i]), (bx[2] - 4.0, ym[i])] };
+            let into = [(fork, my), (fork, ym[i]), (bx[2] - 4.0, ym[i])];
             along(&self.cv, &into, if on { b_in[i] } else { 0.0 });
-            let out: Vec<(f32, f32)> = if i == 1 { vec![(bx[2] + bwb, ym[1]), (join, ym[1])] } else { vec![(bx[2] + bwb, ym[i]), (join, ym[i]), (join, ym[1])] };
+            let out = [(bx[2] + bwb, ym[i]), (join, ym[i]), (join, my)];
             along(&self.cv, &out, b_out[i]);
         }
-        along(&self.cv, &[(join, ym[1]), (bx[3] - 4.0, ym[1])], lo);
+        along(&self.cv, &[(join, my), (bx[3] - 4.0, my)], lo);
         for i in 3..6 {
-            along(&self.cv, &[(bx[i] + w[i], ym[1]), (bx[i + 1] - 4.0, ym[1])], lo);
+            along(&self.cv, &[(bx[i] + w[i], my), (bx[i + 1] - 4.0, my)], lo);
         }
         // ---- main-line blocks
         let names = ["IN", "X-OVER", "", "SUM", "EQ", "LIM", "OUT"];
@@ -1574,22 +1612,22 @@ impl<'a> Gui<'a> {
             self.cv.textc(x, cy + 7.0, bwi, names[i]);
             self.setc(false);
         }
-        // ---- the three bands
-        for b in 0..3 {
+        // ---- the bands
+        for b in 0..NB {
             let on = self.sget(band_base(b) + ON) > 0.5;
             let lit = on && self.gr_disp[b] > 0.1;
             self.set_dk(if on { prev } else { prev * 0.5 });
             self.setc(false);
             if lit {
-                self.cv.fill(bx[2], ys[b], bwb, bh);
+                self.cv.fill(bx[2], ys[b], bwb, bhb);
                 self.cv.setbg();
             } else {
                 self.cv.setbg();
-                self.cv.fill(bx[2] + 1.0, ys[b] + 1.0, bwb - 2.0, bh - 2.0);
+                self.cv.fill(bx[2] + 1.0, ys[b] + 1.0, bwb - 2.0, bhb - 2.0);
                 self.setc(false);
-                self.cv.boxr(bx[2], ys[b], bwb, bh);
+                self.cv.boxr(bx[2], ys[b], bwb, bhb);
             }
-            self.cv.textc(bx[2], ys[b] + 7.0, bwb, &format!("{} SAT>COMP", BAND_NAMES[b]));
+            self.cv.textc(bx[2], ys[b] + 5.0, bwb, &format!("{} SAT>COMP", BAND_NAMES[b]));
             self.setc(false);
         }
         self.set_dk(prev);
@@ -1658,6 +1696,7 @@ impl<'a> Gui<'a> {
                     MenuKind::Shape(band) => self.click_set(band_base(band) + SHAPE, id as f32),
                     MenuKind::Size => self.request_scale(SIZES[(id as usize).min(SIZES.len() - 1)]),
                     MenuKind::Preset => self.preset_action(id),
+                    MenuKind::Slope(k) => self.click_set(XOV_SLOPE[k], id as f32),
                     MenuKind::Palette if id >= 1000 => self.set_light(!self.light),
                     MenuKind::Palette => self.set_pal(id as usize),
                 }
@@ -1936,7 +1975,7 @@ impl<'a> Gui<'a> {
     }
 
     /// Sidechain control row under the spectrum: SC gain | HP | LP | SOLO (solo = hear the key as the detectors see it,
-    /// i.e. after gain / HP / LP). Global: the key is conditioned once, then split into the three bands.
+    /// i.e. after gain / HP / LP). Global: the key is conditioned once, then split into the four bands.
     fn sc_row(&mut self, x: f32, y: f32) {
         let h = SC_ROW_H;
         let cells = [(SC_GAIN, "SC", 160.0f32), (SC_HP, "HP", 135.0), (SC_LP, "LP", 135.0)];
@@ -1968,13 +2007,15 @@ impl<'a> Gui<'a> {
         }
     }
 
-    /// the four slope steps of a crossover as one button group (12 / 24 / 48 / 96 dB per octave)
-    fn slope_buttons(&mut self, n: usize, x: f32, y: f32) {
-        let cur = (self.sget(n) + 0.5).floor() as i32;
-        for (i, l) in ["12", "24", "48", "96"].iter().enumerate() {
-            if self.btn(x + RW / 4.0 * i as f32, y, RW / 4.0, 16.0, l, (cur == i as i32) as u8) {
-                self.click_set(n, i as f32);
-            }
+    /// One crossover: its frequency as a slider cell with a small slope button at the right end (click = list of 12 / 24 / 48 / 96 dB per octave)
+    fn xover_row(&mut self, k: usize, x: f32, y: f32) {
+        let bw = 34.0;
+        self.cell1(XOV[k], x, y, RW - bw + 1.0, 16.0, &format!("XOV{}", k + 1));
+        let cur = (self.sget(XOV_SLOPE[k]) + 0.5).floor().clamp(0.0, 3.0) as i32;
+        let open = matches!(&self.menu, Some(Menu { kind: MenuKind::Slope(m), .. }) if *m == k);
+        if self.btn(x + RW - bw, y, bw, 16.0, &format!("{}dB", [12, 24, 48, 96][cur as usize]), open as u8) {
+            let items = [12, 24, 48, 96].iter().enumerate().map(|(i, v)| MItem { label: format!("{} dB/oct", v), kind: 0, id: i as i32 }).collect();
+            self.menu = Some(Menu { kind: MenuKind::Slope(k), x: x + RW - bw - 36.0, y: y + 16.0, items, checked: cur, scroll: 0 });
         }
     }
 
@@ -2008,19 +2049,40 @@ impl<'a> Gui<'a> {
 
     fn band_row(&mut self, y: f32) {
         let sel = self.sel();
-        let (f1, f2) = (self.env.dsp.x1 as f32, (self.env.dsp.x2 as f32).max(self.env.dsp.x1 as f32 * 1.05));
-        let ranges = [(20.0, f1), (f1, f2), (f2, 20000.0)];
-        for b in 0..3 {
-            let tw = (VW - 96.0) / 3.0;
+        let f = [self.env.dsp.x1 as f32, self.env.dsp.x2 as f32, self.env.dsp.x3 as f32];
+        let f = [f[0], f[1].max(f[0] * 1.05), f[2].max(f[1].max(f[0] * 1.05) * 1.05)];
+        let ranges = [(0.0, f[0]), (f[0], f[1]), (f[1], f[2]), (f[2], 20000.0)];
+        let short = |v: f32| {
+            if v < 1.0 {
+                "0".to_string()
+            } else if v < 1000.0 {
+                format!("{:.0}", v)
+            } else if v < 9950.0 {
+                format!("{:.1}k", v * 0.001)
+            } else {
+                format!("{:.0}k", v * 0.001)
+            }
+        };
+        let tw = (VW - 96.0) / NB as f32;
+        for b in 0..NB {
             let x = VX + tw * b as f32;
             let base = band_base(b);
             let on = self.sget(base + ON) > 0.5;
             self.sq_tog(base + ON, x + 7.0, y + 4.0, 8.0);
-            let label = format!("{} {}-{}", BAND_NAMES[b], hz(ranges[b].0), hz(ranges[b].1));
             self.set_dk(if self.sget(8) > 0.5 { 0.5 } else { 1.0 });
-            if self.btn(x, y, tw, 16.0, &label, (b == sel) as u8) {
+            if self.btn(x, y, tw, 16.0, "", (b == sel) as u8) {
                 self.select_band(b);
             }
+            // two-letter label left (after the on / off square), frequency range right, no unit
+            if b == sel {
+                self.cv.setbg();
+            } else {
+                self.setc(false);
+            }
+            self.cv.set_font(1);
+            self.cv.text(x + 20.0, y + 4.0, BAND_LETTERS[b]);
+            self.cv.textr(x, y + 4.0, tw - 5.0, &format!("{}-{}", short(ranges[b].0), short(ranges[b].1)));
+            self.setc(false);
             self.sqind(x + 7.0, y + 4.0, 8.0, on, b == sel, !on);
         }
         let base = band_base(sel);
@@ -2048,10 +2110,13 @@ impl<'a> Gui<'a> {
         self.shape_selector(o + SHAPE, VX, y0, sat_w, 19.0);
         let drive_w = (sat_w * 0.5).floor();
         self.cell1(o + DRIVE, VX, y0 + 19.0, drive_w, 19.0, "DRIVE");
-        self.asym_cell(b, VX + drive_w, y0 + 19.0, sat_w - drive_w, 19.0);
+        self.cell1(o + BIAS, VX + drive_w - 1.0, y0 + 19.0, sat_w - drive_w + 1.0, 19.0, "BIAS");
         self.draw_sat_plot(VX, y0 + CELL_P, sat_w, sat_w);
-        self.cell(o + BIAS, sat_x, rows[0], CELL_W, CELL_H, "BIAS");
-        self.cell(o + TONE, sat_x, rows[1], CELL_W, CELL_H, "TONE");
+        // two stacked slider groups (the halves share one border line): ASYM over TONE, HP over LP
+        self.asym_cell(b, sat_x, rows[0], CELL_W, 19.0);
+        self.cell1(o + TONE, sat_x, rows[0] + 18.0, CELL_W, 20.0, "TONE");
+        self.cell1(o + HP, sat_x, rows[1], CELL_W, 19.0, "HP");
+        self.cell1(o + LP, sat_x, rows[1] + 18.0, CELL_W, 20.0, "LP");
         self.cell(o + SAT_MIX, sat_x, rows[2], CELL_W, CELL_H, "SAT MIX");
         self.cell_o(o + SAT_GAIN, sat_x, rows[3], CELL_W, CELL_H, "SAT GAIN");
         // band level after the saturator, in the gap between the saturator and compressor sections
@@ -2445,11 +2510,12 @@ impl<'a> Gui<'a> {
             }
         }
         if self.kit.act >= VIEW_ACT && !self.kit.down {
-            self.end_touch(1);
-            self.end_touch(2);
+            for n in XOV {
+                self.end_touch(n);
+            }
             self.end_touch(EQ_TILT);
             self.end_touch(EQ_PIVOT);
-            for b in 0..3 {
+            for b in 0..NB {
                 self.end_touch(band_base(b) + THRESH);
             }
             for b in 0..5 {
@@ -2570,15 +2636,12 @@ impl<'a> Gui<'a> {
         let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
         self.cv.text(RX, VY + 46.0, "RMS");
         self.cv.textr(RX, VY + 46.0, RW, &s1);
-        // parameter group, evenly spaced and aligned to the viewport's bottom edge: crossover 1, crossover 2, oversampling
-        let bottom = VY + VH;
-        let os_y = bottom - 16.0;
-        let x2_y = os_y - 6.0 - 32.0;
-        let x1_y = x2_y - 6.0 - 32.0;
-        self.cell1(1, RX, x1_y, RW, 16.0, "X-OVR1");
-        self.slope_buttons(X1_SLOPE, RX, x1_y + 16.0);
-        self.cell1(2, RX, x2_y, RW, 16.0, "X-OVR2");
-        self.slope_buttons(X2_SLOPE, RX, x2_y + 16.0);
+        // parameter group, evenly spaced and aligned to the viewport's bottom edge: three crossovers, oversampling
+        let os_y = VY + VH - 16.0;
+        for k in 0..3 {
+            let y = os_y - (3 - k) as f32 * 22.0;
+            self.xover_row(k, RX, y);
+        }
         self.set_dk(1.0); // oversampling stays lit while bypassed
         let os_i = (self.sget(3) + 0.5).floor() as i32;
         for i in 0..3 {

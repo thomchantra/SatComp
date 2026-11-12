@@ -113,6 +113,10 @@ pub struct XEngine {
     /// per band: gain reduction (dB) of the current block / peak since the owner last cleared it
     pub gr_blk: [f64; NB],
     pub gr_pk: [f64; NB],
+    /// per band: level change across the strip (output vs the band's input, dB; saturator gain and compression included)
+    pub band_diff: [f64; NB],
+    bi_ms: [f64; NB],
+    bo_ms: [f64; NB],
     /// decaying peak of each band's saturator input (for the live marker on the transfer plot)
     pub sat_vz: [f64; NB],
     /// per band peak of the saturator output, accumulated until the plug-in wrapper takes it (like `gr_pk`)
@@ -190,6 +194,9 @@ impl XEngine {
             clip_f: false,
             gr_blk: [0.0; NB],
             gr_pk: [0.0; NB],
+            band_diff: [0.0; NB],
+            bi_ms: [1e-9; NB],
+            bo_ms: [1e-9; NB],
             sat_vz: [0.0; NB],
             sat_out: [0.0; NB],
             fms: 1e-9,
@@ -323,6 +330,7 @@ impl XEngine {
         let trim = if self.match_on { self.match_trim } else { 0.0 };
         self.og_t = ((self.p.out_gain + trim) * LN10_20).exp();
         for b in 0..NB {
+            self.band_diff[b] = if self.bi_ms[b] > 1e-8 { DB_POW * (self.bo_ms[b].max(1e-12) / self.bi_ms[b]).ln() } else { 0.0 };
             self.gr_blk[b] = self.strips[b].gr_blk;
             self.gr_pk[b] = self.gr_pk[b].max(self.gr_blk[b]);
             self.strips[b].gr_blk = 0.0;
@@ -397,6 +405,8 @@ impl XEngine {
         self.gd_s += (gdelta - self.gd_s) * self.byp_c;
         for b in 0..NB {
             let o = self.strips[b].tick(bands[b], self.smoothing, kb.map(|k| k[b]));
+            ms_step(&mut self.bi_ms[b], bands[b][0], bands[b][1], self.rmsg_c);
+            ms_step(&mut self.bo_ms[b], o.y[0], o.y[1], self.rmsg_c);
             if self.p.bands[b].on {
                 gmax = gmax.max(o.g);
             }

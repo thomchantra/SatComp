@@ -1,4 +1,4 @@
-//! SatXComp: 3-band multiband saturator + compressor with a post EQ. nih-plug shell around `satxcomp_dsp::XEngine`.
+//! SatXComp: 4-band multiband saturator + compressor with a post EQ. nih-plug shell around `satxcomp_dsp::XEngine`.
 
 mod gui;
 mod params;
@@ -25,13 +25,15 @@ pub struct Shared {
     // audio -> UI. Peaks accumulate with fetch_max and are consumed with swap(0).
     pub opk: [AtomicF32; 2],
     pub clip: AtomicBool,
-    pub gr_pk: [AtomicF32; 3],
+    pub gr_pk: [AtomicF32; 4],
+    /// per band: level change across the strip, dB
+    pub band_diff: [AtomicF32; 4],
     /// output limiter gain reduction (dB, positive), accumulated like `gr_pk`
     pub lim_gr_pk: AtomicF32,
     /// per band: decaying peak of the saturator input
-    pub sat_vz: [AtomicF32; 3],
+    pub sat_vz: [AtomicF32; 4],
     /// per band: post-saturator peak since the UI last took it (fetch_max / swap(0))
-    pub sat_out_pk: [AtomicF32; 3],
+    pub sat_out_pk: [AtomicF32; 4],
     pub fms: AtomicF32,
     pub diff_disp: AtomicF32,
     /// level change across the EQ stage, dB
@@ -60,10 +62,11 @@ impl Shared {
             sample_rate: AtomicF32::new(48000.0),
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
             clip: AtomicBool::new(false),
-            gr_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
+            gr_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
+            band_diff: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             lim_gr_pk: AtomicF32::new(0.0),
-            sat_vz: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
-            sat_out_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
+            sat_vz: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
+            sat_out_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             fms: AtomicF32::new(1e-9),
             diff_disp: AtomicF32::new(0.0),
             eq_diff: AtomicF32::new(0.0),
@@ -93,8 +96,8 @@ pub struct SatXComp {
     shared: Arc<Shared>,
     engine: XEngine,
     last_latency: u32,
-    last_curves: [Curve; 3],
-    last_asym: [[f64; satxcomp_dsp::params::SHAPER_COUNT]; 3],
+    last_curves: [Curve; 4],
+    last_asym: [[f64; satxcomp_dsp::params::SHAPER_COUNT]; 4],
 }
 
 impl SatXComp {
@@ -115,7 +118,7 @@ impl Default for SatXComp {
         engine.tap_out = shared.tap_out.clone();
         engine.tap_dry = shared.tap_dry.clone();
         engine.scope = shared.scope.clone();
-        Self { params: Arc::new(SatXCompParams::default()), shared, engine, last_latency: u32::MAX, last_curves: [Curve::linear(); 3], last_asym: [[100.0; satxcomp_dsp::params::SHAPER_COUNT]; 3] }
+        Self { params: Arc::new(SatXCompParams::default()), shared, engine, last_latency: u32::MAX, last_curves: [Curve::linear(); 4], last_asym: [[100.0; satxcomp_dsp::params::SHAPER_COUNT]; 4] }
     }
 }
 
@@ -205,11 +208,12 @@ impl Plugin for SatXComp {
         }
         sh.lim_gr_pk.fetch_max(e.lim_gr_pk as f32, Ordering::Relaxed);
         e.lim_gr_pk = 0.0;
-        for b in 0..3 {
+        for b in 0..4 {
             sh.gr_pk[b].fetch_max(e.gr_pk[b] as f32, Ordering::Relaxed);
             e.gr_pk[b] = 0.0;
+            sh.band_diff[b].store(e.band_diff[b] as f32, Ordering::Relaxed);
         }
-        for b in 0..3 {
+        for b in 0..4 {
             sh.sat_vz[b].store(e.sat_vz[b] as f32, Ordering::Relaxed);
             sh.sat_out_pk[b].fetch_max(e.sat_out[b] as f32, Ordering::Relaxed);
             e.sat_out[b] = 0.0;
@@ -233,7 +237,7 @@ impl Vst3Plugin for SatXComp {
 
 impl ClapPlugin for SatXComp {
     const CLAP_ID: &'static str = "com.thomchantra.satxcomp";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("3-band saturator + compressor with EQ");
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("4-band saturator + compressor with EQ");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Compressor, ClapFeature::Distortion, ClapFeature::Stereo];
