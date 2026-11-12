@@ -1174,7 +1174,12 @@ impl<'a> Gui<'a> {
         let (co, cd) = (self.spec_out.columns(n, sr), self.spec_dry.columns(n, sr));
         let hh = |v: f32| (((v + 100.0) / 95.0).clamp(0.0, 1.0) * (h - 2.0)).floor();
         let ac = self.cv.ac;
-        let inv = [1.0 - ac[0], 1.0 - ac[1], 1.0 - ac[2]];
+        let mut inv = [1.0 - ac[0], 1.0 - ac[1], 1.0 - ac[2]];
+        // grey schemes: the inverted accent lands on the background colour, so the gain area vanishes - use solid white (black on a light scheme) then
+        let lum = |c: [f32; 3]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        if (lum(inv) - lum(self.cv.bk)).abs() < 0.3 {
+            inv = if lum(self.cv.bk) < 0.5 { [1.0; 3] } else { [0.0; 3] };
+        }
         self.setc(false);
         self.cv.boxr(x, y, w, h);
         let mut prev: Option<f32> = None;
@@ -1439,7 +1444,8 @@ impl<'a> Gui<'a> {
         let eq_any = eq.bands.iter().any(|b| b.on) || eq.tilt != 0.0 || eq.gain != 0.0;
         let eq_byp = self.sget(EQ_BYPASS) > 0.5;
         let sc_on = self.sget(SC_ON) > 0.5;
-        let cy = r.y + 82.0;
+        // rows sit 32 px apart from y+24 down to y+110: clear of the title above, the key box and the caption (y + h - 15) below
+        let cy = r.y + 56.0;
         let (bh, bw_band) = (22.0, 92.0);
         let bx = |i: usize| -> (f32, f32) {
             // (x, w) of the main-line blocks: IN, X-OVER, [bands], SUM, EQ, OUT
@@ -1453,7 +1459,7 @@ impl<'a> Gui<'a> {
             }
         };
         let names = ["IN", "X-OVER", "", "SUM", "EQ", "OUT"];
-        let ys = [cy - 40.0, cy, cy + 40.0];
+        let ys = [cy - 32.0, cy, cy + 32.0];
         // lines
         self.setc(false);
         let arrow = |c: &mut Canvas, x0: f32, x1: f32, y: f32| {
@@ -1523,13 +1529,13 @@ impl<'a> Gui<'a> {
         // sidechain key: SIDECHAIN box above, dropping into the compressor column
         if sc_on {
             let (kx, kw) = (b0 + 20.0, 78.0);
-            let ky = r.y + 4.0;
+            let ky = r.y + 3.0;
             self.setc(false);
-            self.cv.boxr(kx, ky, kw, 20.0);
-            self.cv.textc(kx, ky + 6.0, kw, "SIDECHAIN");
-            self.cv.fill(kx + kw * 0.5, ky + 20.0, 1.0, ys[0] - ky - 20.0 - 3.0);
+            self.cv.boxr(kx, ky, kw, 16.0);
+            self.cv.textc(kx, ky + 4.0, kw, "SIDECHAIN");
+            self.cv.fill(kx + kw * 0.5, ky + 16.0, 1.0, ys[0] - ky - 16.0 - 3.0);
             self.cv.tri((kx + kw * 0.5 - 3.0, ys[0] - 4.0), (kx + kw * 0.5 + 4.0, ys[0] - 4.0), (kx + kw * 0.5 + 0.5, ys[0]));
-            self.cv.text(kx + kw + 8.0, ky + 6.0, "KEY > COMP");
+            self.cv.text(kx + kw + 8.0, ky + 4.0, "KEY > COMP");
         }
         self.cv.text(r.x + 6.0, r.y + r.h - 15.0, "EACH BAND: SAT > COMP, THEN THE SUM GOES THROUGH THE POST EQ");
     }
