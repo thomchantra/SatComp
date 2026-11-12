@@ -176,10 +176,12 @@ impl<'a> Gui<'a> {
     /// Settings under the scope: source and wave type cycle on click; window and ceiling are drag sliders (stepped).
     pub(super) fn scope_row(&mut self, x: f32, y: f32) {
         let h = 17.0;
-        let ceil_w = VW - 74.0 - 64.0 - 62.0 + 3.0;
+        // four equal cells across the viewport (neighbours share their border pixel)
+        let cw = ((VW + 3.0) / 4.0).floor();
+        let ceil_w = VW + 3.0 - 3.0 * cw;
         let mut cx = x;
         // SRC and WAVE: click / wheel cycles
-        for (lbl, names, shift, bits, w) in [("SRC", &SRC[..], 1u32, 3i32, 74.0f32), ("WAVE", &WAVE[..], 3, 1, 64.0)] {
+        for (lbl, names, shift, bits, w) in [("SRC", &SRC[..], 1u32, 3i32, cw), ("WAVE", &WAVE[..], 3, 1, cw)] {
             let n = names.len();
             let cur = self.sc_get(shift, bits).min(n - 1);
             if self.hit(cx, y, w, h) {
@@ -199,7 +201,7 @@ impl<'a> Gui<'a> {
             cx += w - 1.0;
         }
         // WIN and CEIL: horizontal drag sliders over their cell, stepped
-        for (k, lbl, shift, bits, n, w) in [(0usize, "WIN", 4u32, 15i32, WIN_S.len(), 62.0f32), (1, "CEIL", 8, 31, CEIL_N, ceil_w)] {
+        for (k, lbl, shift, bits, n, w) in [(0usize, "WIN", 4u32, 15i32, WIN_S.len(), cw), (1, "CEIL", 8, 31, CEIL_N, ceil_w)] {
             let act = ACT_SCOPE + 1 + k as i32;
             let cur = self.sc_get(shift, bits).min(n - 1);
             if self.hit(cx, y, w, h) {
