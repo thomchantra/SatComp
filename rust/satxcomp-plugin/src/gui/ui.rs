@@ -2227,17 +2227,21 @@ impl<'a> Gui<'a> {
         self.cell1(o + DRIVE, VX, y0 + 19.0, drive_w, 19.0, "DRIVE");
         self.cell1(o + BIAS, VX + drive_w - 1.0, y0 + 19.0, sat_w - drive_w + 1.0, 19.0, "BIAS");
         self.draw_sat_plot(VX, y0 + CELL_P, sat_w, sat_w);
-        // two stacked slider groups (the halves share one border line): ASYM over TONE, HP over LP
-        self.asym_cell(b, sat_x, rows[0], CELL_W, 19.0);
-        self.cell1(o + TONE, sat_x, rows[0] + 18.0, CELL_W, 20.0, "TONE");
-        self.cell1(o + HP, sat_x, rows[1], CELL_W, 19.0, "HP");
-        self.cell1(o + LP, sat_x, rows[1] + 18.0, CELL_W, 20.0, "LP");
-        self.cell(o + SAT_MIX, sat_x, rows[2], CELL_W, CELL_H, "SAT MIX");
-        self.cell_o(o + SAT_GAIN, sat_x, rows[3], CELL_W, CELL_H, "SAT GAIN");
-        // band level after the saturator, in the gap between the saturator and compressor sections
-        self.draw_vu(sat_x + CELL_W + 8.0, y0, 24.0, ph);
-        // gain reduction meter
-        self.draw_gr_meter(meter_x, y0, 30.0, ph);
+        // The theme editor's 4 x 3 grid starts right of the saturator's left half, so while editing the saturator's right
+        // column (ASYM / TONE / HP / LP / SAT MIX / SAT GAIN), its band VU and the GR meter are hidden to give it the room.
+        if !self.app.editing() {
+            // two stacked slider groups (the halves share one border line): ASYM over TONE, HP over LP
+            self.asym_cell(b, sat_x, rows[0], CELL_W, 19.0);
+            self.cell1(o + TONE, sat_x, rows[0] + 18.0, CELL_W, 20.0, "TONE");
+            self.cell1(o + HP, sat_x, rows[1], CELL_W, 19.0, "HP");
+            self.cell1(o + LP, sat_x, rows[1] + 18.0, CELL_W, 20.0, "LP");
+            self.cell(o + SAT_MIX, sat_x, rows[2], CELL_W, CELL_H, "SAT MIX");
+            self.cell_o(o + SAT_GAIN, sat_x, rows[3], CELL_W, CELL_H, "SAT GAIN");
+            // band level after the saturator, in the gap between the saturator and compressor sections
+            self.draw_vu(sat_x + CELL_W + 8.0, y0, 24.0, ph);
+            // gain reduction meter
+            self.draw_gr_meter(meter_x, y0, 30.0, ph);
+        }
         if self.app.editing() {
             // theme editor: its cells take the compressor section (4 x 3 grid)
             self.theme_cells(CellGrid { x0: VX + VW - (3.0 * CELL_W + 12.0) - (CELL_W + 6.0), y0, cw: CELL_W, ch: CELL_H, px: CELL_W + 6.0, py: CELL_P });
