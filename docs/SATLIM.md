@@ -13,7 +13,7 @@ presets `*.satlim` in `~/Library/Application Support/SatLim/Presets`.
 - **CLIP** 0-100 %: 0 = off. Otherwise a hard clamp at the ceiling, run at the oversampled rate, driven up to +6 dB into it. With the
   clip on the limiter mostly handles inter-sample excess.
 - **L.AHEAD** on: 1.5 ms lookahead + 8x interpolated true-peak detection (4x at 96 kHz-class rates, 2x above; the SatComp / SatXComp output limiter runs the same detector at half those) (constant latency, reported). Off: zero limiter latency, the gain
-  follows the *sample* peak instantly (attack 0), so inter-sample overs can pass. The readout reads **TRU.PK** when on and **PK** when off (accent only when it clips; GR stays in the UI colour).
+  follows the *sample* peak instantly (attack 0), so inter-sample overs can pass. The readout is **TRU.PK** either way (8x true peak of the output, so with L.AHD off it shows the overs that got past; accent only when it clips; GR stays in the UI colour).
 - **RELEASE** 15-80 ms: the slow end of the program-dependent release (fast end stays at 15 ms or below).
 - **x1..x8** (OVERSAMPL, top of the limiter column) oversample the saturator and the clipper (latency 0 / 24 / 28 / 30 samples each). The limiter's own detection is always
   true-peak (L.AHD on).

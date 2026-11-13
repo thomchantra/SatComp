@@ -1771,7 +1771,7 @@ impl<'a> Gui<'a> {
             let s1 = if byp { "-----dB".to_string() } else { format!("{:04.1}dB", self.rd_clip) };
             self.cv.textr(cx, 225.0, cw, &s1);
             self.setc(self.rd_pk > 1.0);
-            self.cv.text(cx, 236.0, if look { "TRU.PK" } else { "PK" });
+            self.cv.text(cx, 236.0, "TRU.PK");
             let s1 = if self.rd_pk > 0.00001 { format!("{:+05.1}dB", 8.6858896 * self.rd_pk.ln()) } else { "-----dB".into() };
             self.cv.textr(cx, 236.0, cw, &s1);
             self.setc(false);

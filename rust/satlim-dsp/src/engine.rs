@@ -56,7 +56,7 @@ pub struct LimEngine {
     // telemetry, audio -> UI. The shell takes the peaks with fetch_max and clears them.
     /// output peak per channel (after OUT GAIN), linear
     pub opk: [f64; 2],
-    /// output true peak (sample peak while L.AHD is off), linear
+    /// output true peak (also while L.AHD is off), linear
     pub tpk: f64,
     /// post-saturator (after SAT GAIN) peak, linear
     pub sat_out: f64,
@@ -321,7 +321,8 @@ impl LimEngine {
         if out[0].abs() > 0.9999 || out[1].abs() > 0.9999 {
             self.clip_f = true;
         }
-        let pkv = if self.lim.lookahead() { self.tp.tick(out) } else { out[0].abs().max(out[1].abs()) };
+        // true peak at all times: with L.AHD off the limiter only holds the sample peaks, and the readout must show what got past
+        let pkv = self.tp.tick(out);
         self.tpk = self.tpk.max(pkv);
         ms_step(&mut self.fms, out[0], out[1], self.rms_c);
         let ao = out[0].abs().max(out[1].abs());
@@ -420,7 +421,8 @@ mod tests {
             // sample peaks: exact with the lookahead off; the true-peak limiter keeps the interpolated peaks near the ceiling
             // and the filtered clipper can ring a little over it
             assert!(db(pk) < -1.0 + 0.3, "os {os} look {look} clip {clip}: peak {:.2} dB", db(pk));
-            assert!(db(e.tpk) < -1.0 + 0.6, "os {os} look {look} clip {clip}: true peak {:.2} dB", db(e.tpk));
+            // (with the lookahead off only the sample peaks are held: the readout is still the true peak, and reads over)
+            assert!(!look || db(e.tpk) < -1.0 + 0.6, "os {os} look {look} clip {clip}: true peak {:.2} dB", db(e.tpk));
             assert!(db(pk) > -2.5, "it limits close to the ceiling, not far below it: {:.2}", db(pk));
         }
     }
@@ -563,6 +565,16 @@ mod tests {
             pk = a.iter().fold(pk, |m, v| m.max(v.abs()));
         }
         assert!(db(pk as f64) <= -1.0 + 1e-3, "peak {:.2} dB", db(pk as f64));
+    }
+
+    #[test]
+    fn the_peak_readout_is_true_peak_with_the_lookahead_off_too() {
+        // fs/4 tone sampled 45 degrees off its crests: the sample-peak limiter holds the samples at the ceiling, the true peak is 3 dB above
+        let x: Vec<f32> = (0..24000).map(|i| (2.0 * (PI * 0.5 * i as f64 + PI / 4.0).sin()) as f32).collect();
+        let (y, e) = run(&LimParams { ceiling: -1.0, lookahead: false, ..LimParams::default() }, &x);
+        let pk = y[4000..].iter().fold(0.0f32, |m, v| m.max(v.abs())) as f64;
+        assert!(db(pk) <= -1.0 + 1e-3, "samples held: {:.2}", db(pk));
+        assert!(db(e.tpk) > 1.5, "the readout shows the inter-sample over: {:.2}", db(e.tpk));
     }
 
     #[test]

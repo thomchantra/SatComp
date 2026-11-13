@@ -24,7 +24,7 @@ pub struct Shared {
     pub sample_rate: AtomicF32,
     // audio -> UI. Peaks accumulate with fetch_max and are consumed with swap(0).
     pub opk: [AtomicF32; 2],
-    /// output true peak (sample peak while the lookahead is off), linear
+    /// output true peak (also while the lookahead is off), linear
     pub tpk: AtomicF32,
     pub clip: AtomicBool,
     /// limiter gain reduction, dB positive
