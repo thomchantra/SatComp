@@ -1040,8 +1040,16 @@ impl<'a> Gui<'a> {
     }
 
     fn select_band(&mut self, b: usize) {
-        if b != self.sel() {
+        let old = self.sel();
+        if b != old {
             self.curve_edit = false; // the draw view belongs to one band
+            // SOLO and DELTA follow the selected band: whichever of them is on for the band being left moves to the new one
+            for off in [SOLO, DELTA] {
+                if self.sget(band_base(old) + off) > 0.5 {
+                    self.click_set(band_base(old) + off, 0.0);
+                    self.click_set(band_base(b) + off, 1.0);
+                }
+            }
         }
         self.env.params.sel_band.store(b as i32, Ordering::Relaxed);
     }

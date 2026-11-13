@@ -588,3 +588,29 @@ fn a_preset_saves_and_restores_the_sidechain_switch_but_old_presets_leave_it_alo
     r.frame(vec![]);
     assert!(!r.log()[n1..].iter().any(|l| l.starts_with("Sidechain")), "old presets / INIT leave the switch alone");
 }
+
+/// SOLO and DELTA follow the band tab: selecting another band moves them along instead of leaving the old band soloed.
+#[test]
+fn solo_and_delta_follow_the_selected_band_tab() {
+    let mut r = Rig::with_params(|p| {
+        p.lo_solo = BoolParam::new("Lo Solo", true);
+        p.lo_delta = BoolParam::new("Lo Delta", true);
+    });
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    let n0 = r.log().len();
+    r.click(167.0, 206.0); // the ML tab
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    for want in ["Lo Solo 0.000", "ML Solo 1.000", "Lo Delta 0.000", "ML Delta 1.000"] {
+        assert!(new.iter().any(|l| l.starts_with(want)), "{want} missing: {new:?}");
+    }
+    // nothing on: switching tabs writes no solo / delta
+    let mut q = Rig::new();
+    for _ in 0..4 {
+        q.frame(vec![]);
+    }
+    let n0 = q.log().len();
+    q.click(167.0, 206.0);
+    assert!(!q.log()[n0..].iter().any(|l| l.contains("Solo") || l.contains("Delta")), "{:?}", &q.log()[n0..]);
+}
