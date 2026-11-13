@@ -40,14 +40,14 @@ pub const PALETTES: [(&str, [f32; 9], [f32; 9]); 20] = [
 ];
 
 /// Selectable UI fonts (index persisted as `ui-font`: append, do not reorder). All are SIL OFL 1.1.
-pub const FONT_NAMES: [&str; 9] = ["Fira Code", "JetBrains Mono", "Geist Mono", "Roboto Mono", "Oxygen Mono", "Doto", "DM Mono", "Victor Mono", "Anonymous Pro"];
+pub const FONT_NAMES: [&str; 11] = ["Fira Code", "JetBrains Mono", "Geist Mono", "Roboto Mono", "Oxygen Mono", "Doto", "DM Mono", "Victor Mono", "Anonymous Pro", "Inconsolata", "Courier Prime"];
 
 /// Per-typeface tuning, SAME ORDER as `FONT_NAMES`: `(size multiplier, vertical shift)`.
 /// * size multiplier: 1.0 = unchanged. Fonts differ in cap height (Victor Mono is tall, Anonymous Pro small), so each is
 ///   scaled to land near Fira Code's cap height (about 0.71 em). Raise it if a font looks small, lower it if it looks big.
 /// * vertical shift: in em of the scaled font; positive moves the text DOWN, negative UP (1 unit of the shift is the font
 ///   size, so 0.05 is about half a pixel at 100%).
-pub const FONT_TUNE: [(f32, f32); 9] = [
+pub const FONT_TUNE: [(f32, f32); 11] = [
     (1.00, 0.0), // Fira Code
     (0.97, 0.0), // JetBrains Mono
     (1.00, 0.0), // Geist Mono
@@ -57,6 +57,8 @@ pub const FONT_TUNE: [(f32, f32); 9] = [
     (1.01, 0.0), // DM Mono
     (0.89, 0.0), // Victor Mono
     (1.11, 0.0), // Anonymous Pro
+    (1.14, 0.0), // Inconsolata (small capitals, narrow: scaled up to Fira's cap height)
+    (1.15, 0.0), // Courier Prime (smaller still, but wide: held at 1.15 so labels keep fitting their boxes)
 ];
 
 pub fn font_family(i: usize) -> FontFamily {

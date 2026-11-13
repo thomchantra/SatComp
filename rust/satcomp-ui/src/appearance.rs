@@ -47,6 +47,11 @@ fn defaults_path() -> Option<PathBuf> {
     data_dir().map(|d| d.join("defaults.json"))
 }
 
+/// One plug-in's own default (`defaults-<key>.json`), which wins over the global `defaults.json` for that plug-in.
+fn plugin_defaults_path(key: &str) -> Option<PathBuf> {
+    data_dir().map(|d| d.join(format!("defaults-{key}.json")))
+}
+
 /// The look a NEW plug-in instance starts with, shared by all the plug-ins (`SatComp/defaults.json`). A saved project keeps
 /// its own look; this only seeds fresh instances. Absent file = factory look.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -80,18 +85,43 @@ impl Defaults {
     }
 }
 
-pub fn load_defaults() -> Option<Defaults> {
-    defaults_path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str(&s).ok())
+fn read_defaults(p: Option<PathBuf>) -> Option<Defaults> {
+    p.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str(&s).ok())
 }
 
-pub fn save_defaults(d: &Defaults) {
-    if let Some(p) = defaults_path() {
+fn write_defaults(p: Option<PathBuf>, d: &Defaults) {
+    if let Some(p) = p {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         if let Ok(s) = serde_json::to_string_pretty(d) {
             let _ = std::fs::write(p, s);
         }
+    }
+}
+
+/// The GLOBAL default (all plug-ins).
+pub fn load_defaults() -> Option<Defaults> {
+    read_defaults(defaults_path())
+}
+
+pub fn save_defaults(d: &Defaults) {
+    write_defaults(defaults_path(), d);
+}
+
+/// What a new instance of plug-in `key` ("satcomp", "satxcomp", "satlim") starts with: its own default if it has one, else
+/// the global default, else `None` (the factory look).
+pub fn load_defaults_for(key: &str) -> Option<Defaults> {
+    read_defaults(plugin_defaults_path(key)).or_else(load_defaults)
+}
+
+pub fn save_defaults_for(key: &str, d: &Defaults) {
+    write_defaults(plugin_defaults_path(key), d);
+}
+
+pub fn clear_defaults_for(key: &str) {
+    if let Some(p) = plugin_defaults_path(key) {
+        let _ = std::fs::remove_file(p);
     }
 }
 
@@ -113,7 +143,7 @@ pub fn settings_dir() -> Option<PathBuf> {
     data_dir()
 }
 
-/// Back to the factory look for new instances.
+/// Remove the global default.
 pub fn clear_defaults() {
     if let Some(p) = defaults_path() {
         let _ = std::fs::remove_file(p);
@@ -299,6 +329,10 @@ pub struct AppState {
     pub note: (f64, &'static str),
     /// the font dropdown on the Preferences page is open
     pub font_open: bool,
+    /// the little menu under a chevron on the Preferences page: 0 closed, 1 SET AS GLOBAL DEFAULT, 2 RESET GLOBAL DEFAULT
+    pub def_menu: u8,
+    /// a global default exists (cached: read when the page opens and after a save / reset; labels the reset button)
+    pub has_global: bool,
     pub themes: Vec<UserTheme>,
     pub edit: Option<ThemeEdit>,
     pub real_in: RealInput,
@@ -306,7 +340,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), font_open: false, themes: load_themes(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
+        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), font_open: false, def_menu: 0, has_global: load_defaults().is_some(), themes: load_themes(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
     }
 
     /// The egui clock restarted (editor reopened): re-base stored timestamps.
@@ -393,6 +427,8 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
     /// Current window scale (1.0 = the plug-in's base size) and a request to change it.
     fn scale_now(&self) -> f32;
     fn set_scale(&mut self, scale: f32);
+    /// This plug-in's key in the defaults files ("satcomp", "satxcomp", "satlim").
+    fn plugin_key(&self) -> &'static str;
     /// This plug-in's user preset folder.
     fn presets_dir(&self) -> Option<PathBuf>;
     /// The scale a fresh instance opens at when no defaults file exists.
@@ -435,8 +471,9 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         self.commit_light(l);
     }
 
-    /// Save this instance's look (scheme, mode, font, fill, window scale) as the default for new instances of every plug-in.
-    fn save_as_default(&mut self) {
+    /// Save this instance's look (scheme, mode, font, fill, window scale) as the default for new instances: of THIS plug-in
+    /// (`global` = false), or of every plug-in that has none of its own (`global` = true).
+    fn save_as_default(&mut self, global: bool) {
         let pal = self.pal();
         let user = pal >= PALETTES.len();
         let theme = if user { self.app_ref().themes.get(pal - PALETTES.len()).map(encode).unwrap_or_default() } else { String::new() };
@@ -448,25 +485,70 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
             fill_solid: self.fft_solid().unwrap_or_else(|| self.factory_fill_solid()),
             scale: self.scale_now(),
         };
-        save_defaults(&d);
+        if global {
+            save_defaults(&d);
+        } else {
+            save_defaults_for(self.plugin_key(), &d);
+        }
+        self.app().has_global = load_defaults().is_some();
         let now = self.kit_ref().now;
-        self.app().note = (now, "Saved as the default for new instances");
+        self.app().note = (now, if global { "Saved as the global default" } else { "Saved as the default for this plug-in" });
     }
 
-    /// Clear the defaults file and put this instance back on the factory look too.
-    fn reset_to_factory(&mut self) {
-        clear_defaults();
-        self.set_pal(0);
-        self.set_light(false);
-        self.commit_face(0);
-        if self.fft_solid().is_some() {
-            let f = self.factory_fill_solid();
-            self.commit_fft_solid(f);
+    /// The one item of the chevron menus: 1 = save as the global default, 2 = clear the global default.
+    fn reset_or_save_global(&mut self, menu: u8) {
+        if menu == 1 {
+            self.save_as_default(true);
+        } else {
+            self.reset_defaults(true);
         }
-        let f = self.factory_scale();
-        self.set_scale(f);
+    }
+
+    /// Give this instance a look: `None` = the factory look.
+    fn apply_defaults(&mut self, d: Option<&Defaults>) {
+        match d {
+            Some(d) => {
+                let pal = if d.pal >= 0 && (d.pal as usize) >= PALETTES.len() { self.app().restore_custom(d.pal as usize, &d.theme) } else { d.pal.max(0) as usize };
+                self.set_pal(pal);
+                self.set_light(d.light);
+                self.commit_face(d.face_index() as usize);
+                if self.fft_solid().is_some() {
+                    self.commit_fft_solid(d.fill_solid);
+                }
+                self.set_scale(d.scale.clamp(1.0, 2.5));
+            }
+            None => {
+                self.set_pal(0);
+                self.set_light(false);
+                self.commit_face(0);
+                if self.fft_solid().is_some() {
+                    let f = self.factory_fill_solid();
+                    self.commit_fft_solid(f);
+                }
+                let f = self.factory_scale();
+                self.set_scale(f);
+            }
+        }
+    }
+
+    /// Clear this plug-in's own default (`global` = false) or the global one, then put this instance on the look a new
+    /// instance would get now: the plug-in's default, else the global one, else the factory look.
+    fn reset_defaults(&mut self, global: bool) {
+        if global {
+            clear_defaults();
+        } else {
+            clear_defaults_for(self.plugin_key());
+        }
+        let d = load_defaults_for(self.plugin_key());
+        self.app().has_global = load_defaults().is_some();
+        self.apply_defaults(d.as_ref());
+        let note = match (global, d.is_some(), load_defaults().is_some()) {
+            (true, _, _) => "Global default cleared",
+            (false, _, true) => "Back to the global default",
+            (false, _, false) => "Back to the factory look",
+        };
         let now = self.kit_ref().now;
-        self.app().note = (now, "Back to the factory look");
+        self.app().note = (now, note);
     }
 
     fn mask_in(&mut self) {
@@ -536,6 +618,7 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
                 a.about_scroll = 0;
                 if id == 3 {
                     a.ap_scroll = pal.saturating_sub(2);
+                    a.has_global = load_defaults().is_some();
                 }
             }
         }
@@ -612,6 +695,11 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         let (dx, dw) = (lx + 44.0, lw - 44.0);
         let list_h = n_fonts as f32 * FH + 2.0;
         let list_y = (fy - 4.0 - list_h).max(r.y + 2.0);
+        let bw = ((lw - 8.0) * 0.5).floor();
+        let by = fy + 20.0;
+        let menu = self.app_ref().def_menu;
+        // the chevron menu's single item sits right under its button (over the OPEN row)
+        let item = Rect::new(if menu == 2 { lx + bw + 8.0 } else { lx }, by + 14.0, bw, 15.0);
         let was_open = self.app_ref().font_open;
         let real = {
             let k = self.kit_ref();
@@ -626,6 +714,15 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
                 self.app().font_open = false;
             }
             self.mask_in(); // the page underneath is inert while the list is open
+        }
+        if menu != 0 {
+            if real.0 && self.kit_ref().act == 0 {
+                if real.4 >= item.x && real.4 < item.x + item.w && real.5 >= item.y && real.5 < item.y + item.h {
+                    self.reset_or_save_global(menu);
+                }
+                self.app().def_menu = 0;
+            }
+            self.mask_in(); // the page underneath is inert while the menu is open
         }
         self.cv().boxr(r.x, r.y, r.w, r.h);
         self.setc(false);
@@ -749,7 +846,7 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         self.setc(false);
         self.cv().text(lx, fy, "FONT");
         let face = self.face();
-        if !was_open && self.hit(dx, fy - 4.0, dw, 18.0) && self.kit_ref().press && self.kit_ref().act == 0 {
+        if !was_open && menu == 0 && self.hit(dx, fy - 4.0, dw, 18.0) && self.kit_ref().press && self.kit_ref().act == 0 {
             self.app().font_open = true;
             self.kit().press = false;
         }
@@ -763,18 +860,35 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         self.cv().line(ax - 3.0, ay - 1.0, ax, ay + 2.0);
         self.cv().line(ax, ay + 2.0, ax + 3.0, ay - 1.0);
 
-        let bw = ((lw - 8.0) * 0.5).floor();
-        let by = fy + 20.0;
-        if self.btn(lx, by, bw, 14.0, "SET AS DEFAULT", 0) {
-            self.save_as_default();
+        // SET AS DEFAULT / RESET: the main part acts on THIS plug-in, the chevron opens a one-item menu for the global default
+        let rx = lx + bw + 8.0;
+        if self.btn(lx, by, bw - 14.0, 14.0, "SET AS DEFAULT", 0) {
+            self.save_as_default(false);
         }
-        if self.btn(lx + bw + 8.0, by, bw, 14.0, "RESET TO FACTORY", 0) {
-            self.reset_to_factory();
+        let reset_label = if self.app_ref().has_global { "RESET TO GLOBAL" } else { "RESET TO FACTORY" };
+        if self.btn(rx, by, bw - 14.0, 14.0, reset_label, 0) {
+            self.reset_defaults(false);
+        }
+        for (cx, id) in [(lx + bw - 15.0, 1u8), (rx + bw - 15.0, 2u8)] {
+            if self.btn(cx, by, 15.0, 14.0, "", (menu == id) as u8) {
+                if menu == 0 {
+                    self.app().def_menu = id;
+                    self.app().font_open = false;
+                }
+            }
+            self.setc(menu == id);
+            if menu == id {
+                self.cv().setbg();
+            }
+            let (ax, ay) = (cx + 7.0, by + 6.0);
+            self.cv().line(ax - 3.0, ay - 1.0, ax, ay + 2.0);
+            self.cv().line(ax, ay + 2.0, ax + 3.0, ay - 1.0);
+            self.setc(false);
         }
         if self.btn(lx, by + 18.0, bw, 14.0, "OPEN PRESETS", 0) {
             open_folder(self.presets_dir());
         }
-        if self.btn(lx + bw + 8.0, by + 18.0, bw, 14.0, "OPEN SETTINGS", 0) {
+        if self.btn(rx, by + 18.0, bw, 14.0, "OPEN SETTINGS", 0) {
             open_folder(settings_dir());
         }
         self.setc(false);
@@ -814,6 +928,30 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
                 self.cv().text(dx + 6.0, y + 4.0, name);
                 self.cv().face = keep;
             }
+            self.setc(false);
+        }
+
+        // ---- the open chevron menu (one item), on top of everything
+        if menu != 0 {
+            let k = self.kit();
+            k.press = real.0;
+            k.down = real.1;
+            k.rpress = real.2;
+            k.wheel = real.3;
+            k.mx = real.4;
+            k.my = real.5;
+            let hov = real.4 >= item.x && real.4 < item.x + item.w && real.5 >= item.y && real.5 < item.y + item.h;
+            self.setc(false);
+            if hov {
+                self.cv().fill(item.x, item.y, item.w, item.h);
+                self.cv().setbg();
+            } else {
+                self.cv().setbg();
+                self.cv().fill(item.x, item.y, item.w, item.h);
+                self.setc(false);
+                self.cv().boxr(item.x, item.y, item.w, item.h);
+            }
+            self.cv().textc(item.x, item.y + 4.0, item.w, if menu == 1 { "SET AS GLOBAL DEFAULT" } else { "RESET GLOBAL DEFAULT" });
             self.setc(false);
         }
     }

@@ -98,7 +98,7 @@ pub struct SatLimParams {
 impl Default for SatLimParams {
     /// A new instance starts from the shared defaults file (the host then restores a saved project's own look over this).
     fn default() -> Self {
-        Self::from_defaults(satcomp_ui::appearance::load_defaults())
+        Self::from_defaults(satcomp_ui::appearance::load_defaults_for("satlim"))
     }
 }
 

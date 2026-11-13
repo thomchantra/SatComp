@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// Editor init: the embedded UI fonts (see `canvas::FONT_NAMES`, same order) and the egui style tweaks the canvas relies on.
 pub fn init_ctx(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    let faces: [&'static [u8]; 9] = [
+    let faces: [&'static [u8]; 11] = [
         include_bytes!("../assets/fonts/FiraCode-Regular.ttf"),
         include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
         include_bytes!("../assets/fonts/GeistMono-Regular.ttf"),
@@ -23,6 +23,8 @@ pub fn init_ctx(ctx: &egui::Context) {
         include_bytes!("../assets/fonts/DMMono-Regular.ttf"),
         include_bytes!("../assets/fonts/VictorMono-Regular.ttf"),
         include_bytes!("../assets/fonts/AnonymousPro-Regular.ttf"),
+        include_bytes!("../assets/fonts/Inconsolata-Regular.ttf"),
+        include_bytes!("../assets/fonts/CourierPrime-Regular.ttf"),
     ];
     for (i, bytes) in faces.iter().enumerate() {
         fonts.font_data.insert(format!("f{i}"), Arc::new(FontData::from_static(bytes)));

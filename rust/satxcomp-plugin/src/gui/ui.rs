@@ -588,6 +588,9 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
     fn commit_fft_solid(&mut self, solid: bool) {
         self.env.params.fft_solid.store(solid, Ordering::Relaxed);
     }
+    fn plugin_key(&self) -> &'static str {
+        "satxcomp"
+    }
     fn presets_dir(&self) -> Option<std::path::PathBuf> {
         crate::presets::user_dir()
     }

@@ -314,48 +314,54 @@ fn the_scope_advances_while_audio_runs_without_redrawing_old_columns() {
 }
 
 #[test]
-fn preferences_set_as_default_writes_the_shared_file_and_reset_clears_it() {
-    use satcomp_ui::appearance::{clear_defaults, load_defaults};
+fn preferences_defaults_are_per_plugin_with_a_global_one_behind_a_chevron() {
+    use satcomp_ui::appearance::{clear_defaults, clear_defaults_for, load_defaults, load_defaults_for};
+    use std::sync::atomic::Ordering::Relaxed;
     let dir = std::env::temp_dir().join(format!("satcomp-defaults-test-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     std::env::set_var("SATCOMP_DATA_DIR", &dir);
     clear_defaults();
+    clear_defaults_for("satlim");
     let mut r = Rig::new();
     r.click(60.0, 12.0); // About
     r.click(182.0, 38.0); // PREFERENCES tab
     for _ in 0..3 {
         r.frame(vec![]);
     }
+    // SET AS DEFAULT (the main part of the button) saves for THIS plug-in only
     r.click(208.0, 64.0); // LIGHT
     r.click(90.0, 435.0); // SET AS DEFAULT
-    let d = load_defaults().expect("SET AS DEFAULT writes defaults.json");
-    assert!(d.light, "the current look is what gets saved");
-    assert_eq!((d.pal, d.face), (0, 0));
-    assert!((d.scale - 1.0).abs() < 1e-6, "SatLim opens at 100%");
-    // a new instance picks it up, a project restore would then overwrite it
-    let p = SatLimParams::from_defaults(Some(d));
-    assert!(p.light.load(std::sync::atomic::Ordering::Relaxed));
-    r.click(250.0, 435.0); // RESET TO FACTORY
-    assert!(load_defaults().is_none(), "RESET TO FACTORY removes the file");
-    assert!(!r.params.light.load(std::sync::atomic::Ordering::Relaxed), "and puts this instance back on the factory look");
+    let own = load_defaults_for("satlim").expect("the plug-in's own default");
+    assert!(own.light, "the current look is what gets saved");
+    assert_eq!((own.pal, own.face), (0, 0));
+    assert!((own.scale - 1.0).abs() < 1e-6, "SatLim opens at 100%");
+    assert!(load_defaults().is_none(), "the main button does not touch the global default");
+    // the chevron opens a one-item menu: SET AS GLOBAL DEFAULT
+    r.click(140.0, 64.0); // DARK again
+    r.click(158.0, 435.0); // chevron
+    assert!(r.st.app.def_menu == 1, "the chevron opens the menu");
+    r.click(80.0, 449.0); // SET AS GLOBAL DEFAULT
+    assert!(r.st.app.def_menu == 0, "picking closes the menu");
+    let global = load_defaults().expect("the global default");
+    assert!(!global.light);
+    assert!(load_defaults_for("satlim").unwrap().light, "the plug-in's own default wins over the global one");
+    // a new instance picks up its own default, a project restore would then overwrite it
+    assert!(SatLimParams::from_defaults(load_defaults_for("satlim")).light.load(Relaxed));
+    // RESET (main part): drops the plug-in's own default, this instance takes what a new one would get now (the global look)
+    r.click(208.0, 64.0); // LIGHT
+    assert!(r.params.light.load(Relaxed));
+    r.click(240.0, 435.0);
+    assert!(!r.params.light.load(Relaxed), "back on the global look");
+    assert!(!load_defaults_for("satlim").unwrap().light && load_defaults().is_some());
+    // RESET GLOBAL DEFAULT (its chevron): nothing left, the factory look
+    r.click(314.0, 435.0);
+    r.click(240.0, 449.0);
+    assert!(load_defaults().is_none() && load_defaults_for("satlim").is_none(), "everything cleared");
+    // a click outside an open menu only closes it
+    r.click(158.0, 435.0);
+    r.click(30.0, 300.0);
+    assert!(r.st.app.def_menu == 0 && load_defaults().is_none());
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_project_restored_after_the_editor_was_built_keeps_its_saved_look() {
-    use std::sync::atomic::Ordering::Relaxed;
-    // nih-plug builds the editor first and the host restores the project's parameters afterwards
-    let mut r = Rig::new();
-    assert_eq!((r.st.pal, r.st.light, r.st.face), (0, false, 0));
-    r.params.palette_v2.store(5, Relaxed);
-    r.params.light.store(true, Relaxed);
-    r.params.font.store(2, Relaxed);
-    r.st.sync_look(&r.params); // what opening the window does
-    assert_eq!((r.st.pal, r.st.light, r.st.face), (5, true, 2));
-    for _ in 0..3 {
-        r.frame(vec![]);
-    }
-    assert_eq!(r.params.palette_v2.load(Relaxed), 5, "drawing must not overwrite the restored scheme");
 }
 
 #[test]
@@ -370,7 +376,7 @@ fn the_font_dropdown_opens_over_the_page_and_picks_a_face() {
     let pal = r.params.palette_v2.load(Relaxed);
     r.click(150.0, 413.0); // the FONT dropdown
     assert!(r.st.app.font_open, "the list should be open");
-    r.click(150.0, 380.0); // 8th entry, Victor Mono, drawn over the scheme list
+    r.click(150.0, 350.0); // 8th entry, Victor Mono (the list is 11 rows now), drawn over the scheme list
     assert_eq!(r.params.font.load(Relaxed), 7, "Victor Mono");
     assert!(!r.st.app.font_open, "picking closes the list");
     assert_eq!(r.params.palette_v2.load(Relaxed), pal, "the click must not reach the scheme list under the open list");

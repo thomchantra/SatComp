@@ -375,6 +375,9 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
         self.env.params.light.store(light, Ordering::Relaxed);
         self.apply_pal();
     }
+    fn plugin_key(&self) -> &'static str {
+        "satlim"
+    }
     fn presets_dir(&self) -> Option<std::path::PathBuf> {
         crate::presets::user_dir()
     }

@@ -112,7 +112,7 @@ o.append('    #[persist = "match-trim"]\n    pub match_trim: Arc<AtomicF32>,')
 for n, i, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{i}"]\n    pub {i}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
 o.append("}\n")
-o.append("impl Default for SatXCompParams {\n    /// A new instance starts from the shared defaults file (the host then restores a saved project's own look over this).\n    fn default() -> Self {\n        Self::from_defaults(satcomp_ui::appearance::load_defaults())\n    }\n}\n")
+o.append("impl Default for SatXCompParams {\n    /// A new instance starts from the shared defaults file (the host then restores a saved project's own look over this).\n    fn default() -> Self {\n        Self::from_defaults(satcomp_ui::appearance::load_defaults_for(\"satxcomp\"))\n    }\n}\n")
 o.append("impl SatXCompParams {\n    pub fn from_defaults(d: Option<satcomp_ui::appearance::Defaults>) -> Self {\n        Self {")
 o.append("            editor_state: {\n                let (w, h) = d.as_ref().map(|d| d.size((664.0, 400.0))).unwrap_or((830, 500));\n                EguiState::from_size(w, h)\n            },")
 o.append("            palette_v2: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.pal_index()).unwrap_or(0))),")
