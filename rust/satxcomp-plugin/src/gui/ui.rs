@@ -204,6 +204,13 @@ pub struct State {
     user: Vec<(String, std::path::PathBuf)>,
     base: Option<(String, Preset)>,
     hold_until: f64,
+    /// tests: a preset to apply / a capture to take at the start of the next frame (the file dialogs are not testable)
+    #[cfg(test)]
+    pub test_apply: Option<Preset>,
+    #[cfg(test)]
+    pub test_want_capture: bool,
+    #[cfg(test)]
+    pub test_capture: Option<Preset>,
     /// what the preset bar last showed (the *NAME* marker)
     shown_modified: bool,
     pending: u8,
@@ -343,6 +350,12 @@ impl State {
             user: presets::scan_user(),
             base: None,
             hold_until: 0.0,
+            #[cfg(test)]
+            test_apply: None,
+            #[cfg(test)]
+            test_want_capture: false,
+            #[cfg(test)]
+            test_capture: None,
             shown_modified: false,
             pending: 0,
             dlg: None,
@@ -752,14 +765,12 @@ impl<'a> Gui<'a> {
     }
 
     /// Write every stored parameter of `p` (missing ids -> default) and the three curves (missing = linear, so a preset never
-    /// keeps the previous one's curve). Bypass / Gain Match / the sidechain switch are left alone.
+    /// keeps the previous one's curve). Bypass / Gain Match are left alone, and so is the sidechain switch unless the preset
+    /// carries it (`presets::value_for`).
     fn apply_preset(&mut self, p: &Preset) {
         for &(n, id, mn, mx, df) in TABLE {
-            if presets::EXCLUDED.contains(&id) {
-                continue;
-            }
-            let v = p.params.get(id).copied().unwrap_or(df).clamp(mn, mx);
-            self.click_set(n, v);
+            let Some(v) = presets::value_for(p, id, df) else { continue };
+            self.click_set(n, v.clamp(mn, mx));
         }
         for b in 0..NB {
             let c = Curve::from_points(p.curve(b));
@@ -798,10 +809,8 @@ impl<'a> Gui<'a> {
         }
         let Some((_, b)) = &self.base else { return false };
         for &(n, id, mn, mx, df) in TABLE {
-            if presets::EXCLUDED.contains(&id) {
-                continue;
-            }
-            let want = b.params.get(id).copied().unwrap_or(df).clamp(mn, mx);
+            let Some(want) = presets::value_for(b, id, df) else { continue };
+            let want = want.clamp(mn, mx);
             let have = self.sget(n);
             if (want - have).abs() > 2e-4 * want.abs().max(have.abs()) + 1e-4 {
                 return true;
@@ -2549,6 +2558,15 @@ impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ frame
     pub fn frame(&mut self) {
         let sh = self.env.shared;
+        #[cfg(test)]
+        {
+            if let Some(p) = self.s.test_apply.take() {
+                self.apply_preset(&p);
+            }
+            if std::mem::take(&mut self.s.test_want_capture) {
+                self.s.test_capture = Some(self.capture("test"));
+            }
+        }
         // readouts refresh ~8x/s
         if self.kit.now - self.rd_last >= 0.12 {
             self.rd_last = self.kit.now;

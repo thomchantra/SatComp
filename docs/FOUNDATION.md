@@ -227,7 +227,7 @@ The JSFX `desc:` is also identity (still `SatComp`; ask before changing).
   is ~2% and the GL buffer swap is most of the rest. Many open editors at once are untested (see Open / next).
 
 ## Sidechain (v0.5)
-- Spec in `PARAMETERS.md` (SIDECHAIN). Params 63-66 (`sc_on` is excluded from presets); layouts = stereo + aux "Sidechain",
+- Spec in `PARAMETERS.md` (SIDECHAIN). Params 63-66 (`sc_on` is an OPTIONAL preset value: saved, applied only if the preset carries it); layouts = stereo + aux "Sidechain",
   then plain stereo (`lib.rs`). Engine: `process_sc(l, r, Option<(&[f32], &[f32])>)`; `None` = no bus = internal detector.
   `tick_sc` / `sc_solo` / `mn_lv` in `satcomp-dsp/src/engine.rs`; tests `sidechain_*`.
 - Solo (`Shared.sc_solo`) and the red-button hint (`Shared.sc_bus`, optimistic true until the first block) are UI atomics.

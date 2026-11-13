@@ -11,9 +11,25 @@ use std::path::{Path, PathBuf};
 static FACTORY_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/presets");
 
 pub const EXT: &str = "satxcomp";
-/// Never stored in a preset: Bypass is a performance switch, Gain Match is a level-dependent measurement, the sidechain
-/// switch depends on the host's routing.
-pub const EXCLUDED: [&str; 3] = ["bypass", "gain_match", "sc_on"];
+/// Never stored in a preset: Bypass is a performance switch, Gain Match is a level-dependent measurement.
+pub const EXCLUDED: [&str; 2] = ["bypass", "gain_match"];
+/// Stored when a preset is saved, but only applied when the preset has it: the sidechain switch belongs to a sidechain
+/// preset (a kick-keyed one must come back keyed), yet older presets and INIT never carry it and leave the switch alone
+/// (it depends on the track's routing, so INIT must not switch it off either).
+pub const OPTIONAL: [&str; 1] = ["sc_on"];
+
+/// The value a preset gives parameter `id`: its stored one, else the default; `None` = leave the live value alone
+/// (an optional id the preset does not carry, or an excluded one).
+pub fn value_for(p: &Preset, id: &str, default: f32) -> Option<f32> {
+    if EXCLUDED.contains(&id) {
+        return None;
+    }
+    match p.params.get(id) {
+        Some(v) => Some(*v),
+        None if OPTIONAL.contains(&id) => None,
+        None => Some(default),
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Preset {
@@ -36,7 +52,7 @@ impl Preset {
 
     /// All defaults.
     pub fn init() -> Self {
-        let params = TABLE.iter().filter(|e| !EXCLUDED.contains(&e.1)).map(|e| (e.1.to_string(), e.4)).collect();
+        let params = TABLE.iter().filter(|e| !EXCLUDED.contains(&e.1) && !OPTIONAL.contains(&e.1)).map(|e| (e.1.to_string(), e.4)).collect();
         Self::new("INIT", params)
     }
 
@@ -155,6 +171,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_sidechain_switch_is_applied_only_when_the_preset_carries_it() {
+        let mut p = Preset::init();
+        assert_eq!(value_for(&p, "sc_on", 0.0), None, "INIT / old presets leave the switch alone");
+        assert_eq!(value_for(&p, "bypass", 0.0), None);
+        assert_eq!(value_for(&p, "lo_drive", 7.0), Some(0.0));
+        p.params.remove("lo_drive");
+        assert_eq!(value_for(&p, "lo_drive", 7.0), Some(7.0), "ordinary ids fall back to the default");
+        p.params.insert("sc_on".into(), 1.0);
+        assert_eq!(value_for(&p, "sc_on", 0.0), Some(1.0));
+        assert!(Preset::from_json(&p.to_json()).unwrap().params.contains_key("sc_on"), "it roundtrips");
+    }
+
+    #[test]
     fn init_is_all_defaults_roundtrips_and_excludes_performance_switches() {
         let p = Preset::init();
         for id in EXCLUDED {
@@ -162,7 +191,10 @@ mod tests {
         }
         assert_eq!(p.params["lo_drive"], 0.0, "init drive is 0");
         assert_eq!(p.params["mid_thresh"], 0.0, "init threshold is 0");
-        assert_eq!(p.params.len(), TABLE.len() - EXCLUDED.len());
+        for id in OPTIONAL {
+            assert!(!p.params.contains_key(id), "{id} is optional: INIT does not carry it");
+        }
+        assert_eq!(p.params.len(), TABLE.len() - EXCLUDED.len() - OPTIONAL.len());
         let q = Preset::from_json(&p.to_json()).unwrap();
         assert_eq!(q.params, p.params);
         assert!(Preset::from_json("{\"format\":\"satcomp-preset\"}").is_none(), "a SatComp preset is not a SatXComp preset");

@@ -559,3 +559,32 @@ fn a_project_restored_after_the_editor_was_built_keeps_its_saved_look() {
     }
     assert_eq!(r.params.palette_v2.load(Relaxed), 5, "drawing must not overwrite the restored scheme");
 }
+
+/// A sidechain preset comes back keyed: the switch is saved with a preset and applied only when the preset carries it.
+#[test]
+fn a_preset_saves_and_restores_the_sidechain_switch_but_old_presets_leave_it_alone() {
+    // saved from a rig with the switch on
+    let mut on = Rig::with_params(|p| p.sc_on = BoolParam::new("Sidechain", true));
+    for _ in 0..4 {
+        on.frame(vec![]);
+    }
+    on.st.test_want_capture = true;
+    on.frame(vec![]);
+    let saved = on.st.test_capture.take().expect("captured");
+    assert_eq!(saved.params.get("sc_on"), Some(&1.0), "the switch is stored");
+    assert!(!saved.params.contains_key("bypass") && !saved.params.contains_key("gain_match"));
+
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    let n0 = r.log().len();
+    r.st.test_apply = Some(saved);
+    r.frame(vec![]);
+    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Sidechain 1.000")), "loading it switches the key on: {:?}", &r.log()[n0..]);
+    // an older preset (no sc_on) must not touch the switch, either way
+    let n1 = r.log().len();
+    r.st.test_apply = Some(crate::presets::Preset::init());
+    r.frame(vec![]);
+    assert!(!r.log()[n1..].iter().any(|l| l.starts_with("Sidechain")), "old presets / INIT leave the switch alone");
+}

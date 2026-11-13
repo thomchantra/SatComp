@@ -9,4 +9,4 @@ To make one: dial the sound in, click the save icon in the preset bar, save the 
 Format: `{ "format": "satxcomp-preset", "version": 1, "name": "...", "params": { "<param id>": <value>, ... },
 "curves": [[[x, y], ...], [...], [...]] }`. Parameter ids are the ones in `src/params.rs`; missing ids fall back to
 the default. `curves` (optional) holds the custom waveshaper curve of the low, mid and high band; absent = linear.
-Bypass, Gain Match and the Sidechain switch are never stored (performance switches / depend on the host's routing).
+Bypass and Gain Match are never stored (performance switches). The Sidechain switch (`sc_on`) is stored when a preset is saved but only applied when the preset has the key, so a sidechain preset comes back keyed while older presets and INIT leave the switch alone (it depends on the track's routing).
