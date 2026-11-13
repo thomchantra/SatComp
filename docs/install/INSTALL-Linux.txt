@@ -1,0 +1,32 @@
+@NAME@ @VER@ - installation (Linux, experimental)
+=================================================
+
+This Linux build is new and lightly tested. Feedback is very welcome:
+https://github.com/thomchantra/satcomp/issues
+
+This zip contains two plug-in formats. Install the one your host uses (or both):
+
+  VST3/@PLUGIN@.vst3    the VST3 plug-in. It is a FOLDER: copy the whole folder
+  CLAP/@PLUGIN@.clap    the CLAP plug-in (a single file)
+
+1. Unzip the download.
+2. VST3: copy the folder  VST3/@PLUGIN@.vst3  into
+       ~/.vst3/
+   (for all users: /usr/lib/vst3/  or  /usr/local/lib/vst3/)
+3. CLAP: copy  CLAP/@PLUGIN@.clap  into
+       ~/.clap/
+   (for all users: /usr/lib/clap/  or  /usr/local/lib/clap/)
+4. Rescan plug-ins in your host (REAPER: Options > Preferences > Plug-ins > VST/CLAP > Re-scan)
+   or restart it. The plug-in appears as "@NAME@".
+
+Needs an X11 session (the window is drawn through X11 and OpenGL). The manual button opens the
+PDF with your default viewer (xdg-open).
+
+Your settings and presets
+-------------------------
+  Presets:  ~/.config/@NAME@/Presets
+  Themes:   ~/.config/SatComp/themes.json   (shared by SatComp, SatXComp and SatLim)
+
+Uninstall: delete the files you copied.
+
+Licence: GPL-3.0-or-later, see LICENSE.

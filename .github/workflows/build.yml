@@ -56,13 +56,17 @@ jobs:
       fail-fast: false
       matrix:
         plugin: ${{ fromJson(needs.plan.outputs.plugins) }}
-        os: [macos-latest, windows-latest]
+        os: [macos-latest, windows-latest, ubuntu-22.04]
         include:
           - os: macos-latest
             name: macOS-universal
             sub: bundle-universal
           - os: windows-latest
             name: Windows-x64
+            sub: bundle
+          # built on 22.04 so it also runs on older distributions (glibc 2.35); experimental until someone confirms it
+          - os: ubuntu-22.04
+            name: Linux-x64
             sub: bundle
     runs-on: ${{ matrix.os }}
     steps:
@@ -73,6 +77,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+      - name: Linux build deps (baseview / egui)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libx11-xcb-dev libxcb-icccm4-dev libxcb-dri2-0-dev libgl1-mesa-dev libx11-dev libxcursor-dev libasound2-dev
       - name: Bundle
         working-directory: rust
         run: cargo xtask ${{ matrix.sub }} ${{ matrix.plugin }} --release
@@ -88,7 +95,7 @@ jobs:
           cp LICENSE dist/
           cp -R "rust/target/bundled/${plugin}.vst3" dist/VST3/
           cp -R "rust/target/bundled/${plugin}.clap" dist/CLAP/
-          case "${{ matrix.name }}" in macOS*) os=macOS ;; *) os=Windows ;; esac
+          case "${{ matrix.name }}" in macOS*) os=macOS ;; Linux*) os=Linux ;; *) os=Windows ;; esac
           sed -e "s/@PLUGIN@/${plugin}/g" -e "s/@NAME@/${disp}/g" -e "s/@VER@/v${ver}/g" "docs/install/INSTALL-${os}.txt" > dist/INSTALL.txt
           manual="docs/manual/${disp}-Manual-v${ver}.pdf"
           if [ -f "$manual" ]; then
