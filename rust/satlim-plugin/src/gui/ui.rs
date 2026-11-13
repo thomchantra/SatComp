@@ -193,7 +193,7 @@ impl State {
             scope_t: 0.0,
             asym_drag: (0.0, 0.0),
             app: AppState::new(),
-            dummy_params: Arc::new(SatLimParams::default()),
+            dummy_params: Arc::new(SatLimParams::from_defaults(None)),
             dummy_shared: Arc::new(Shared::new()),
             logo_pend: -1.0,
             vt1: 0,
@@ -351,6 +351,18 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
         self.s.light = light;
         self.env.params.light.store(light, Ordering::Relaxed);
         self.apply_pal();
+    }
+    fn scale_now(&self) -> f32 {
+        self.cur_scale()
+    }
+    fn set_scale(&mut self, scale: f32) {
+        self.request_scale(scale);
+    }
+    fn factory_scale(&self) -> f32 {
+        1.0
+    }
+    fn factory_fill_solid(&self) -> bool {
+        true
     }
     fn commit_face(&mut self, face: usize) {
         self.s.face = face;

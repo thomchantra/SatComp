@@ -304,7 +304,7 @@ impl State {
         Self {
             kit,
             app,
-            dummy_params: Arc::new(SatXCompParams::default()),
+            dummy_params: Arc::new(SatXCompParams::from_defaults(None)),
             dummy_shared: Arc::new(Shared::new()),
             logo_pend: -1.0,
             pal,
@@ -535,6 +535,15 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
     }
     fn commit_fft_solid(&mut self, solid: bool) {
         self.env.params.fft_solid.store(solid, Ordering::Relaxed);
+    }
+    fn scale_now(&self) -> f32 {
+        self.cur_scale()
+    }
+    fn set_scale(&mut self, scale: f32) {
+        self.request_scale(scale);
+    }
+    fn factory_scale(&self) -> f32 {
+        1.25
     }
     fn commit_face(&mut self, face: usize) {
         self.s.face = face;

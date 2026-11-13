@@ -51,7 +51,7 @@ impl Rig {
     fn with_params(tweak: impl FnOnce(&mut SatXCompParams)) -> Self {
         let ctx = egui::Context::default();
         satcomp_ui::init_ctx(&ctx);
-        let mut p = SatXCompParams::default();
+        let mut p = SatXCompParams::from_defaults(None); // hermetic: ignore this machine's defaults file
         tweak(&mut p);
         let params = Arc::new(p);
         Self { ctx, host: Arc::new(FakeHost::default()), shared: Arc::new(Shared::new()), st: State::new(&params), params, t: 1.0, hash: 0xcbf29ce484222325 }

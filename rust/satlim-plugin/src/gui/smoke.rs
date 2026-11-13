@@ -54,7 +54,7 @@ impl Rig {
     fn with_params(tweak: impl FnOnce(&mut SatLimParams)) -> Self {
         let ctx = egui::Context::default();
         satcomp_ui::init_ctx(&ctx);
-        let mut p = SatLimParams::default();
+        let mut p = SatLimParams::from_defaults(None); // hermetic: ignore this machine's defaults file
         tweak(&mut p);
         let params = Arc::new(p);
         Self { ctx, host: Arc::new(FakeHost::default()), shared: Arc::new(Shared::new()), st: State::new(0, false, 0, &params), params, t: 1.0, hash: 0xcbf29ce484222325, last: 0, feed: true }
@@ -308,4 +308,32 @@ fn the_scope_advances_while_audio_runs_without_redrawing_old_columns() {
         seen.insert(r.last);
     }
     assert!(seen.len() >= 40, "the picture should advance on most frames: {} distinct of 60", seen.len());
+}
+
+#[test]
+fn preferences_set_as_default_writes_the_shared_file_and_reset_clears_it() {
+    use satcomp_ui::appearance::{clear_defaults, load_defaults};
+    let dir = std::env::temp_dir().join(format!("satcomp-defaults-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::env::set_var("SATCOMP_DATA_DIR", &dir);
+    clear_defaults();
+    let mut r = Rig::new();
+    r.click(60.0, 12.0); // About
+    r.click(182.0, 38.0); // PREFERENCES tab
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(208.0, 64.0); // LIGHT
+    r.click(90.0, 459.0); // SET AS DEFAULT
+    let d = load_defaults().expect("SET AS DEFAULT writes defaults.json");
+    assert!(d.light, "the current look is what gets saved");
+    assert_eq!((d.pal, d.face), (0, 0));
+    assert!((d.scale - 1.0).abs() < 1e-6, "SatLim opens at 100%");
+    // a new instance picks it up, a project restore would then overwrite it
+    let p = SatLimParams::from_defaults(Some(d));
+    assert!(p.light.load(std::sync::atomic::Ordering::Relaxed));
+    r.click(250.0, 459.0); // RESET TO FACTORY
+    assert!(load_defaults().is_none(), "RESET TO FACTORY removes the file");
+    assert!(!r.params.light.load(std::sync::atomic::Ordering::Relaxed), "and puts this instance back on the factory look");
+    let _ = std::fs::remove_dir_all(&dir);
 }

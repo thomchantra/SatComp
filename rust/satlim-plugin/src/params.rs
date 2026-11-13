@@ -96,15 +96,25 @@ pub struct SatLimParams {
 }
 
 impl Default for SatLimParams {
+    /// A new instance starts from the shared defaults file (the host then restores a saved project's own look over this).
     fn default() -> Self {
+        Self::from_defaults(satcomp_ui::appearance::load_defaults())
+    }
+}
+
+impl SatLimParams {
+    pub fn from_defaults(d: Option<satcomp_ui::appearance::Defaults>) -> Self {
         Self {
-            editor_state: EguiState::from_size(340, 504),
-            palette_v2: Arc::new(AtomicI32::new(-1)),
-            light: Arc::new(AtomicBool::new(false)),
-            font: Arc::new(AtomicI32::new(0)),
-            fft_solid: Arc::new(AtomicBool::new(true)),
+            editor_state: {
+                let (w, h) = d.as_ref().map(|d| d.size((340.0, 504.0))).unwrap_or((340, 504));
+                EguiState::from_size(w, h)
+            },
+            palette_v2: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.pal_index()).unwrap_or(-1))),
+            light: Arc::new(AtomicBool::new(d.as_ref().map(|d| d.light).unwrap_or(false))),
+            font: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.face_index()).unwrap_or(0))),
+            fft_solid: Arc::new(AtomicBool::new(d.as_ref().map(|d| d.fill_solid).unwrap_or(true))),
             scope: Arc::new(AtomicI32::new((5 << 4) | (8 << 8))),
-            custom_theme: Arc::new(parking_lot::Mutex::new(String::new())),
+            custom_theme: Arc::new(parking_lot::Mutex::new(d.as_ref().map(|d| d.theme.clone()).unwrap_or_default())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             asym: Arc::new(parking_lot::Mutex::new(Vec::new())),

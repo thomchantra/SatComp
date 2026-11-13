@@ -24,14 +24,82 @@ pub struct UserTheme {
 const SLOT_NAMES: [&str; 6] = ["DARK BG", "DARK UI", "DARK ACCENT", "LIGHT BG", "LIGHT UI", "LIGHT ACCENT"];
 const SLOT_SHORT: [&str; 6] = ["DARK BG", "DARK UI", "DARK ACC", "LIGHT BG", "LIGHT UI", "LIGHT ACC"];
 
-fn themes_path() -> Option<PathBuf> {
+/// The folder that holds `themes.json`, `defaults.json` and the preset folders.
+fn data_dir() -> Option<PathBuf> {
+    // test / portable override
+    if let Some(d) = std::env::var_os("SATCOMP_DATA_DIR") {
+        return Some(PathBuf::from(d));
+    }
     #[cfg(target_os = "macos")]
     let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
     #[cfg(windows)]
     let base = std::env::var_os("APPDATA").map(PathBuf::from);
     #[cfg(not(any(target_os = "macos", windows)))]
     let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"));
-    base.map(|b| b.join("SatComp").join("themes.json"))
+    base.map(|b| b.join("SatComp"))
+}
+
+fn themes_path() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("themes.json"))
+}
+
+fn defaults_path() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("defaults.json"))
+}
+
+/// The look a NEW plug-in instance starts with, shared by all the plug-ins (`SatComp/defaults.json`). A saved project keeps
+/// its own look; this only seeds fresh instances. Absent file = factory look.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct Defaults {
+    /// scheme index (`PALETTES.len()` = a user theme, given by `theme`)
+    pub pal: i32,
+    /// `encode`d user theme when `pal` is a user theme, else empty
+    pub theme: String,
+    pub light: bool,
+    pub face: i32,
+    /// spectrum / scope fill (plug-ins without the switch ignore it)
+    pub fill_solid: bool,
+    /// window scale relative to each plug-in's base size
+    pub scale: f32,
+}
+
+impl Defaults {
+    /// Window size in logical pixels for a plug-in with this base size.
+    pub fn size(&self, base: (f32, f32)) -> (u32, u32) {
+        let s = self.scale.clamp(1.0, 2.5);
+        ((base.0 * s).round() as u32, (base.1 * s).round() as u32)
+    }
+
+    /// Scheme index as stored in `palette-v2`, kept inside the table.
+    pub fn pal_index(&self) -> i32 {
+        self.pal.clamp(0, PALETTES.len() as i32)
+    }
+
+    pub fn face_index(&self) -> i32 {
+        self.face.clamp(0, FONT_NAMES.len() as i32 - 1)
+    }
+}
+
+pub fn load_defaults() -> Option<Defaults> {
+    defaults_path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str(&s).ok())
+}
+
+pub fn save_defaults(d: &Defaults) {
+    if let Some(p) = defaults_path() {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(s) = serde_json::to_string_pretty(d) {
+            let _ = std::fs::write(p, s);
+        }
+    }
+}
+
+/// Back to the factory look for new instances.
+pub fn clear_defaults() {
+    if let Some(p) = defaults_path() {
+        let _ = std::fs::remove_file(p);
+    }
 }
 
 pub fn load_themes() -> Vec<UserTheme> {
@@ -209,6 +277,8 @@ pub struct AppState {
     /// first visible scheme row in the Appearance list
     pub ap_scroll: usize,
     del_arm: f64,
+    /// feedback line on the Preferences page: (time it was set, text)
+    pub note: (f64, &'static str),
     pub themes: Vec<UserTheme>,
     pub edit: Option<ThemeEdit>,
     pub real_in: RealInput,
@@ -216,7 +286,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, themes: load_themes(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
+        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), themes: load_themes(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
     }
 
     /// The egui clock restarted (editor reopened): re-base stored timestamps.
@@ -300,6 +370,15 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
     fn commit_scheme(&mut self, pal: usize, encoded: String);
     fn commit_light(&mut self, light: bool);
     fn commit_face(&mut self, face: usize);
+    /// Current window scale (1.0 = the plug-in's base size) and a request to change it.
+    fn scale_now(&self) -> f32;
+    fn set_scale(&mut self, scale: f32);
+    /// The scale a fresh instance opens at when no defaults file exists.
+    fn factory_scale(&self) -> f32;
+    /// Factory spectrum / scope fill (for plug-ins that have the switch).
+    fn factory_fill_solid(&self) -> bool {
+        false
+    }
     /// Spectrum fill style (`Some(solid)`), for plug-ins that draw a spectrum; `None` hides the switch on the Appearance page.
     fn fft_solid(&self) -> Option<bool> {
         None
@@ -332,6 +411,40 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
 
     fn set_light(&mut self, l: bool) {
         self.commit_light(l);
+    }
+
+    /// Save this instance's look (scheme, mode, font, fill, window scale) as the default for new instances of every plug-in.
+    fn save_as_default(&mut self) {
+        let pal = self.pal();
+        let user = pal >= PALETTES.len();
+        let theme = if user { self.app_ref().themes.get(pal - PALETTES.len()).map(encode).unwrap_or_default() } else { String::new() };
+        let d = Defaults {
+            pal: if user && theme.is_empty() { 0 } else { pal.min(PALETTES.len()) as i32 },
+            theme,
+            light: self.light(),
+            face: self.face() as i32,
+            fill_solid: self.fft_solid().unwrap_or_else(|| self.factory_fill_solid()),
+            scale: self.scale_now(),
+        };
+        save_defaults(&d);
+        let now = self.kit_ref().now;
+        self.app().note = (now, "Saved as the default for new instances");
+    }
+
+    /// Clear the defaults file and put this instance back on the factory look too.
+    fn reset_to_factory(&mut self) {
+        clear_defaults();
+        self.set_pal(0);
+        self.set_light(false);
+        self.commit_face(0);
+        if self.fft_solid().is_some() {
+            let f = self.factory_fill_solid();
+            self.commit_fft_solid(f);
+        }
+        let f = self.factory_scale();
+        self.set_scale(f);
+        let now = self.kit_ref().now;
+        self.app().note = (now, "Back to the factory look");
     }
 
     fn mask_in(&mut self) {
@@ -392,7 +505,7 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         // a narrow page (SatLim) fits three abutting tabs and a single cross icon, with no spacing; wider pages keep the labelled button
         let narrow = r.w < 360.0;
         let tw = ((r.w - 16.0) / 3.0).floor();
-        for (i, (l, id)) in [("ABOUT", 1u8), ("APPEARANCE", 3u8), ("CHANGELOG", 2u8)].into_iter().enumerate() {
+        for (i, (l, id)) in [("ABOUT", 1u8), ("PREFERENCES", 3u8), ("CHANGELOG", 2u8)].into_iter().enumerate() {
             let (dx, w) = if narrow { (i as f32 * tw, tw + 1.0) } else { (i as f32 * 115.0, 114.0) };
             if self.btn(r.x + dx, ty, w, 16.0, l, (self.app_ref().about == id) as u8) {
                 let pal = self.pal();
@@ -612,7 +725,21 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
             self.cv().face = keep;
         }
         self.setc(false);
-        self.cv().text(lx, fy + 92.0, "Applies at once, saved with the project. Fonts: SIL OFL 1.1");
+        let bw = ((lw - 8.0) * 0.5).floor();
+        let by = fy + 86.0;
+        if self.btn(lx, by, bw, 14.0, "SET AS DEFAULT", 0) {
+            self.save_as_default();
+        }
+        if self.btn(lx + bw + 8.0, by, bw, 14.0, "RESET TO FACTORY", 0) {
+            self.reset_to_factory();
+        }
+        self.setc(false);
+        let (t0, note) = self.app_ref().note;
+        if self.kit_ref().now - t0 < 4.0 {
+            self.cv().text(lx, by + 17.0, note);
+        } else {
+            self.cv().text(lx, by + 17.0, "Saved with the project. Fonts: SIL OFL 1.1");
+        }
     }
 
     /// Text rows (11 units each) in a box whose frame the caller has drawn. Mouse wheel scrolls 3 rows per notch; when the

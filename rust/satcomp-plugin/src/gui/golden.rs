@@ -75,7 +75,7 @@ impl Rig {
         let ctx = egui::Context::default();
         ctx.set_pixels_per_point(zoom);
         satcomp_ui::init_ctx(&ctx);
-        let params = Arc::new(SatCompParams::default());
+        let params = Arc::new(SatCompParams::from_defaults(None));
         let shared = Arc::new(Shared::new());
         let (pal, light) = super::ui::initial_palette(&params);
         let mut st = State::new(pal, light, 0, &params);
