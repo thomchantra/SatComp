@@ -35,6 +35,8 @@ pub struct Strip {
     on_c: f64,
     /// gain reduction of the loudest channel in the current block, dB (the owner resets it)
     pub gr_blk: f64,
+    /// gain lift of the loudest channel in the current block, dB (upward mode; the owner resets it)
+    pub gl_blk: f64,
     /// peak of the saturator output (before the compressor) since the owner last reset it
     pub sat_pk: f64,
     /// slow mean squares of the band's input and of the saturator's result before SAT GAIN (after the band confine): the
@@ -68,6 +70,7 @@ impl Strip {
             sm_c: 0.0,
             on_c: 0.0,
             gr_blk: 0.0,
+            gl_blk: 0.0,
             sat_pk: 0.0,
             ims: 1e-9,
             sms: 1e-9,
@@ -98,6 +101,8 @@ impl Strip {
             ff_fb: p.ff_fb,
             gr_dist: p.gr_dist,
             key_mix,
+            up: p.up,
+            up_range: p.up_range,
         }
     }
 
@@ -169,6 +174,7 @@ impl Strip {
             pre[c] = dd[c] + (cd[c] - dd[c]) * self.on_s;
         }
         self.gr_blk = self.gr_blk.max(co.g[0].max(co.g[1]));
+        self.gl_blk = self.gl_blk.max(co.lift[0].max(co.lift[1]));
         StripOut { y, removed, pre, g: co.g[0].max(co.g[1]) }
     }
 }

@@ -633,3 +633,36 @@ fn clicking_the_sat_readout_requests_that_bands_level_match_and_its_result_write
     r.frame(vec![]);
     assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Sat Gain 0.569")), "{:?}", &r.log()[n0..]);
 }
+
+/// Upward compression: the COMP DOWN / UP switch sits on top of the second compressor column (with RANGE under it, KNEE and
+/// K.SHAPE as a stacked pair below), it writes the band's UP parameter, and the GR meter is drawn centre-tapped in that mode.
+#[test]
+fn the_comp_up_switch_writes_the_band_and_the_meter_turns_centre_tapped() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    let n0 = r.log().len();
+    r.click(400.0, 229.0); // COMP DOWN -> UP (second column, top row)
+    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Up 1.000")), "{:?}", &r.log()[n0..]);
+    // KNEE and K.SHAPE still reach their parameters from the stacked pair in the second row
+    let n0 = r.log().len();
+    r.drag(400.0, 273.0, 400.0, 255.0);
+    r.drag(400.0, 291.0, 400.0, 273.0);
+    let new: Vec<String> = r.log()[n0..].to_vec();
+    assert!(new.iter().any(|l| l.starts_with("Lo Knee ")) && new.iter().any(|l| l.starts_with("Lo Knee Shape ")), "{new:?}");
+
+    // the same lift on the meter draws differently with UP on than with it off (centre-tapped, gain colour)
+    let frame_hash = |up: bool| {
+        let mut q = Rig::with_params(|p| p.lo_up = BoolParam::new("Lo Up", up));
+        q.shared.gl_pk[0].store(6.0, Relaxed);
+        for _ in 0..12 {
+            q.shared.gl_pk[0].fetch_max(6.0, Relaxed);
+            q.frame(vec![]);
+        }
+        q.hash
+    };
+    assert_ne!(frame_hash(true), frame_hash(false), "the meter should change with the mode");
+    assert_eq!(frame_hash(true), frame_hash(true), "and be deterministic");
+}

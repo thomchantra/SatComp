@@ -44,6 +44,12 @@ const COMP_MIX: usize = 19;
 const COMP_GAIN: usize = 20;
 const HP: usize = 21;
 const LP: usize = 22;
+/// upward compression switch (offset inside the band); its RANGE lives at slot `range_slot(b)`
+const UP: usize = 23;
+const RANGE_BASE: usize = 160;
+const fn range_slot(b: usize) -> usize {
+    RANGE_BASE + b
+}
 
 /// first UI slot of EQ band `i`: on, type, freq, q, gain
 const fn eq_base(i: usize) -> usize {
@@ -222,6 +228,12 @@ pub struct State {
     dlg: Option<Arc<parking_lot::Mutex<Dlg>>>,
     /// gain-reduction readouts refresh slowly (peak over the last interval) so the numbers stay readable
     gr_txt: [f32; NB],
+    /// upward compressor lift per band: display value, hold, hold time and the number window (like the gr_* ones)
+    gl_disp: [f32; NB],
+    gl_hold: [f32; NB],
+    gl_hold_t: [f64; NB],
+    gl_txt: [f32; NB],
+    gl_txt_pk: [f32; NB],
     gr_txt_pk: [f32; NB],
     gr_txt_t: f64,
     /// output limiter reduction: decaying peak (flow block) and a 4 Hz text value
@@ -295,6 +307,7 @@ impl State {
             sp(o + RELEASE, 1, 2, 1.0);
             sp(o + KNEE, 0, 0, 0.1);
             sp(o + COMP_GAIN, 0, 0, 0.1);
+            sp(range_slot(b), 0, 0, 0.5);
         }
         for i in 0..5 {
             let o = eq_base(i);
@@ -368,6 +381,11 @@ impl State {
             pending: 0,
             dlg: None,
             gr_txt: [0.0; NB],
+            gl_disp: [0.0; NB],
+            gl_hold: [0.0; NB],
+            gl_hold_t: [0.0; NB],
+            gl_txt: [0.0; NB],
+            gl_txt_pk: [0.0; NB],
             gr_txt_pk: [0.0; NB],
             gr_txt_t: 0.0,
             lim_disp: 0.0,
@@ -408,6 +426,7 @@ impl State {
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = [now; NB];
+            self.gl_hold_t = [now; NB];
             self.gr_txt_t = now;
             self.hold_until = now;
             self.vu_hold_t = [now; NB];
@@ -617,6 +636,9 @@ fn fmt_slot(n: usize, v: f32) -> String {
         SC_HP | SC_LP => return hz(v),
         SC_MIX => return format!("{:.0}%", v),
         _ => {}
+    }
+    if (RANGE_BASE..RANGE_BASE + NB).contains(&n) {
+        return format!("{:.0}dB", v);
     }
     if XOV_SLOPE.contains(&n) {
         return format!("{}dB", [12, 24, 48, 96][(v + 0.5).floor().clamp(0.0, 3.0) as usize]);
@@ -1164,6 +1186,18 @@ impl<'a> Gui<'a> {
         self.setc(false);
     }
 
+    /// Colour of gain that is ADDED (the spectrum's gain area and the upward compressor's lift): the inverse of the accent.
+    fn gain_colour(&self) -> [f32; 3] {
+        let ac = self.cv.ac;
+        let mut inv = [1.0 - ac[0], 1.0 - ac[1], 1.0 - ac[2]];
+        // grey schemes: the inverted accent lands on the background colour, so the gain area vanishes - use solid white (black on a light scheme) then
+        let lum = |c: [f32; 3]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        if (lum(inv) - lum(self.cv.bk)).abs() < 0.3 {
+            inv = if lum(self.cv.bk) < 0.5 { [1.0; 3] } else { [0.0; 3] };
+        }
+        inv
+    }
+
     // ------------------------------------------------------------------ meters
     fn update_gr(&mut self) {
         let sh = self.env.shared;
@@ -1178,6 +1212,16 @@ impl<'a> Gui<'a> {
                 self.gr_hold[b] = (self.gr_hold[b] - 0.4).max(0.0);
             }
             self.gr_txt_pk[b] = self.gr_txt_pk[b].max(self.gr_disp[b]);
+            // upward compressor lift: same ballistics, shown by the centre-tapped meter
+            let l = sh.gl_pk[b].swap(0.0, Ordering::Relaxed);
+            self.gl_disp[b] = l.max(self.gl_disp[b] * 0.9);
+            if l >= self.gl_hold[b] {
+                self.gl_hold[b] = l;
+                self.gl_hold_t[b] = now;
+            } else if now - self.gl_hold_t[b] > 1.0 {
+                self.gl_hold[b] = (self.gl_hold[b] - 0.4).max(0.0);
+            }
+            self.gl_txt_pk[b] = self.gl_txt_pk[b].max(self.gl_disp[b]);
             // post-saturator level meter
             let pk = sh.sat_out_pk[b].swap(0.0, Ordering::Relaxed);
             self.vu[b] = pk.max(self.vu[b] * 0.85);
@@ -1199,6 +1243,8 @@ impl<'a> Gui<'a> {
             self.lim_txt_pk = 0.0;
             self.gr_txt = self.gr_txt_pk;
             self.gr_txt_pk = [0.0; NB];
+            self.gl_txt = self.gl_txt_pk;
+            self.gl_txt_pk = [0.0; NB];
             self.gr_txt_t = now;
         }
     }
@@ -1209,6 +1255,10 @@ impl<'a> Gui<'a> {
         if self.hit(x, y, w, h) && self.kit.press && self.kit.act == 0 {
             self.gr_ri = if self.gr_ri >= 3 { 0 } else { self.gr_ri + 1 };
             self.kit.press = false;
+        }
+        if self.sget(band_base(b) + UP) > 0.5 {
+            self.draw_gr_meter_up(x, y, w, h, b);
+            return;
         }
         let rng = |i: usize| [3.0f32, 6.0, 12.0, 18.0][i.min(3)];
         while self.gr_ri < 3 && self.gr_disp[b] > rng(self.gr_ri) {
@@ -1241,6 +1291,68 @@ impl<'a> Gui<'a> {
                 self.cv.text(x + 2.0, (ty - 4.0).min(y + h - 11.0), &s);
             } else {
                 self.cv.fill(x + w - 3.0, ty, 2.0, 1.0);
+            }
+        }
+    }
+
+    /// The meter of a band in upward mode: centre-tapped. Gain LIFT grows upward from the centre line in the spectrum's gain
+    /// colour (inverse of the accent), gain reduction (the band is not reducing in this mode, but the scale stays symmetric)
+    /// grows downward in the accent. Same range cycling as the plain meter; the number window shows the lift.
+    fn draw_gr_meter_up(&mut self, x: f32, y: f32, w: f32, h: f32, b: usize) {
+        let rng = |i: usize| [3.0f32, 6.0, 12.0, 18.0][i.min(3)];
+        let peak = self.gl_disp[b].max(self.gr_disp[b]);
+        while self.gr_ri < 3 && peak > rng(self.gr_ri) {
+            self.gr_ri += 1;
+        }
+        let rg = rng(self.gr_ri);
+        let inv = self.gain_colour();
+        let cy = y + (h * 0.5).floor();
+        let half = ((h - 2.0) * 0.5).floor();
+        self.setc(false);
+        self.cv.boxr(x, y, w, h);
+        // lift up from the centre, reduction down from it
+        self.cv.setrgb(inv);
+        let up_px = (half * (self.gl_disp[b] / rg).min(1.0)).floor();
+        self.cv.fill(x + 1.0, cy - up_px, w - 2.0, up_px);
+        self.setc(true);
+        let dn_px = (half * (self.gr_disp[b] / rg).min(1.0)).floor();
+        self.cv.fill(x + 1.0, cy + 1.0, w - 2.0, dn_px);
+        // holds
+        self.setc(false);
+        let hu = cy - (half * (self.gl_hold[b] / rg).min(1.0)).floor();
+        self.cv.fill(x + 1.0, hu, w - 2.0, 1.0);
+        let hd = cy + 1.0 + (half * (self.gr_hold[b] / rg).min(1.0)).floor();
+        self.cv.fill(x + 1.0, hd, w - 2.0, 1.0);
+        // centre line
+        self.cv.fill(x + 1.0, cy, w - 2.0, 1.0);
+        self.cv.set_font(1);
+        // number window at the top: the lift, in the gain colour
+        self.cv.setbg();
+        self.cv.fill(x + 1.0, y + 1.0, w - 2.0, 11.0);
+        self.setc(false);
+        self.cv.fill(x + 1.0, y + 12.0, w - 2.0, 1.0);
+        let l = self.gl_txt[b];
+        let gs = if l >= 9.95 { format!("+{:.0}", l) } else if l > 0.04 { format!("+{:.1}", l) } else { "0.0".to_string() };
+        self.cv.setrgb(inv);
+        self.cv.textc(x, y + 3.0, w, &gs);
+        self.setc(false);
+        // scale: ticks and numbers mirrored around the centre
+        let mj = if rg == 3.0 { 1.0 } else if rg == 6.0 { 2.0 } else if rg == 12.0 { 3.0 } else { 6.0 };
+        let stp = if rg <= 6.0 { 0.5 } else { 1.0 };
+        for j in 1..=((rg / stp) as i32) {
+            let v = j as f32 * stp;
+            let off = (half + 1.0) * (v / rg);
+            for (ty, dir) in [(cy + off, 1.0f32), (cy - off, -1.0)] {
+                if dir < 0.0 && ty < y + 13.0 {
+                    continue; // under the number window
+                }
+                if v == v.floor() && (v.floor() % mj) == 0.0 {
+                    self.cv.fill(x + w - 5.0, ty, 4.0, 1.0);
+                    let s = format!("{}", v as i32);
+                    self.cv.text(x + 2.0, (ty - 4.0).clamp(y + 14.0, y + h - 11.0), &s);
+                } else {
+                    self.cv.fill(x + w - 3.0, ty, 2.0, 1.0);
+                }
             }
         }
     }
@@ -1279,13 +1391,7 @@ impl<'a> Gui<'a> {
         let n = (w - 2.0) as usize;
         let (co, cd) = (self.spec_out.columns(n, sr), self.spec_dry.columns(n, sr));
         let hh = |v: f32| (((v + 100.0) / 95.0).clamp(0.0, 1.0) * (h - 2.0)).floor();
-        let ac = self.cv.ac;
-        let mut inv = [1.0 - ac[0], 1.0 - ac[1], 1.0 - ac[2]];
-        // grey schemes: the inverted accent lands on the background colour, so the gain area vanishes - use solid white (black on a light scheme) then
-        let lum = |c: [f32; 3]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-        if (lum(inv) - lum(self.cv.bk)).abs() < 0.3 {
-            inv = if lum(self.cv.bk) < 0.5 { [1.0; 3] } else { [0.0; 3] };
-        }
+        let inv = self.gain_colour();
         // spectrum look (Appearance): solid UI-colour fill under the output, or background fill with a stroke (accent shows the gap to dry)
         let solid = self.env.params.fft_solid.load(Ordering::Relaxed);
         self.setc(false);
@@ -2255,6 +2361,16 @@ impl<'a> Gui<'a> {
         ];
         for (c, col) in cells.iter().enumerate() {
             let cx = col0 + (CELL_W + 6.0) * c as f32;
+            if c == 1 {
+                // the COMP DOWN / UP switch over RANGE, KNEE over K.SHAPE (two stacked groups, the halves share a border line),
+                // then GR DIST and SPEED as single cells
+                self.up_group(b, cx, rows[0]);
+                self.cell1(o + KNEE, cx, rows[1], CELL_W, 19.0, "KNEE");
+                self.cell1(o + KNEE_SHAPE, cx, rows[1] + 18.0, CELL_W, 20.0, "K.SHAPE");
+                self.cell(o + GR_DIST, cx, rows[2], CELL_W, CELL_H, "GR DIST");
+                self.cell(o + SPEED, cx, rows[3], CELL_W, CELL_H, "SPEED");
+                continue;
+            }
             for (r, (off, lbl)) in col.iter().enumerate() {
                 if *off == COMP_GAIN {
                     self.cell_o(o + off, cx, rows[r], CELL_W, CELL_H, lbl);
@@ -2266,6 +2382,23 @@ impl<'a> Gui<'a> {
                 }
             }
         }
+    }
+
+    /// COMP DOWN / UP mode switch with the RANGE slider (the most the upward mode lifts) stacked under it; the range reads
+    /// dim while the band is in the ordinary downward mode.
+    fn up_group(&mut self, b: usize, x: f32, y: f32) {
+        let n = band_base(b) + UP;
+        let up = self.sget(n) > 0.5;
+        if self.btn(x, y, CELL_W, 19.0, if up { "COMP UP" } else { "COMP DOWN" }, up as u8) {
+            self.click_set(n, if up { 0.0 } else { 1.0 });
+        }
+        let keep = self.kit.dk;
+        if !up {
+            self.set_dk(keep * 0.5);
+        }
+        self.cell1(range_slot(b), x, y + 18.0, CELL_W, 20.0, "RANGE");
+        self.set_dk(keep);
+        self.setc(false);
     }
 
     fn out_column(&mut self, y0: f32) {

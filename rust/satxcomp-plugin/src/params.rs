@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 151;
+pub const SLOTS: usize = 164;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -53,6 +53,8 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (30, "lo_comp_gain", -12.0, 24.0, 0.0),
     (31, "lo_hp", 20.0, 2000.0, 20.0),
     (32, "lo_lp", 200.0, 20000.0, 20000.0),
+    (33, "lo_up", 0.0, 1.0, 0.0),
+    (160, "lo_up_range", 0.0, 24.0, 12.0),
     (34, "mid_on", 0.0, 1.0, 1.0),
     (35, "mid_solo", 0.0, 1.0, 0.0),
     (36, "mid_delta", 0.0, 1.0, 0.0),
@@ -76,6 +78,8 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (54, "mid_comp_gain", -12.0, 24.0, 0.0),
     (55, "mid_hp", 20.0, 2000.0, 20.0),
     (56, "mid_lp", 200.0, 20000.0, 20000.0),
+    (57, "mid_up", 0.0, 1.0, 0.0),
+    (161, "mid_up_range", 0.0, 24.0, 12.0),
     (58, "mh_on", 0.0, 1.0, 1.0),
     (59, "mh_solo", 0.0, 1.0, 0.0),
     (60, "mh_delta", 0.0, 1.0, 0.0),
@@ -99,6 +103,8 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (78, "mh_comp_gain", -12.0, 24.0, 0.0),
     (79, "mh_hp", 20.0, 2000.0, 20.0),
     (80, "mh_lp", 200.0, 20000.0, 20000.0),
+    (81, "mh_up", 0.0, 1.0, 0.0),
+    (162, "mh_up_range", 0.0, 24.0, 12.0),
     (82, "hi_on", 0.0, 1.0, 1.0),
     (83, "hi_solo", 0.0, 1.0, 0.0),
     (84, "hi_delta", 0.0, 1.0, 0.0),
@@ -122,6 +128,8 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (102, "hi_comp_gain", -12.0, 24.0, 0.0),
     (103, "hi_hp", 20.0, 2000.0, 20.0),
     (104, "hi_lp", 200.0, 20000.0, 20000.0),
+    (105, "hi_up", 0.0, 1.0, 0.0),
+    (163, "hi_up_range", 0.0, 24.0, 12.0),
     (120, "eq1_on", 0.0, 1.0, 1.0),
     (121, "eq1_type", 0.0, 5.0, 1.0),
     (122, "eq1_freq", 20.0, 20000.0, 80.0),
@@ -287,6 +295,10 @@ pub struct SatXCompParams {
     pub lo_hp: FloatParam,
     #[id = "lo_lp"]
     pub lo_lp: FloatParam,
+    #[id = "lo_up"]
+    pub lo_up: BoolParam,
+    #[id = "lo_up_range"]
+    pub lo_up_range: FloatParam,
     #[id = "mid_on"]
     pub mid_on: BoolParam,
     #[id = "mid_solo"]
@@ -333,6 +345,10 @@ pub struct SatXCompParams {
     pub mid_hp: FloatParam,
     #[id = "mid_lp"]
     pub mid_lp: FloatParam,
+    #[id = "mid_up"]
+    pub mid_up: BoolParam,
+    #[id = "mid_up_range"]
+    pub mid_up_range: FloatParam,
     #[id = "mh_on"]
     pub mh_on: BoolParam,
     #[id = "mh_solo"]
@@ -379,6 +395,10 @@ pub struct SatXCompParams {
     pub mh_hp: FloatParam,
     #[id = "mh_lp"]
     pub mh_lp: FloatParam,
+    #[id = "mh_up"]
+    pub mh_up: BoolParam,
+    #[id = "mh_up_range"]
+    pub mh_up_range: FloatParam,
     #[id = "hi_on"]
     pub hi_on: BoolParam,
     #[id = "hi_solo"]
@@ -425,6 +445,10 @@ pub struct SatXCompParams {
     pub hi_hp: FloatParam,
     #[id = "hi_lp"]
     pub hi_lp: FloatParam,
+    #[id = "hi_up"]
+    pub hi_up: BoolParam,
+    #[id = "hi_up_range"]
+    pub hi_up_range: FloatParam,
     #[id = "eq1_on"]
     pub eq1_on: BoolParam,
     #[id = "eq1_type"]
@@ -560,6 +584,8 @@ impl SatXCompParams {
             lo_comp_gain: FloatParam::new("Lo Comp Gain", 0.0, FloatRange::Linear { min: -12.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             lo_hp: FloatParam::new("Lo HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             lo_lp: FloatParam::new("Lo LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            lo_up: BoolParam::new("Lo Up", false),
+            lo_up_range: FloatParam::new("Lo Range", 12.0, FloatRange::Linear { min: 0.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             mid_on: BoolParam::new("ML On", true),
             mid_solo: BoolParam::new("ML Solo", false),
             mid_delta: BoolParam::new("ML Delta", false),
@@ -583,6 +609,8 @@ impl SatXCompParams {
             mid_comp_gain: FloatParam::new("ML Comp Gain", 0.0, FloatRange::Linear { min: -12.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             mid_hp: FloatParam::new("ML HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             mid_lp: FloatParam::new("ML LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            mid_up: BoolParam::new("ML Up", false),
+            mid_up_range: FloatParam::new("ML Range", 12.0, FloatRange::Linear { min: 0.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             mh_on: BoolParam::new("MH On", true),
             mh_solo: BoolParam::new("MH Solo", false),
             mh_delta: BoolParam::new("MH Delta", false),
@@ -606,6 +634,8 @@ impl SatXCompParams {
             mh_comp_gain: FloatParam::new("MH Comp Gain", 0.0, FloatRange::Linear { min: -12.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             mh_hp: FloatParam::new("MH HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             mh_lp: FloatParam::new("MH LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            mh_up: BoolParam::new("MH Up", false),
+            mh_up_range: FloatParam::new("MH Range", 12.0, FloatRange::Linear { min: 0.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             hi_on: BoolParam::new("Hi On", true),
             hi_solo: BoolParam::new("Hi Solo", false),
             hi_delta: BoolParam::new("Hi Delta", false),
@@ -629,6 +659,8 @@ impl SatXCompParams {
             hi_comp_gain: FloatParam::new("Hi Comp Gain", 0.0, FloatRange::Linear { min: -12.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             hi_hp: FloatParam::new("Hi HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             hi_lp: FloatParam::new("Hi LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            hi_up: BoolParam::new("Hi Up", false),
+            hi_up_range: FloatParam::new("Hi Range", 12.0, FloatRange::Linear { min: 0.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             eq1_on: BoolParam::new("EQ1 On", true),
             eq1_type: IntParam::new("EQ1 Type", 1, IntRange::Linear { min: 0, max: 5 }),
             eq1_freq: FloatParam::new("EQ1 Freq", 80.0, FloatRange::Linear { min: 20.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
@@ -702,10 +734,10 @@ impl SatXCompParams {
     }
 
     fn to_dsp_with(&self, curves: [Curve; 4], asyms: [[f64; SHAPER_COUNT]; 4]) -> XParams {
-        let lo = BandParams { curve: curves[0], asym: asyms[0], on: self.lo_on.value(), solo: self.lo_solo.value(), delta: self.lo_delta.value(), shape: self.lo_shape.value(), drive: self.lo_drive.value() as f64, bias: self.lo_bias.value() as f64, tone: self.lo_tone.value() as f64, sat_mix: self.lo_sat_mix.value() as f64, sat_gain: self.lo_sat_gain.value() as f64, thresh: self.lo_thresh.value() as f64, ratio: self.lo_ratio.value() as f64, attack: self.lo_attack.value() as f64, release: self.lo_release.value() as f64, speed: self.lo_speed.value() as f64, knee: self.lo_knee.value() as f64, knee_shape: self.lo_knee_shape.value() as f64, detector: self.lo_detector.value() as f64, ff_fb: self.lo_ff_fb.value() as f64, gr_dist: self.lo_gr_dist.value() as f64, comp_mix: self.lo_comp_mix.value() as f64, comp_gain: self.lo_comp_gain.value() as f64, hp: self.lo_hp.value() as f64, lp: self.lo_lp.value() as f64 };
-        let mid = BandParams { curve: curves[1], asym: asyms[1], on: self.mid_on.value(), solo: self.mid_solo.value(), delta: self.mid_delta.value(), shape: self.mid_shape.value(), drive: self.mid_drive.value() as f64, bias: self.mid_bias.value() as f64, tone: self.mid_tone.value() as f64, sat_mix: self.mid_sat_mix.value() as f64, sat_gain: self.mid_sat_gain.value() as f64, thresh: self.mid_thresh.value() as f64, ratio: self.mid_ratio.value() as f64, attack: self.mid_attack.value() as f64, release: self.mid_release.value() as f64, speed: self.mid_speed.value() as f64, knee: self.mid_knee.value() as f64, knee_shape: self.mid_knee_shape.value() as f64, detector: self.mid_detector.value() as f64, ff_fb: self.mid_ff_fb.value() as f64, gr_dist: self.mid_gr_dist.value() as f64, comp_mix: self.mid_comp_mix.value() as f64, comp_gain: self.mid_comp_gain.value() as f64, hp: self.mid_hp.value() as f64, lp: self.mid_lp.value() as f64 };
-        let mh = BandParams { curve: curves[2], asym: asyms[2], on: self.mh_on.value(), solo: self.mh_solo.value(), delta: self.mh_delta.value(), shape: self.mh_shape.value(), drive: self.mh_drive.value() as f64, bias: self.mh_bias.value() as f64, tone: self.mh_tone.value() as f64, sat_mix: self.mh_sat_mix.value() as f64, sat_gain: self.mh_sat_gain.value() as f64, thresh: self.mh_thresh.value() as f64, ratio: self.mh_ratio.value() as f64, attack: self.mh_attack.value() as f64, release: self.mh_release.value() as f64, speed: self.mh_speed.value() as f64, knee: self.mh_knee.value() as f64, knee_shape: self.mh_knee_shape.value() as f64, detector: self.mh_detector.value() as f64, ff_fb: self.mh_ff_fb.value() as f64, gr_dist: self.mh_gr_dist.value() as f64, comp_mix: self.mh_comp_mix.value() as f64, comp_gain: self.mh_comp_gain.value() as f64, hp: self.mh_hp.value() as f64, lp: self.mh_lp.value() as f64 };
-        let hi = BandParams { curve: curves[3], asym: asyms[3], on: self.hi_on.value(), solo: self.hi_solo.value(), delta: self.hi_delta.value(), shape: self.hi_shape.value(), drive: self.hi_drive.value() as f64, bias: self.hi_bias.value() as f64, tone: self.hi_tone.value() as f64, sat_mix: self.hi_sat_mix.value() as f64, sat_gain: self.hi_sat_gain.value() as f64, thresh: self.hi_thresh.value() as f64, ratio: self.hi_ratio.value() as f64, attack: self.hi_attack.value() as f64, release: self.hi_release.value() as f64, speed: self.hi_speed.value() as f64, knee: self.hi_knee.value() as f64, knee_shape: self.hi_knee_shape.value() as f64, detector: self.hi_detector.value() as f64, ff_fb: self.hi_ff_fb.value() as f64, gr_dist: self.hi_gr_dist.value() as f64, comp_mix: self.hi_comp_mix.value() as f64, comp_gain: self.hi_comp_gain.value() as f64, hp: self.hi_hp.value() as f64, lp: self.hi_lp.value() as f64 };
+        let lo = BandParams { curve: curves[0], asym: asyms[0], on: self.lo_on.value(), solo: self.lo_solo.value(), delta: self.lo_delta.value(), shape: self.lo_shape.value(), drive: self.lo_drive.value() as f64, bias: self.lo_bias.value() as f64, tone: self.lo_tone.value() as f64, sat_mix: self.lo_sat_mix.value() as f64, sat_gain: self.lo_sat_gain.value() as f64, thresh: self.lo_thresh.value() as f64, ratio: self.lo_ratio.value() as f64, attack: self.lo_attack.value() as f64, release: self.lo_release.value() as f64, speed: self.lo_speed.value() as f64, knee: self.lo_knee.value() as f64, knee_shape: self.lo_knee_shape.value() as f64, detector: self.lo_detector.value() as f64, ff_fb: self.lo_ff_fb.value() as f64, gr_dist: self.lo_gr_dist.value() as f64, comp_mix: self.lo_comp_mix.value() as f64, comp_gain: self.lo_comp_gain.value() as f64, hp: self.lo_hp.value() as f64, lp: self.lo_lp.value() as f64, up: self.lo_up.value(), up_range: self.lo_up_range.value() as f64 };
+        let mid = BandParams { curve: curves[1], asym: asyms[1], on: self.mid_on.value(), solo: self.mid_solo.value(), delta: self.mid_delta.value(), shape: self.mid_shape.value(), drive: self.mid_drive.value() as f64, bias: self.mid_bias.value() as f64, tone: self.mid_tone.value() as f64, sat_mix: self.mid_sat_mix.value() as f64, sat_gain: self.mid_sat_gain.value() as f64, thresh: self.mid_thresh.value() as f64, ratio: self.mid_ratio.value() as f64, attack: self.mid_attack.value() as f64, release: self.mid_release.value() as f64, speed: self.mid_speed.value() as f64, knee: self.mid_knee.value() as f64, knee_shape: self.mid_knee_shape.value() as f64, detector: self.mid_detector.value() as f64, ff_fb: self.mid_ff_fb.value() as f64, gr_dist: self.mid_gr_dist.value() as f64, comp_mix: self.mid_comp_mix.value() as f64, comp_gain: self.mid_comp_gain.value() as f64, hp: self.mid_hp.value() as f64, lp: self.mid_lp.value() as f64, up: self.mid_up.value(), up_range: self.mid_up_range.value() as f64 };
+        let mh = BandParams { curve: curves[2], asym: asyms[2], on: self.mh_on.value(), solo: self.mh_solo.value(), delta: self.mh_delta.value(), shape: self.mh_shape.value(), drive: self.mh_drive.value() as f64, bias: self.mh_bias.value() as f64, tone: self.mh_tone.value() as f64, sat_mix: self.mh_sat_mix.value() as f64, sat_gain: self.mh_sat_gain.value() as f64, thresh: self.mh_thresh.value() as f64, ratio: self.mh_ratio.value() as f64, attack: self.mh_attack.value() as f64, release: self.mh_release.value() as f64, speed: self.mh_speed.value() as f64, knee: self.mh_knee.value() as f64, knee_shape: self.mh_knee_shape.value() as f64, detector: self.mh_detector.value() as f64, ff_fb: self.mh_ff_fb.value() as f64, gr_dist: self.mh_gr_dist.value() as f64, comp_mix: self.mh_comp_mix.value() as f64, comp_gain: self.mh_comp_gain.value() as f64, hp: self.mh_hp.value() as f64, lp: self.mh_lp.value() as f64, up: self.mh_up.value(), up_range: self.mh_up_range.value() as f64 };
+        let hi = BandParams { curve: curves[3], asym: asyms[3], on: self.hi_on.value(), solo: self.hi_solo.value(), delta: self.hi_delta.value(), shape: self.hi_shape.value(), drive: self.hi_drive.value() as f64, bias: self.hi_bias.value() as f64, tone: self.hi_tone.value() as f64, sat_mix: self.hi_sat_mix.value() as f64, sat_gain: self.hi_sat_gain.value() as f64, thresh: self.hi_thresh.value() as f64, ratio: self.hi_ratio.value() as f64, attack: self.hi_attack.value() as f64, release: self.hi_release.value() as f64, speed: self.hi_speed.value() as f64, knee: self.hi_knee.value() as f64, knee_shape: self.hi_knee_shape.value() as f64, detector: self.hi_detector.value() as f64, ff_fb: self.hi_ff_fb.value() as f64, gr_dist: self.hi_gr_dist.value() as f64, comp_mix: self.hi_comp_mix.value() as f64, comp_gain: self.hi_comp_gain.value() as f64, hp: self.hi_hp.value() as f64, lp: self.hi_lp.value() as f64, up: self.hi_up.value(), up_range: self.hi_up_range.value() as f64 };
         let eq = EqParams { bands: [EqBandParams { on: self.eq1_on.value(), ty: self.eq1_type.value(), freq: self.eq1_freq.value() as f64, q: self.eq1_q.value() as f64, gain: self.eq1_gain.value() as f64 }, EqBandParams { on: self.eq2_on.value(), ty: self.eq2_type.value(), freq: self.eq2_freq.value() as f64, q: self.eq2_q.value() as f64, gain: self.eq2_gain.value() as f64 }, EqBandParams { on: self.eq3_on.value(), ty: self.eq3_type.value(), freq: self.eq3_freq.value() as f64, q: self.eq3_q.value() as f64, gain: self.eq3_gain.value() as f64 }, EqBandParams { on: self.eq4_on.value(), ty: self.eq4_type.value(), freq: self.eq4_freq.value() as f64, q: self.eq4_q.value() as f64, gain: self.eq4_gain.value() as f64 }, EqBandParams { on: self.eq5_on.value(), ty: self.eq5_type.value(), freq: self.eq5_freq.value() as f64, q: self.eq5_q.value() as f64, gain: self.eq5_gain.value() as f64 }], tilt: self.eq_tilt.value() as f64, pivot: self.eq_pivot.value() as f64, mix: self.eq_mix.value() as f64, gain: self.eq_gain.value() as f64, bypass: self.eq_bypass.value() };
         XParams {
             x1: self.x1.value() as f64, x2: self.x2.value() as f64, x3: self.x3.value() as f64, x1_slope: self.x1_slope.value(), x2_slope: self.x2_slope.value(), x3_slope: self.x3_slope.value(), os: self.os.value(), lookahead_ms: self.lookahead.value() as f64,
@@ -758,6 +790,8 @@ impl SatXCompParams {
             30 => self.lo_comp_gain.as_ptr(),
             31 => self.lo_hp.as_ptr(),
             32 => self.lo_lp.as_ptr(),
+            33 => self.lo_up.as_ptr(),
+            160 => self.lo_up_range.as_ptr(),
             34 => self.mid_on.as_ptr(),
             35 => self.mid_solo.as_ptr(),
             36 => self.mid_delta.as_ptr(),
@@ -781,6 +815,8 @@ impl SatXCompParams {
             54 => self.mid_comp_gain.as_ptr(),
             55 => self.mid_hp.as_ptr(),
             56 => self.mid_lp.as_ptr(),
+            57 => self.mid_up.as_ptr(),
+            161 => self.mid_up_range.as_ptr(),
             58 => self.mh_on.as_ptr(),
             59 => self.mh_solo.as_ptr(),
             60 => self.mh_delta.as_ptr(),
@@ -804,6 +840,8 @@ impl SatXCompParams {
             78 => self.mh_comp_gain.as_ptr(),
             79 => self.mh_hp.as_ptr(),
             80 => self.mh_lp.as_ptr(),
+            81 => self.mh_up.as_ptr(),
+            162 => self.mh_up_range.as_ptr(),
             82 => self.hi_on.as_ptr(),
             83 => self.hi_solo.as_ptr(),
             84 => self.hi_delta.as_ptr(),
@@ -827,6 +865,8 @@ impl SatXCompParams {
             102 => self.hi_comp_gain.as_ptr(),
             103 => self.hi_hp.as_ptr(),
             104 => self.hi_lp.as_ptr(),
+            105 => self.hi_up.as_ptr(),
+            163 => self.hi_up_range.as_ptr(),
             120 => self.eq1_on.as_ptr(),
             121 => self.eq1_type.as_ptr(),
             122 => self.eq1_freq.as_ptr(),

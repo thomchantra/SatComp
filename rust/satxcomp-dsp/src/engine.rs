@@ -119,6 +119,9 @@ pub struct XEngine {
     /// per band: gain reduction (dB) of the current block / peak since the owner last cleared it
     pub gr_blk: [f64; NB],
     pub gr_pk: [f64; NB],
+    /// per band gain lift of the upward compressor (dB, >= 0), block value and the peak accumulated like `gr_pk`
+    pub gl_blk: [f64; NB],
+    pub gl_pk: [f64; NB],
     /// per band: level change across the strip (output vs the band's input, dB; saturator gain and compression included)
     pub band_diff: [f64; NB],
     bi_ms: [f64; NB],
@@ -204,6 +207,8 @@ impl XEngine {
             clip_f: false,
             gr_blk: [0.0; NB],
             gr_pk: [0.0; NB],
+            gl_blk: [0.0; NB],
+            gl_pk: [0.0; NB],
             band_diff: [0.0; NB],
             bi_ms: [1e-9; NB],
             bo_ms: [1e-9; NB],
@@ -368,6 +373,9 @@ impl XEngine {
             self.band_diff[b] = if self.bi_ms[b] > 1e-8 { DB_POW * (self.bo_ms[b].max(1e-12) / self.bi_ms[b]).ln() } else { 0.0 };
             self.gr_blk[b] = self.strips[b].gr_blk;
             self.gr_pk[b] = self.gr_pk[b].max(self.gr_blk[b]);
+            self.gl_blk[b] = self.strips[b].gl_blk;
+            self.gl_pk[b] = self.gl_pk[b].max(self.gl_blk[b]);
+            self.strips[b].gl_blk = 0.0;
             self.strips[b].gr_blk = 0.0;
         }
         for b in 0..NB {
@@ -804,6 +812,27 @@ mod tests {
         e.set_params(&p);
         run(&mut e, &tone);
         assert!(e.eq_diff.abs() < 0.5, "eq mix 0 should read 0 dB, got {}", e.eq_diff);
+    }
+
+    #[test]
+    fn a_band_in_upward_mode_lifts_quiet_material_and_reports_the_lift_not_a_reduction() {
+        // a -50 dB low tone with the threshold at -30 dB, ratio 2: lifted by about 10 dB, only in the band that is switched to UP
+        let tone = sine(48000 * 2, 80.0, 0.00316);
+        let mut p = neutral();
+        p.bands[0].thresh = -30.0;
+        p.bands[0].ratio = 2.0;
+        p.bands[0].knee = 0.0;
+        p.bands[0].up = true;
+        p.bands[0].up_range = 12.0;
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        let out = run(&mut e, &tone);
+        let (i, o) = (rms(&tone[48000..]), rms(&out[48000..]));
+        let gain = 20.0 * (o / i).log10();
+        assert!(gain > 6.0 && gain < 12.5, "band lifted by {gain} dB");
+        assert!(e.gl_pk[0] > 6.0, "lift reported: {}", e.gl_pk[0]);
+        assert_eq!(e.gr_pk[0], 0.0, "no reduction in upward mode");
+        assert!(e.gl_pk[1] == 0.0 && e.gl_pk[2] == 0.0 && e.gl_pk[3] == 0.0, "other bands untouched: {:?}", e.gl_pk);
     }
 
     #[test]

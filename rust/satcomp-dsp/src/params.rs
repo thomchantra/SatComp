@@ -111,6 +111,8 @@ impl Params {
             ff_fb: self.ff_fb,
             gr_dist: self.gr_dist,
             key_mix: self.sc_mix,
+            up: false,
+            up_range: 12.0,
         }
     }
 }

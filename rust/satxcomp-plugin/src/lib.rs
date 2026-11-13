@@ -26,6 +26,8 @@ pub struct Shared {
     pub opk: [AtomicF32; 2],
     pub clip: AtomicBool,
     pub gr_pk: [AtomicF32; 4],
+    /// per band: gain lift of the upward compressor (dB, >= 0), accumulated like `gr_pk`
+    pub gl_pk: [AtomicF32; 4],
     /// per band: level change across the strip, dB
     pub band_diff: [AtomicF32; 4],
     /// output limiter gain reduction (dB, positive), accumulated like `gr_pk`
@@ -71,6 +73,7 @@ impl Shared {
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
             clip: AtomicBool::new(false),
             gr_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
+            gl_pk: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             band_diff: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
             lim_gr_pk: AtomicF32::new(0.0),
             sat_vz: [AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0), AtomicF32::new(0.0)],
@@ -230,6 +233,8 @@ impl Plugin for SatXComp {
         for b in 0..4 {
             sh.gr_pk[b].fetch_max(e.gr_pk[b] as f32, Ordering::Relaxed);
             e.gr_pk[b] = 0.0;
+            sh.gl_pk[b].fetch_max(e.gl_pk[b] as f32, Ordering::Relaxed);
+            e.gl_pk[b] = 0.0;
             sh.band_diff[b].store(e.band_diff[b] as f32, Ordering::Relaxed);
         }
         for b in 0..4 {

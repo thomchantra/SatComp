@@ -41,6 +41,10 @@ pub struct BandParams {
     pub comp_mix: f64,
     /// dB after the compressor
     pub comp_gain: f64,
+    /// upward compression: lift what is below the threshold instead of reducing what is above it
+    pub up: bool,
+    /// dB: the most the upward mode lifts
+    pub up_range: f64,
 }
 
 impl Default for BandParams {
@@ -71,6 +75,8 @@ impl Default for BandParams {
             gr_dist: 0.0,
             comp_mix: 100.0,
             comp_gain: 0.0,
+            up: false,
+            up_range: 12.0,
         }
     }
 }
