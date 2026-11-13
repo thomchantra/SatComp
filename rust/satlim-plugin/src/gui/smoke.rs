@@ -113,6 +113,9 @@ impl Rig {
     /// the host closed and reopened the editor: egui's clock restarts from zero while the UI state lives on
     fn reopen_editor(&mut self) {
         self.t = 0.0;
+        // a reopened editor is a new egui context (its history panics if the clock runs backwards)
+        self.ctx = egui::Context::default();
+        satcomp_ui::init_ctx(&self.ctx);
     }
 
     fn rclick(&mut self, x: f32, y: f32) {
@@ -336,4 +339,21 @@ fn preferences_set_as_default_writes_the_shared_file_and_reset_clears_it() {
     assert!(load_defaults().is_none(), "RESET TO FACTORY removes the file");
     assert!(!r.params.light.load(std::sync::atomic::Ordering::Relaxed), "and puts this instance back on the factory look");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_project_restored_after_the_editor_was_built_keeps_its_saved_look() {
+    use std::sync::atomic::Ordering::Relaxed;
+    // nih-plug builds the editor first and the host restores the project's parameters afterwards
+    let mut r = Rig::new();
+    assert_eq!((r.st.pal, r.st.light, r.st.face), (0, false, 0));
+    r.params.palette_v2.store(5, Relaxed);
+    r.params.light.store(true, Relaxed);
+    r.params.font.store(2, Relaxed);
+    r.st.sync_look(&r.params); // what opening the window does
+    assert_eq!((r.st.pal, r.st.light, r.st.face), (5, true, 2));
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    assert_eq!(r.params.palette_v2.load(Relaxed), 5, "drawing must not overwrite the restored scheme");
 }

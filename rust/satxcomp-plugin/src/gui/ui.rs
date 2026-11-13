@@ -397,6 +397,17 @@ impl State {
         }
     }
 
+    /// nih-plug builds the editor (and so this state) when the plug-in is created, BEFORE the host restores the project's
+    /// saved parameters. Re-read the saved look every time the window opens, otherwise a project reopens on the defaults.
+    pub fn sync_look(&mut self, params: &SatXCompParams) {
+        let pal = params.palette_v2.load(Ordering::Relaxed).max(0) as usize;
+        self.pal = self.app.restore_custom(pal, &params.custom_theme.lock());
+        params.palette_v2.store(self.pal as i32, Ordering::Relaxed);
+        self.light = params.light.load(Ordering::Relaxed);
+        self.face = (params.font.load(Ordering::Relaxed).max(0) as usize).min(satcomp_ui::canvas::FONT_NAMES.len() - 1);
+        self.scope_cfg = params.scope.load(Ordering::Relaxed);
+    }
+
     /// Colours the canvas draws with: the editor preview while editing, else the active scheme.
     pub fn colors(&self) -> [f32; 9] {
         self.app.colors(self.pal, self.light)

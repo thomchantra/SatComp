@@ -57,5 +57,9 @@ pub(crate) fn run_frame(ctx: &egui::Context, setter: &nih_plug::prelude::ParamSe
 pub fn create(params: Arc<SatXCompParams>, shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
     let state = State::new(&params);
     let editor_state = params.editor_state.clone();
-    create_egui_editor(editor_state, state, |ctx, _| init_ctx(ctx), move |ctx, setter, st| run_frame(ctx, setter, st, &params, &shared))
+    let look_params = params.clone();
+    create_egui_editor(editor_state, state, move |ctx, st| {
+        init_ctx(ctx);
+        st.sync_look(&look_params);
+    }, move |ctx, setter, st| run_frame(ctx, setter, st, &params, &shared))
 }

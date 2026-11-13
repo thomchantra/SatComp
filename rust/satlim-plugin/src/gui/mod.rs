@@ -60,5 +60,9 @@ pub fn create(params: Arc<SatLimParams>, shared: Arc<Shared>) -> Option<Box<dyn 
     let face = params.font.load(std::sync::atomic::Ordering::Relaxed).clamp(0, FONT_NAMES.len() as i32 - 1) as usize;
     let state = State::new(pal, light, face, &params);
     let editor_state = params.editor_state.clone();
-    create_egui_editor(editor_state, state, |ctx, _| init_ctx(ctx), move |ctx, setter, st| run_frame(ctx, setter, st, &params, &shared))
+    let look_params = params.clone();
+    create_egui_editor(editor_state, state, move |ctx, st| {
+            init_ctx(ctx);
+            st.sync_look(&look_params);
+        }, move |ctx, setter, st| run_frame(ctx, setter, st, &params, &shared))
 }

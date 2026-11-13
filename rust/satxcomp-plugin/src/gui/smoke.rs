@@ -542,3 +542,20 @@ fn draw_view_has_a_symmetry_tool_and_a_free_tool() {
     r.click(99.0, 300.0);
     assert_eq!(r.params.curve_snapshot(0).n, n_fold, "a closed view must not edit the curve");
 }
+
+#[test]
+fn a_project_restored_after_the_editor_was_built_keeps_its_saved_look() {
+    use std::sync::atomic::Ordering::Relaxed;
+    // nih-plug builds the editor first and the host restores the project's parameters afterwards
+    let mut r = Rig::new();
+    assert_eq!((r.st.pal, r.st.light, r.st.face), (0, false, 0));
+    r.params.palette_v2.store(5, Relaxed);
+    r.params.light.store(true, Relaxed);
+    r.params.font.store(2, Relaxed);
+    r.st.sync_look(&r.params); // what opening the window does
+    assert_eq!((r.st.pal, r.st.light, r.st.face), (5, true, 2));
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    assert_eq!(r.params.palette_v2.load(Relaxed), 5, "drawing must not overwrite the restored scheme");
+}

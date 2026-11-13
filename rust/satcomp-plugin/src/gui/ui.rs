@@ -320,6 +320,17 @@ impl State {
         self.app.colors(self.pal, self.light)
     }
 
+    /// nih-plug builds the editor (and so this state) when the plug-in is created, BEFORE the host restores the project's
+    /// saved parameters. Re-read the saved look every time the window opens, otherwise a project reopens on the defaults.
+    pub fn sync_look(&mut self, params: &SatCompParams) {
+        let (pal, light) = initial_palette(params);
+        self.pal = pal;
+        self.light = light;
+        self.face = (params.font.load(Ordering::Relaxed).max(0) as usize).min(satcomp_ui::canvas::FONT_NAMES.len() - 1);
+        self.scope_cfg = params.scope.load(Ordering::Relaxed);
+        self.restore_custom(params);
+    }
+
     /// A project that used a user theme: resolve it from the themes file or the project copy.
     pub fn restore_custom(&mut self, params: &SatCompParams) {
         let pal = self.app.restore_custom(self.pal, &params.custom_theme.lock());
