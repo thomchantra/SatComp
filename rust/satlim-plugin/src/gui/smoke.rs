@@ -327,7 +327,7 @@ fn preferences_set_as_default_writes_the_shared_file_and_reset_clears_it() {
         r.frame(vec![]);
     }
     r.click(208.0, 64.0); // LIGHT
-    r.click(90.0, 459.0); // SET AS DEFAULT
+    r.click(90.0, 433.0); // SET AS DEFAULT
     let d = load_defaults().expect("SET AS DEFAULT writes defaults.json");
     assert!(d.light, "the current look is what gets saved");
     assert_eq!((d.pal, d.face), (0, 0));
@@ -335,7 +335,7 @@ fn preferences_set_as_default_writes_the_shared_file_and_reset_clears_it() {
     // a new instance picks it up, a project restore would then overwrite it
     let p = SatLimParams::from_defaults(Some(d));
     assert!(p.light.load(std::sync::atomic::Ordering::Relaxed));
-    r.click(250.0, 459.0); // RESET TO FACTORY
+    r.click(250.0, 433.0); // RESET TO FACTORY
     assert!(load_defaults().is_none(), "RESET TO FACTORY removes the file");
     assert!(!r.params.light.load(std::sync::atomic::Ordering::Relaxed), "and puts this instance back on the factory look");
     let _ = std::fs::remove_dir_all(&dir);
@@ -356,4 +356,27 @@ fn a_project_restored_after_the_editor_was_built_keeps_its_saved_look() {
         r.frame(vec![]);
     }
     assert_eq!(r.params.palette_v2.load(Relaxed), 5, "drawing must not overwrite the restored scheme");
+}
+
+#[test]
+fn the_font_dropdown_opens_over_the_page_and_picks_a_face() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut r = Rig::new();
+    r.click(60.0, 12.0); // About
+    r.click(182.0, 38.0); // PREFERENCES tab
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    let pal = r.params.palette_v2.load(Relaxed);
+    r.click(150.0, 411.0); // the FONT dropdown
+    assert!(r.st.app.font_open, "the list should be open");
+    r.click(150.0, 378.0); // 8th entry, Victor Mono, drawn over the scheme list
+    assert_eq!(r.params.font.load(Relaxed), 7, "Victor Mono");
+    assert!(!r.st.app.font_open, "picking closes the list");
+    assert_eq!(r.params.palette_v2.load(Relaxed), pal, "the click must not reach the scheme list under the open list");
+    r.click(150.0, 411.0);
+    r.click(20.0, 300.0); // a click elsewhere closes it without changing anything
+    assert!(!r.st.app.font_open);
+    assert_eq!(r.params.font.load(Relaxed), 7);
+    assert!(r.log().is_empty(), "UI-only, no host writes: {:?}", r.log());
 }

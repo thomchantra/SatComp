@@ -95,6 +95,24 @@ pub fn save_defaults(d: &Defaults) {
     }
 }
 
+/// Show a folder in the system file browser (created first, so a fresh install opens somewhere).
+pub fn open_folder(dir: Option<PathBuf>) {
+    let Some(dir) = dir else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(windows)]
+    let opener = "explorer";
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let opener = "xdg-open";
+    let _ = std::process::Command::new(opener).arg(&dir).spawn();
+}
+
+/// The folder with `themes.json` and `defaults.json` (shared by the three plug-ins).
+pub fn settings_dir() -> Option<PathBuf> {
+    data_dir()
+}
+
 /// Back to the factory look for new instances.
 pub fn clear_defaults() {
     if let Some(p) = defaults_path() {
@@ -279,6 +297,8 @@ pub struct AppState {
     del_arm: f64,
     /// feedback line on the Preferences page: (time it was set, text)
     pub note: (f64, &'static str),
+    /// the font dropdown on the Preferences page is open
+    pub font_open: bool,
     pub themes: Vec<UserTheme>,
     pub edit: Option<ThemeEdit>,
     pub real_in: RealInput,
@@ -286,7 +306,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), themes: load_themes(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
+        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), font_open: false, themes: load_themes(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
     }
 
     /// The egui clock restarted (editor reopened): re-base stored timestamps.
@@ -373,6 +393,8 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
     /// Current window scale (1.0 = the plug-in's base size) and a request to change it.
     fn scale_now(&self) -> f32;
     fn set_scale(&mut self, scale: f32);
+    /// This plug-in's user preset folder.
+    fn presets_dir(&self) -> Option<PathBuf>;
     /// The scale a fresh instance opens at when no defaults file exists.
     fn factory_scale(&self) -> f32;
     /// Factory spectrum / scope fill (for plug-ins that have the switch).
@@ -579,9 +601,32 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         // a narrow page puts the fill switch on a row of its own under COLOR MODE (everything below moves down)
         let narrow = r.w < 460.0 && self.fft_solid().is_some();
         let hx = if narrow { 22.0 } else { 0.0 };
-        let rows = ((r.h - 266.0 - hx) / RH).floor().max(0.0) as usize + 5;
+        let rows = ((r.h - 232.0 - hx) / RH).floor().max(0.0) as usize + 5;
         let extra = (rows - 5) as f32 * RH;
         let (lx, ly, lw) = (r.x + 8.0, r.y + 42.0 + hx, r.w - 16.0);
+        // Font dropdown: its list opens upwards over the page. The press is taken here, before anything under the list sees
+        // it, and the list itself is drawn last (end of this function).
+        const FH: f32 = 15.0;
+        let fy = r.y + 152.0 + extra + hx;
+        let n_fonts = FONT_NAMES.len();
+        let (dx, dw) = (lx + 44.0, lw - 44.0);
+        let list_h = n_fonts as f32 * FH + 2.0;
+        let list_y = (fy - 4.0 - list_h).max(r.y + 2.0);
+        let was_open = self.app_ref().font_open;
+        let real = {
+            let k = self.kit_ref();
+            (k.press, k.down, k.rpress, k.wheel, k.mx, k.my)
+        };
+        if was_open {
+            if real.0 && self.kit_ref().act == 0 {
+                if real.4 >= dx && real.4 < dx + dw && real.5 >= list_y && real.5 < list_y + list_h {
+                    let i = (((real.5 - list_y - 1.0) / FH).floor().max(0.0) as usize).min(n_fonts - 1);
+                    self.commit_face(i);
+                }
+                self.app().font_open = false;
+            }
+            self.mask_in(); // the page underneath is inert while the list is open
+        }
         self.cv().boxr(r.x, r.y, r.w, r.h);
         self.setc(false);
         self.cv().set_font(1);
@@ -700,45 +745,76 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         self.cv().fill(tx + 1.0, top.floor(), 5.0, thumb);
         self.setc(false);
 
-        // ---- font
-        let fy = r.y + 152.0 + extra + hx;
+        // ---- font (dropdown) and the buttons under it
+        self.setc(false);
         self.cv().text(lx, fy, "FONT");
         let face = self.face();
-        let fw = ((lw - 8.0) * 0.5).floor();
-        for (i, name) in FONT_NAMES.iter().enumerate() {
-            let (x, y, w, h) = (lx + (i % 2) as f32 * (fw + 8.0), fy + 12.0 + (i / 2) as f32 * 24.0, fw, 20.0);
-            let on = face == i;
-            if self.hit(x, y, w, h) && self.kit_ref().press && self.kit_ref().act == 0 {
-                self.commit_face(i.min(FONT_NAMES.len() - 1));
-                self.kit().press = false;
-            }
-            self.setc(false);
-            if on {
-                self.cv().fill(x, y, w, h);
-                self.cv().setbg();
-            } else {
-                self.cv().boxr(x, y, w, h);
-            }
-            let keep = self.cv().face;
-            self.cv().face = i; // each name is drawn in its own typeface
-            self.cv().textc(x, y + 6.0, w, name);
-            self.cv().face = keep;
+        if !was_open && self.hit(dx, fy - 4.0, dw, 18.0) && self.kit_ref().press && self.kit_ref().act == 0 {
+            self.app().font_open = true;
+            self.kit().press = false;
         }
         self.setc(false);
+        self.cv().boxr(dx, fy - 4.0, dw, 18.0);
+        let keep = self.cv().face;
+        self.cv().face = face; // the name is drawn in its own typeface
+        self.cv().text(dx + 6.0, fy, FONT_NAMES[face]);
+        self.cv().face = keep;
+        let (ax, ay) = (dx + dw - 10.0, fy + 3.0);
+        self.cv().line(ax - 3.0, ay - 1.0, ax, ay + 2.0);
+        self.cv().line(ax, ay + 2.0, ax + 3.0, ay - 1.0);
+
         let bw = ((lw - 8.0) * 0.5).floor();
-        let by = fy + 86.0;
+        let by = fy + 20.0;
         if self.btn(lx, by, bw, 14.0, "SET AS DEFAULT", 0) {
             self.save_as_default();
         }
         if self.btn(lx + bw + 8.0, by, bw, 14.0, "RESET TO FACTORY", 0) {
             self.reset_to_factory();
         }
+        if self.btn(lx, by + 18.0, bw, 14.0, "OPEN PRESETS", 0) {
+            open_folder(self.presets_dir());
+        }
+        if self.btn(lx + bw + 8.0, by + 18.0, bw, 14.0, "OPEN SETTINGS", 0) {
+            open_folder(settings_dir());
+        }
         self.setc(false);
         let (t0, note) = self.app_ref().note;
         if self.kit_ref().now - t0 < 4.0 {
-            self.cv().text(lx, by + 17.0, note);
+            self.cv().text(lx, by + 38.0, note);
         } else {
-            self.cv().text(lx, by + 17.0, "Saved with the project. Fonts: SIL OFL 1.1");
+            self.cv().text(lx, by + 38.0, "Fonts: SIL OFL 1.1. Saved with the project.");
+        }
+
+        // ---- the open font list, on top of everything
+        if was_open {
+            let k = self.kit();
+            k.press = real.0;
+            k.down = real.1;
+            k.rpress = real.2;
+            k.wheel = real.3;
+            k.mx = real.4;
+            k.my = real.5;
+            self.cv().setbg();
+            self.cv().fill(dx, list_y, dw, list_h);
+            self.setc(false);
+            self.cv().boxr(dx, list_y, dw, list_h);
+            for (i, name) in FONT_NAMES.iter().enumerate() {
+                let y = list_y + 1.0 + i as f32 * FH;
+                let hov = real.4 >= dx && real.4 < dx + dw && real.5 >= y && real.5 < y + FH;
+                self.setc(false);
+                let on = i == face;
+                if on {
+                    self.cv().fill(dx + 1.0, y, dw - 2.0, FH);
+                    self.cv().setbg();
+                } else if hov {
+                    self.cv().boxr(dx + 2.0, y + 1.0, dw - 4.0, FH - 2.0);
+                }
+                let keep = self.cv().face;
+                self.cv().face = i;
+                self.cv().text(dx + 6.0, y + 4.0, name);
+                self.cv().face = keep;
+            }
+            self.setc(false);
         }
     }
 

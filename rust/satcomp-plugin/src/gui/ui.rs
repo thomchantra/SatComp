@@ -435,6 +435,9 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
         self.env.params.light.store(light, Ordering::Relaxed);
         self.apply_pal();
     }
+    fn presets_dir(&self) -> Option<std::path::PathBuf> {
+        crate::presets::user_dir()
+    }
     fn scale_now(&self) -> f32 {
         self.cur_scale()
     }

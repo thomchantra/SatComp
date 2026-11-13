@@ -40,7 +40,7 @@ pub const PALETTES: [(&str, [f32; 9], [f32; 9]); 20] = [
 ];
 
 /// Selectable UI fonts (index persisted as `ui-font`: append, do not reorder). All are SIL OFL 1.1.
-pub const FONT_NAMES: [&str; 6] = ["Fira Code", "JetBrains Mono", "Geist Mono", "Roboto Mono", "Oxygen Mono", "Doto"];
+pub const FONT_NAMES: [&str; 9] = ["Fira Code", "JetBrains Mono", "Geist Mono", "Roboto Mono", "Oxygen Mono", "Doto", "DM Mono", "Victor Mono", "Anonymous Pro"];
 
 pub fn font_family(i: usize) -> FontFamily {
     FontFamily::Name(format!("f{i}").into())
