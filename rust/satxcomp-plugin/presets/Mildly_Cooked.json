@@ -1,0 +1,202 @@
+{
+  "format": "satxcomp-preset",
+  "version": 1,
+  "name": "Mildly Cooked",
+  "params": {
+    "eq1_freq": 80.0,
+    "eq1_gain": 0.0,
+    "eq1_on": 1.0,
+    "eq1_q": 0.71,
+    "eq1_type": 1.0,
+    "eq2_freq": 200.0,
+    "eq2_gain": 0.0,
+    "eq2_on": 1.0,
+    "eq2_q": 0.71,
+    "eq2_type": 2.0,
+    "eq3_freq": 1000.0,
+    "eq3_gain": 0.0,
+    "eq3_on": 0.0,
+    "eq3_q": 0.71,
+    "eq3_type": 2.0,
+    "eq4_freq": 5000.0,
+    "eq4_gain": 0.0,
+    "eq4_on": 0.0,
+    "eq4_q": 0.71,
+    "eq4_type": 2.0,
+    "eq5_freq": 10000.0,
+    "eq5_gain": 0.0,
+    "eq5_on": 1.0,
+    "eq5_q": 0.71,
+    "eq5_type": 1.0,
+    "eq_bypass": 0.0,
+    "eq_gain": 0.0,
+    "eq_mix": 100.0,
+    "eq_pivot": 600.0,
+    "eq_tilt": 0.0,
+    "hi_attack": 1.13,
+    "hi_bias": 0.0,
+    "hi_comp_gain": 0.0,
+    "hi_comp_mix": 100.0,
+    "hi_delta": 0.0,
+    "hi_detector": 36.0,
+    "hi_drive": 22.5,
+    "hi_ff_fb": 0.0,
+    "hi_gr_dist": 0.0,
+    "hi_hp": 20.0,
+    "hi_knee": 6.0,
+    "hi_knee_shape": 0.0,
+    "hi_lp": 20000.0,
+    "hi_on": 1.0,
+    "hi_ratio": 2.0,
+    "hi_release": 11.0,
+    "hi_sat_gain": 0.0,
+    "hi_sat_mix": 100.0,
+    "hi_shape": 2.0,
+    "hi_solo": 0.0,
+    "hi_speed": 50.0,
+    "hi_thresh": -21.8,
+    "hi_tone": 20000.0,
+    "lim_on": 1.0,
+    "lo_attack": 45.05,
+    "lo_bias": 0.0,
+    "lo_comp_gain": 7.3,
+    "lo_comp_mix": 100.0,
+    "lo_delta": 0.0,
+    "lo_detector": 30.0,
+    "lo_drive": 28.5,
+    "lo_ff_fb": 0.0,
+    "lo_gr_dist": 0.0,
+    "lo_hp": 20.0,
+    "lo_knee": 6.0,
+    "lo_knee_shape": 0.0,
+    "lo_lp": 20000.0,
+    "lo_on": 1.0,
+    "lo_ratio": 4.0,
+    "lo_release": 272.0,
+    "lo_sat_gain": 0.0,
+    "lo_sat_mix": 100.0,
+    "lo_shape": 5.0,
+    "lo_solo": 0.0,
+    "lo_speed": 50.0,
+    "lo_thresh": -25.6,
+    "lo_tone": 20000.0,
+    "lookahead": 0.0,
+    "mh_attack": 14.71,
+    "mh_bias": 12.0,
+    "mh_comp_gain": 4.1,
+    "mh_comp_mix": 100.0,
+    "mh_delta": 0.0,
+    "mh_detector": 30.0,
+    "mh_drive": 30.5,
+    "mh_ff_fb": 36.0,
+    "mh_gr_dist": 0.0,
+    "mh_hp": 20.0,
+    "mh_knee": 6.0,
+    "mh_knee_shape": 0.0,
+    "mh_lp": 20000.0,
+    "mh_on": 1.0,
+    "mh_ratio": 4.0,
+    "mh_release": 54.0,
+    "mh_sat_gain": 0.0,
+    "mh_sat_mix": 50.0,
+    "mh_shape": 14.0,
+    "mh_solo": 0.0,
+    "mh_speed": 0.0,
+    "mh_thresh": -21.2,
+    "mh_tone": 20000.0,
+    "mid_attack": 20.69,
+    "mid_bias": 0.0,
+    "mid_comp_gain": 8.3,
+    "mid_comp_mix": 51.0,
+    "mid_delta": 0.0,
+    "mid_detector": 30.0,
+    "mid_drive": 0.0,
+    "mid_ff_fb": 0.0,
+    "mid_gr_dist": 0.0,
+    "mid_hp": 20.0,
+    "mid_knee": 6.0,
+    "mid_knee_shape": 0.0,
+    "mid_lp": 20000.0,
+    "mid_on": 1.0,
+    "mid_ratio": 4.0,
+    "mid_release": 302.0,
+    "mid_sat_gain": 0.0,
+    "mid_sat_mix": 100.0,
+    "mid_shape": 0.0,
+    "mid_solo": 0.0,
+    "mid_speed": 50.0,
+    "mid_thresh": -40.0,
+    "mid_tone": 20000.0,
+    "mix": 100.0,
+    "os": 0.0,
+    "out_gain": 0.0,
+    "sc_gain": 0.0,
+    "sc_hp": 20.0,
+    "sc_lp": 20000.0,
+    "sc_mix": 100.0,
+    "x1": 200.0,
+    "x1_slope": 1.0,
+    "x2": 310.0,
+    "x2_slope": 1.0,
+    "x3": 2861.0,
+    "x3_slope": 1.0
+  },
+  "curves": [
+    [
+      [
+        -1.0,
+        -1.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ],
+    [
+      [
+        -1.0,
+        -1.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ],
+    [
+      [
+        -1.0,
+        -1.0
+      ],
+      [
+        -0.8258,
+        0.8557
+      ],
+      [
+        -0.3183,
+        -0.0942
+      ],
+      [
+        0.3183,
+        0.0942
+      ],
+      [
+        0.8258,
+        -0.8557
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ],
+    [
+      [
+        -1.0,
+        -1.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ]
+  ]
+}

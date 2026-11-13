@@ -229,6 +229,23 @@ mod tests {
     }
 
     #[test]
+    fn the_factory_bank_has_the_four_presets_with_known_ids_and_values_in_range() {
+        let f = factory();
+        for want in ["DRUMS_Smiley", "DRUMS_UTubes", "Deep n Bright", "Mildly Cooked"] {
+            assert!(f.iter().any(|p| p.name == want), "missing factory preset {want}");
+        }
+        for p in &f {
+            for (k, v) in &p.params {
+                let e = TABLE.iter().find(|e| e.1 == k).unwrap_or_else(|| panic!("{}: unknown id {k}", p.name));
+                assert!(*v >= e.2 - 1e-3 && *v <= e.3 + 1e-3, "{}: {k} = {v} outside {}..{}", p.name, e.2, e.3);
+                assert!(!EXCLUDED.contains(&k.as_str()), "{}: stores {k}", p.name);
+            }
+        }
+        let mc = f.iter().find(|p| p.name == "Mildly Cooked").unwrap();
+        assert!(!mc.curves.is_empty(), "Mildly Cooked carries its custom curves");
+    }
+
+    #[test]
     fn factory_starts_with_init() {
         assert_eq!(factory()[0].name, "INIT");
     }
