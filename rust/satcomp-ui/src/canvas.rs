@@ -105,22 +105,14 @@ fn hue_sat(c: [f32; 3]) -> (f32, f32) {
     (h * 60.0, d / mx)
 }
 
-/// True when a scheme has no real hue to invert: the accent is (nearly) grey, or the chromatic swatches all sit within ~30 degrees of each other.
+/// True when a scheme is neutral on all three swatches (background, UI colour and accent all have almost no saturation):
+/// there is no hue to invert. One tinted swatch, or a theme whose swatches all lean into the same hue, still counts as colour.
 pub fn is_grey_scheme(bk: [f32; 3], fg: [f32; 3], ac: [f32; 3]) -> bool {
-    let hs: Vec<(f32, f32)> = [bk, fg, ac].iter().map(|&c| hue_sat(c)).collect();
-    if hs[2].1 < 0.2 {
-        return true;
-    }
-    let ch: Vec<f32> = hs.iter().filter(|h| h.1 >= 0.2).map(|h| h.0).collect();
-    ch.len() >= 3
-        && (0..ch.len()).all(|i| (0..ch.len()).all(|j| {
-            let d = (ch[i] - ch[j]).abs();
-            d.min(360.0 - d) < 30.0
-        }))
+    [bk, fg, ac].iter().all(|&c| hue_sat(c).1 < 0.15)
 }
 
 /// Colour of gain that is ADDED (spectrum gain area, upward-compressor lift): the inverse of the accent, kept readable on the background.
-/// A dark inverse is lightened toward white (a light scheme: darkened toward black) until it stands off the background; greyscale
+/// A dark inverse is lightened toward white (a light scheme: darkened toward black) until it stands off the background; neutral
 /// schemes (see `is_grey_scheme`) and inverses that cannot be made to stand off use white, or black on a light scheme.
 pub fn gain_colour(bk: [f32; 3], fg: [f32; 3], ac: [f32; 3]) -> [f32; 3] {
     let dark_bg = lum(bk) < 0.5;
