@@ -13,8 +13,8 @@ use satcomp_dsp::level::{ms_step, one_pole, Matcher, DB_AMP, LN10_20};
 use satcomp_dsp::{Limiter, SatParams, Saturator, ScopeRing, TruePeak};
 use std::sync::Arc;
 
-/// Delay ring length: larger than the longest latency (30 + 30 + 288 at 192 kHz).
-const RING: usize = 512;
+/// Delay ring length: larger than the longest latency (30 + 30 + the limiter's 32 + 952 at the highest rates).
+const RING: usize = 2048;
 
 pub struct LimEngine {
     sr: f64,
@@ -90,8 +90,13 @@ impl LimEngine {
             sat: Saturator::new(),
             taps: Taps::new(),
             ov: [Oversampler::default(), Oversampler::default()],
-            lim: Limiter::new(sr),
-            tp: TruePeak::new(sr),
+            lim: {
+                // 8x detection: what reaches this limiter is clipped / heavily shaped, all inter-sample peaks
+                let mut l = Limiter::new(sr);
+                l.set_hi(true);
+                l
+            },
+            tp: TruePeak::with_precision(sr, true),
             pre: StereoDelay::new(),
             dry: StereoDelay::new(),
             thr_g: 1.0,
@@ -174,7 +179,7 @@ impl LimEngine {
         if sr != self.sr_prev {
             self.sr_prev = sr;
             self.lim.set_sample_rate(sr);
-            self.tp = TruePeak::new(sr);
+            self.tp = TruePeak::with_precision(sr, true);
             self.sc_len = ((sr * ScopeRing::BUCKET_S).round() as usize).max(1);
             self.sm_c = one_pole(sr, 0.02);
             self.byp_c = one_pole(sr, 0.005);
@@ -284,11 +289,14 @@ impl LimEngine {
             cl[ch] = self.ov[ch].process_fn(&self.taps, self.os, t[ch], |v| if on { (v * k).clamp(-c, c) } else { v });
         }
 
-        // what the clipper took off: the pre-clip peak against the clipped one (both at the same instant)
+        // what the clipper took off: how far the pre-clip peak stood above the clipped one at the same instant, counted
+        // only above the ceiling. Oversampled, the two also differ by the filters alone (near a zero crossing of the
+        // clipped signal that ratio is anything), so the clipped side never counts as lower than the ceiling. At x1 a
+        // clipped sample is exactly the ceiling: the same number as the plain ratio.
         if on {
             let td = self.pre.tap(halfband::latency(self.os));
-            let (pt, pc) = (td[0].abs().max(td[1].abs()), cl[0].abs().max(cl[1].abs()));
-            if pt > pc * 1.0001 && pc > 1e-9 {
+            let (pt, pc) = (td[0].abs().max(td[1].abs()), cl[0].abs().max(cl[1].abs()).max(c));
+            if pt > pc * 1.0001 {
                 self.clip_gr_pk = self.clip_gr_pk.max(8.6858896 * (pt / pc).ln());
             }
         }
@@ -515,6 +523,46 @@ mod tests {
         assert!(off.gr_pk > 6.0);
         assert!(on.clip_gr_pk > 6.0, "the clipper takes the spike: {}", on.clip_gr_pk);
         assert!(on.gr_pk < off.gr_pk * 0.6, "so the limiter has less to do: {} vs {}", on.gr_pk, off.gr_pk);
+    }
+
+    #[test]
+    fn the_clip_reduction_readout_stays_sane_when_oversampled() {
+        // spikes of 3.3 into a -1 dB ceiling: the clipper takes about 11 dB at every oversampling setting
+        let mut x = vec![0.0f32; 48000];
+        for (i, v) in x.iter_mut().enumerate() {
+            *v = (0.3 * (2.0 * PI * 200.0 * i as f64 / SR).sin()) as f32;
+            if i % 4800 == 2400 {
+                *v += 3.0;
+            }
+        }
+        for os in 0..4 {
+            let (_, e) = run(&LimParams { ceiling: -1.0, clip: 100.0, os, ..LimParams::default() }, &x);
+            assert!(e.clip_gr_pk > 5.0 && e.clip_gr_pk < 11.6, "os {os}: {}", e.clip_gr_pk);
+        }
+        // full-band noise far over the ceiling: never more than the input stood above it (peak 0.9 * 11 dB lift = 11.1 dB over)
+        let n = noise(48000, 31, 0.9);
+        for os in 0..4 {
+            let (_, e) = run(&LimParams { ceiling: -1.0, threshold: -12.0, clip: 100.0, os, ..LimParams::default() }, &n);
+            assert!(e.clip_gr_pk > 6.0 && e.clip_gr_pk < 11.2, "noise os {os}: {}", e.clip_gr_pk);
+        }
+    }
+
+    #[test]
+    fn switching_the_lookahead_on_mid_stream_lets_nothing_over_the_ceiling() {
+        let p0 = LimParams { ceiling: -1.0, threshold: -12.0, lookahead: false, ..LimParams::default() };
+        let mut e = LimEngine::new(SR);
+        e.set_params(&p0);
+        let mut l: Vec<f32> = (0..48000).map(|i| (0.9 * (2.0 * PI * 1000.0 * i as f64 / SR).sin()) as f32).collect();
+        let mut r = l.clone();
+        let mut pk = 0.0f32;
+        for (i, (a, b)) in l.chunks_mut(64).zip(r.chunks_mut(64)).enumerate() {
+            if i == 375 {
+                e.set_params(&LimParams { lookahead: true, ..p0 });
+            }
+            e.process(a, b);
+            pk = a.iter().fold(pk, |m, v| m.max(v.abs()));
+        }
+        assert!(db(pk as f64) <= -1.0 + 1e-3, "peak {:.2} dB", db(pk as f64));
     }
 
     #[test]
