@@ -64,6 +64,9 @@ pub struct State {
     pub kit: Kit,
     /// packed scope settings (see scope.rs)
     scope_cfg: i32,
+    /// steady scope scrolling: eased read position (bucket index) and the time of the last frame
+    scope_pos: f64,
+    scope_t: f64,
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
     scope_drag: (f32, f32, usize, usize),
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
@@ -170,6 +173,7 @@ impl State {
         // stored timestamp, otherwise `now - last` stays negative and the ~8 Hz readouts (PK, RMS, GR) stay frozen.
         if self.kit.set_input(mx, my, down, rdown, scroll, shift, now) {
             self.rd_last = now;
+            self.scope_t = now;
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = now;
@@ -236,6 +240,8 @@ impl State {
             light,
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
+            scope_pos: 0.0,
+            scope_t: 0.0,
             scope_drag: (0.0, 0.0, 0, 0),
             asym_drag: (0.0, 0.0),
             app: AppState::new(),

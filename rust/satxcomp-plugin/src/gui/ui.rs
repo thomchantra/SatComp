@@ -195,6 +195,9 @@ pub struct State {
     sym_mode: bool,
     /// waveform scope settings, packed (see scope.rs); view-drag anchor (mx, my, window step, ceiling step)
     scope_cfg: i32,
+    /// steady scope scrolling: eased read position (bucket index) and the time of the last frame
+    scope_pos: f64,
+    scope_t: f64,
     scope_drag: (f32, f32, usize, usize),
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
     asym_drag: (f32, f32),
@@ -344,6 +347,8 @@ impl State {
             curve_edit: false,
             sym_mode: true,
             scope_cfg: params.scope.load(Ordering::Relaxed),
+            scope_pos: 0.0,
+            scope_t: 0.0,
             scope_drag: (0.0, 0.0, 0, 0),
             asym_drag: (0.0, 0.0),
             edit_seen: false,
@@ -399,6 +404,7 @@ impl State {
         if self.kit.set_input(mx, my, down, rdown, scroll, shift, now) {
             // the egui clock restarts when the editor window is reopened: re-base every stored timestamp
             self.rd_last = now;
+            self.scope_t = now;
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = [now; NB];
