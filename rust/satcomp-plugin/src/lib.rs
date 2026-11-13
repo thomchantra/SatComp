@@ -29,7 +29,6 @@ pub struct Shared {
     pub sat_vz: AtomicF32,
     pub diff_disp: AtomicF32,
     pub sat_db: AtomicF32,
-    pub bg: AtomicF32,
     pub out_meas: AtomicBool,
     pub out_mt: AtomicF32,
     pub sat_meas: AtomicBool,
@@ -66,7 +65,6 @@ impl Shared {
             sat_vz: AtomicF32::new(0.0),
             diff_disp: AtomicF32::new(0.0),
             sat_db: AtomicF32::new(0.0),
-            bg: AtomicF32::new(1.0),
             out_meas: AtomicBool::new(false),
             out_mt: AtomicF32::new(0.0),
             sat_meas: AtomicBool::new(false),
@@ -226,7 +224,6 @@ impl Plugin for SatComp {
         sh.sat_vz.store(e.sat_vz as f32, Ordering::Relaxed);
         sh.diff_disp.store(e.diff_disp as f32, Ordering::Relaxed);
         sh.sat_db.store(e.sat_db as f32, Ordering::Relaxed);
-        sh.bg.store(e.bg_gain() as f32, Ordering::Relaxed);
         sh.out_meas.store(e.out_matching(), Ordering::Relaxed);
         sh.out_mt.store(e.out_match_progress() as f32, Ordering::Relaxed);
         sh.sat_meas.store(e.sat_matching(), Ordering::Relaxed);

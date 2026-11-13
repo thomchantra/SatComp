@@ -454,7 +454,6 @@ pub fn render(sc: &Scn) -> Out {
     f("diff_disp", e.diff_disp);
     f("sat_db", e.sat_db);
     f("match_trim", e.match_trim);
-    f("bg_gain", e.bg_gain());
     f("gate_open", e.gate_open() as u8 as f64);
     f("out_matching", e.out_matching() as u8 as f64);
     f("sat_matching", e.sat_matching() as u8 as f64);

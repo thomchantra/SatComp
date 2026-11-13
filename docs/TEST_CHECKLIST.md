@@ -21,7 +21,7 @@ Install: copy/symlink `SatComp.jsfx` into `Effects/`, insert as `JS: SatComp`. *
 15. **Comp viz**: red fill follows input level on the transfer plot; dot rides the curve; fill empties on silence.
 16. **Sat viz**: red part of the curve widens with level; dots reach the flat part with high Drive.
 17. **Sat Mix**: Drive 60, Sat Mix 100 -> 0: sat fades out, no click, no level jump at 0 other than the drive gain. OS x2/x4: no comb when sweeping (dry leg is delay-matched).
-18. **Bypass**: toggles click-free; loudness stays within ~1 dB on steady material; BYP readout shows the applied gain; GR meter keeps moving while bypassed.
+18. **Bypass**: toggles click-free; output is the plain dry input (no level matching, so a hot saturator is louder when you hear the bypassed signal); GR meter keeps moving while bypassed.
 19. **Out meter**: bars follow output, hold tick falls after 1 s, push Out Gain +12 on loud material -> red rect lights; click meter clears it. PK/RMS readouts sane.
 20. **GR meter**: click cycles 3/6/12/18; heavy GR auto-widens the range; ticks/labels line up (labels at 1/2/3, 2/4/6, 3/6/9/12, 6/12/18).
 21. **IN>OUT bar**: bar grows right for boost, left for cut, centre tick fixed.

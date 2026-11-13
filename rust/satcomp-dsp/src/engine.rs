@@ -147,9 +147,6 @@ pub struct Engine {
     og: f64,
     og_t: f64,
     og_c: f64,
-    bg: f64,
-    bg_t: f64,
-    bg_c: f64,
     byp: bool,
     byp_s: f64,
     byp_c: f64,
@@ -241,9 +238,6 @@ impl Engine {
             og: 1.0,
             og_t: 1.0,
             og_c: 0.0,
-            bg: 1.0,
-            bg_t: 1.0,
-            bg_c: 0.0,
             byp: false,
             byp_s: 0.0,
             byp_c: 0.0,
@@ -349,9 +343,6 @@ impl Engine {
     pub fn take_sat_result(&mut self) -> Option<f64> {
         self.sat_result.take()
     }
-    pub fn bg_gain(&self) -> f64 {
-        self.bg
-    }
     pub fn gate_open(&self) -> bool {
         self.gate_open
     }
@@ -390,7 +381,6 @@ impl Engine {
         self.byp = p.bypass;
         self.byp_c = one_pole(sr, 0.01);
         self.sc_len = ((sr * ScopeRing::BUCKET_S).round() as u32).max(1);
-        self.bg_c = one_pole(sr, 0.2);
         self.fms_c = one_pole(sr, 0.3);
         self.sm_c = one_pole(sr, 0.02);
 
@@ -557,15 +547,11 @@ impl Engine {
         self.og += (self.og_t - self.og) * self.og_c;
         let pp = [o[0] * self.og, o[1] * self.og];
         ms_step(&mut self.pms, pp[0], pp[1], self.rmsg_c);
-        // equal-loudness bypass
+        // bypass
         self.byp_s += ((if self.byp { 1.0 } else { 0.0 }) - self.byp_s) * self.byp_c;
-        if self.gate_open {
-            self.bg_t = (self.pms / self.ims).sqrt().clamp(0.0631, 15.85);
-        }
-        self.bg += (self.bg_t - self.bg) * self.bg_c;
         // output limiter (processed path only: bypass, delta and solo are monitors / the untouched input)
         let lo = self.lim.tick(pp, self.p.lim_on);
-        let mut out = [lo[0] + (db[0] * self.bg - lo[0]) * self.byp_s, lo[1] + (db[1] * self.bg - lo[1]) * self.byp_s];
+        let mut out = [lo[0] + (db[0] - lo[0]) * self.byp_s, lo[1] + (db[1] - lo[1]) * self.byp_s];
         // delta monitor
         self.d_s += ((if self.delta_on { 1.0 } else { 0.0 }) - self.d_s) * self.byp_c;
         self.mon_d.advance();
@@ -738,7 +724,7 @@ mod tests {
 
     #[test]
     fn limiter_does_not_touch_bypass_or_misalign_it() {
-        // bypass returns the (equal-loudness) dry input, delayed like the processed path, unlimited
+        // bypass returns the dry input, delayed like the processed path, unlimited
         let mut p = neutral();
         p.lim_on = true;
         p.bypass = true;
@@ -898,14 +884,19 @@ mod tests {
     }
 
     #[test]
-    fn bypass_equal_loudness_returns_dry_level() {
+    fn bypass_returns_the_dry_input_unchanged() {
         let mut p = neutral();
+        p.drive = 80.0; // a hot saturator must not change what bypass returns
         p.bypass = true;
         let mut e = Engine::new(SR);
         e.set_params(&p);
         let x = noise(48000, 3);
         let y = run(&mut e, &x, 256);
-        assert!((rms(&y[24000..]) / rms(&x[24000..]) - 1.0).abs() < 0.02);
+        let lat = e.latency() as usize;
+        // sample-exact (delayed) copy of the input, whatever the chain does to the level
+        for i in 24000..48000 {
+            assert!((y[i] - x[i - lat]).abs() < 1e-9, "sample {i}");
+        }
     }
 
     #[test]

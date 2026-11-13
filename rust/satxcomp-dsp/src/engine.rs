@@ -70,9 +70,6 @@ pub struct XEngine {
     og_c: f64,
     mix: f64,
     mix_t: f64,
-    bg: f64,
-    bg_t: f64,
-    bg_c: f64,
     byp_s: f64,
     byp_c: f64,
     rmsg_c: f64,
@@ -168,9 +165,6 @@ impl XEngine {
             og_c: 0.0,
             mix: 1.0,
             mix_t: 1.0,
-            bg: 1.0,
-            bg_t: 1.0,
-            bg_c: 0.0,
             byp_s: 0.0,
             byp_c: 0.0,
             rmsg_c: 0.0,
@@ -279,9 +273,6 @@ impl XEngine {
     pub fn out_match_progress(&self) -> f64 {
         self.out_m.t
     }
-    pub fn bg_gain(&self) -> f64 {
-        self.bg
-    }
     pub fn gate_open(&self) -> bool {
         self.gate_open
     }
@@ -326,7 +317,6 @@ impl XEngine {
         self.rmsg_c = one_pole(sr, 0.5);
         self.og_c = one_pole(sr, 0.02);
         self.byp_c = one_pole(sr, 0.01);
-        self.bg_c = one_pole(sr, 0.2);
         self.fms_c = one_pole(sr, 0.3);
         self.sm_c = one_pole(sr, 0.02);
         if snap {
@@ -504,13 +494,9 @@ impl XEngine {
         let pp = [o[0] * self.og, o[1] * self.og];
         ms_step(&mut self.pms, pp[0], pp[1], self.rmsg_c);
         self.byp_s += ((if self.p.bypass { 1.0 } else { 0.0 }) - self.byp_s) * self.byp_c;
-        if self.gate_open {
-            self.bg_t = (self.pms / self.ims).sqrt().clamp(0.0631, 15.85);
-        }
-        self.bg += (self.bg_t - self.bg) * self.bg_c;
         // output limiter (processed path only: bypass and the key monitor are the untouched input / a monitor)
         let lo = self.lim.tick(pp, self.p.lim_on);
-        let mut out = [lo[0] + (db[0] * self.bg - lo[0]) * self.byp_s, lo[1] + (db[1] * self.bg - lo[1]) * self.byp_s];
+        let mut out = [lo[0] + (db[0] - lo[0]) * self.byp_s, lo[1] + (db[1] - lo[1]) * self.byp_s];
         // solo: hear the conditioned key as the detectors get it
         self.sc_s += ((if self.sc_solo && sc_act { 1.0 } else { 0.0 }) - self.sc_s) * self.byp_c;
         self.mon_s.advance();

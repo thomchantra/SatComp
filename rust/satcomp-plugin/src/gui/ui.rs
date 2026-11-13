@@ -116,7 +116,6 @@ pub struct State {
     rd_pk: f32,
     rd_rms: f32,
     rd_diff: f32,
-    rd_bg: f32,
     rd_lk: f32,
     rd_mt: f32,
     rd_sat: f32,
@@ -277,7 +276,6 @@ impl State {
             rd_pk: 0.0,
             rd_rms: 0.0,
             rd_diff: 0.0,
-            rd_bg: 1.0,
             rd_lk: 0.0,
             rd_mt: 0.0,
             rd_sat: 0.0,
@@ -2295,7 +2293,6 @@ impl<'a> Gui<'a> {
             self.rd_pk = self.opk_max;
             self.rd_rms = sh.fms.load(Ordering::Relaxed);
             self.rd_diff = sh.diff_disp.load(Ordering::Relaxed);
-            self.rd_bg = sh.bg.load(Ordering::Relaxed);
             self.rd_lk = self.env.params.match_trim.load(Ordering::Relaxed);
             self.rd_mt = sh.out_mt.load(Ordering::Relaxed);
             self.rd_sat = sh.sat_db.load(Ordering::Relaxed);
@@ -2502,11 +2499,6 @@ impl<'a> Gui<'a> {
         let s1 = if self.rd_rms > 0.000000001 { format!("{:+05.1}dB", 4.3429448 * self.rd_rms.ln()) } else { "-----dB".into() };
         self.cv.text(464.0, 100.0, "RMS");
         self.cv.textr(464.0, 100.0, 86.0, &s1);
-        if byp {
-            self.cv.text(464.0, 112.0, "BYP");
-            let s = format!("{:+05.1}dB", 8.6858896 * self.rd_bg.max(1e-9).ln());
-            self.cv.textr(464.0, 112.0, 86.0, &s);
-        }
         // GAIN MATCH: off -> click measures 3 s then locks a trim (red); click while measuring cancels; click while locked turns it off
         let gm_lit = if gmatch { if meas && blink(self.now) { 1 } else { 2 } } else { 0 };
         if self.btn(464.0, 128.0, 86.0, 14.0, "GAIN MATCH", gm_lit) {

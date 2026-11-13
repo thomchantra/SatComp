@@ -11,7 +11,7 @@ VST3 and CLAP for macOS (Apple silicon and Intel) and Windows. Current version: 
 - **Sidechain:** external key from a second stereo input, with gain, HP and LP on the key and a SOLO to listen to it.
 - **Compressor:** threshold, ratio, attack, release, knee and knee shape, peak/RMS detector, low cut, lookahead, feed-forward/feedback blend, GR distortion, makeup and mix.
 - **EQ:** two stages (pre and post compressor), three bands each plus tilt, with a live spectrum.
-- **Metering and tools:** output meter, gain-reduction meter, GAIN MATCH, DELTA monitor, loudness-matched BYPASS.
+- **Metering and tools:** output meter, gain-reduction meter, GAIN MATCH, DELTA monitor, BYPASS.
 - **Waveform scope:** click the icon in the corner of the compressor plot for a half or full wave view of the output with the gain reduction stacked on top (transient meter). Drag it to change the time window and the ceiling (+2 dB to -14 dB, so inter-sample overshoots stay visible).
 - **Presets:** save and load your own, step through them, six Drums factory presets included. A name wrapped in asterisks (`*NAME*`) means the preset has been modified.
 - **20 colour schemes, each with a light mode, plus your own:** click the icon for the next scheme, double-click it for light/dark, right-click for the list. The **Appearance** tab (About page) has the mode switch, a scheme list with swatches, six fonts and a theme editor with a colour picker; user themes are saved in `~/Library/Application Support/SatComp/themes.json` (`%APPDATA%\SatComp\themes.json` on Windows).

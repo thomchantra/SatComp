@@ -117,7 +117,6 @@ impl Rig {
         sh.mn_lv.store(0.05 + 0.5 * (n * 0.02).cos().abs(), Relaxed);
         sh.diff_disp.store(6.0 * (n * 0.04).sin(), Relaxed);
         sh.sat_db.store(3.0 * (n * 0.06).sin(), Relaxed);
-        sh.bg.store(0.8 + 0.4 * w, Relaxed);
         sh.sc_bus.store(self.out.len() % 97 < 60, Relaxed);
         for i in 0..crate::TapRing::LEN {
             let t = (i as f32 + n * 37.0) * 0.001;
