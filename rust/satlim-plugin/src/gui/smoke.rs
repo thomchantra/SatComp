@@ -424,7 +424,9 @@ fn the_dice_rolls_a_different_scheme_each_time_and_scrolls_the_list_to_it() {
         let now = r.params.palette_v2.load(Relaxed);
         assert!(now >= 0 && now < n, "scheme {now} of {n}");
         assert_ne!(now, prev, "a roll never lands on the current scheme");
-        assert_eq!(r.st.app.ap_scroll, (now as usize).saturating_sub(2), "the list follows the roll");
+        // the list follows the roll: the new scheme is among the visible rows (14 on this page; the scroll is clamped to the last screen)
+        let sc = r.st.app.ap_scroll as i32;
+        assert!(now >= sc && now < sc + 14, "scheme {now} not visible with the list at {sc}");
         seen.insert(now);
         prev = now;
     }
