@@ -140,7 +140,15 @@ The **EQ** button swaps the viewport for a 5-band post-compressor EQ with a live
 - **Latency** is constant and reported to the host. Switching the limiter or bands never changes it.
 - **Presets:** four factory presets ship with the plug-in. Your own are saved to `SatXComp/Presets` in your application-support folder. A name wrapped in asterisks means the preset has been modified. Presets keep the bands, curves and EQ, but not the sidechain routing or bypass.
 - **Themes:** click the logo for the next theme, double-click it for dark/light, right-click for the list. The title opens About, Preferences and the changelog.
+- **About page:** click the title. Besides the changelog and **OPEN MANUAL (PDF)**, the signal flow is live: dots show the level, bands light up while they work, and each band block, EQ, LIM and the SIDECHAIN box are switches you can click to bypass them.
 - **Shortcuts:** double-click any slider to reset it.
+
+## Support and links
+
+- Source code, issues and releases: [github.com/thomchantra/SatComp](https://github.com/thomchantra/SatComp)
+- Support the project: [ko-fi.com/thomchantra](https://ko-fi.com/thomchantra)
+
+Found a bug or have an idea? Open an issue on GitHub. Thank you for using SatXComp.
 
 ## Notes to check (delete before the PDF)
 

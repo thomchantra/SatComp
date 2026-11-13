@@ -100,7 +100,15 @@ The **gain reduction meter** on the right shows the compressor's work. **Click**
 - **Latency** is constant (about 2.2 ms at 48 kHz) and reported to the host, whether the limiter is on or off.
 - **Presets:** six Drums presets ship with the plug-in; yours are saved to `SatComp/Presets` in your application-support folder. A name in asterisks means the preset has been modified.
 - **Themes:** click the logo for the next scheme, double-click it for dark/light, right-click for the list. The title opens About, Preferences and the changelog.
+- **About page:** click the title. **OPEN MANUAL (PDF)** opens this manual. The signal flow is live, and its PRE EQ, POST EQ and LIM blocks are switches you can click to bypass them.
 - Double-click any slider to reset it.
+
+## Support and links
+
+- Source code, issues and releases: [github.com/thomchantra/SatComp](https://github.com/thomchantra/SatComp)
+- Support the project: [ko-fi.com/thomchantra](https://ko-fi.com/thomchantra)
+
+Found a bug or have an idea? Open an issue on GitHub. Thank you for using SatComp.
 
 ## Notes to check (delete before the PDF)
 

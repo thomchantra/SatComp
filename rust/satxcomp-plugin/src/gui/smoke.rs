@@ -676,3 +676,32 @@ fn the_comp_up_switch_writes_the_band_and_the_meter_turns_centre_tapped() {
     assert_ne!(frame_hash(true), frame_hash(false), "the meter should change with the mode");
     assert_eq!(frame_hash(true), frame_hash(true), "and be deterministic");
 }
+
+/// The About signal flow doubles as switches: clicking its LIM block turns the limiter off and a band block writes that band's ON.
+/// (The blocks move with the layout, so the test scans the flow area for the clicks that land.)
+#[test]
+fn the_about_signal_flow_blocks_are_switches() {
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    r.click(80.0, 15.0); // title -> About
+    r.frame(vec![]);
+    let (mut lim, mut band) = (false, false);
+    'scan: for y in (70..170).step_by(4) {
+        for x in (150..540).step_by(6) {
+            let n0 = r.log().len();
+            r.click(x as f32, y as f32);
+            for l in r.log()[n0..].iter() {
+                lim |= l.starts_with("Limiter");
+                band |= l.contains(" On ") || l.ends_with(" On");
+            }
+            if lim && band {
+                break 'scan;
+            }
+        }
+    }
+    assert!(lim, "a flow click should switch the limiter: {:?}", r.log());
+    assert!(band, "a flow click should switch a band: {:?}", r.log());
+    assert_eq!(r.st.app.about, 1, "still on the About page");
+}

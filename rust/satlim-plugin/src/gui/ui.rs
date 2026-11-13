@@ -413,6 +413,13 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
     fn changelog(&self) -> &'static [(&'static str, &'static [&'static str])] {
         CHANGELOG
     }
+    fn manual_pdf(&self) -> Option<(&'static str, &'static [u8])> {
+        // the file must exist for the crate's current version (docs/manual/build.py), or the plug-in does not compile
+        Some((
+            concat!("SatLim-Manual-v", env!("CARGO_PKG_VERSION"), ".pdf"),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/manual/SatLim-Manual-v", env!("CARGO_PKG_VERSION"), ".pdf")),
+        ))
+    }
     fn draw_flow(&mut self, r: Rect, byp: bool) {
         self.draw_flow_at(r.x, r.y, r.w, r.h, byp);
     }

@@ -31,7 +31,7 @@ p { margin: 0 0 2.5mm; }
 em { font-style: normal; text-decoration: underline; }
 strong { font-weight: 700; }
 a { color: #fff; }
-img { display: block; width: 100%%; margin: 4mm 0; border: 1px solid #555; }
+img { display: block; max-width: 100%%; max-height: 118mm; width: auto; height: auto; margin: 4mm auto; border: 1px solid #555; }
 code { font: inherit; border: 1px solid #555; padding: 0 1mm; }
 pre { border: 1px solid #fff; padding: 2.5mm 3mm; margin: 2mm 0 4mm; white-space: pre-wrap; page-break-inside: avoid; }
 pre code { border: 0; padding: 0; }

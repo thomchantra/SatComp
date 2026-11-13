@@ -465,6 +465,13 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
     fn changelog(&self) -> &'static [(&'static str, &'static [&'static str])] {
         CHANGELOG
     }
+    fn manual_pdf(&self) -> Option<(&'static str, &'static [u8])> {
+        // the file must exist for the crate's current version (docs/manual/build.py), or the plug-in does not compile
+        Some((
+            concat!("SatComp-Manual-v", env!("CARGO_PKG_VERSION"), ".pdf"),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/manual/SatComp-Manual-v", env!("CARGO_PKG_VERSION"), ".pdf")),
+        ))
+    }
     fn draw_flow(&mut self, r: Rect, byp: bool) {
         self.draw_flow_at(r.x, r.y, r.w, r.h, byp);
     }
@@ -2231,8 +2238,26 @@ impl<'a> Gui<'a> {
         for i in 0..8 {
             self.set_dk(if eq_off[i] { prev * 0.5 } else { prev });
             let (bxl, byt) = (bx[i], cy - bh * 0.5 + 0.5);
+            // PRE EQ, POST EQ and LIM are switches: click one to bypass it or bring it back
+            let hov = (i == 2 || i == 5 || i == 6) && self.hit(bxl, byt, bw[i], bh);
+            if hov && self.kit.press && self.kit.act == 0 {
+                self.kit.press = false;
+                match i {
+                    2 | 5 => {
+                        let slot = if i == 2 { 60 } else { 61 };
+                        if eq_off[i] {
+                            // switching it on also clears the whole-EQ bypass
+                            self.click_set(slot, 0.0);
+                            self.click_set(62, 0.0);
+                        } else {
+                            self.click_set(slot, 1.0);
+                        }
+                    }
+                    _ => self.click_set(68, if lim_on { 0.0 } else { 1.0 }),
+                }
+            }
             if lit[i] {
-                self.setc(false);
+                self.setc(hov);
                 self.cv.fill(bxl, byt, bw[i], bh);
                 self.cv.setbg();
             } else {
@@ -2240,7 +2265,7 @@ impl<'a> Gui<'a> {
                 self.cv.fill(bxl + 1.0, byt + 1.0, bw[i] - 2.0, bh - 2.0); // clear the line under the box
                 self.cv.setbg();
                 self.cv.fill(bxl + 1.0, byt + 1.0, bw[i] - 2.0, bh - 2.0);
-                self.setc(false);
+                self.setc(hov);
                 self.cv.boxr(bxl, byt, bw[i], bh);
             }
             self.cv.textc(bxl, byt + 7.0, bw[i], names[i]);
@@ -2268,7 +2293,7 @@ impl<'a> Gui<'a> {
         } else {
             self.cv.textc(bx[3] - 10.0, cy - bh * 0.5 - 14.0, bw[3] + 20.0, &s);
         }
-        self.cv.text(x + 6.0, y + h - 15.0, if sig { "DOT SIZE = LEVEL" } else { "PLAY AUDIO TO SEE THE FLOW" });
+        self.cv.text(x + 6.0, y + h - 15.0, if sig { "DOT SIZE = LEVEL. CLICK PRE EQ, POST EQ OR LIM TO SWITCH IT" } else { "CLICK PRE EQ, POST EQ OR LIM TO SWITCH IT" });
         let _ = byp;
     }
 

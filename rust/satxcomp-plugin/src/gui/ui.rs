@@ -623,6 +623,13 @@ impl<'a> AppearanceUi<'a> for Gui<'a> {
     fn changelog(&self) -> &'static [(&'static str, &'static [&'static str])] {
         CHANGELOG
     }
+    fn manual_pdf(&self) -> Option<(&'static str, &'static [u8])> {
+        // the file must exist for the crate's current version (docs/manual/build.py), or the plug-in does not compile
+        Some((
+            concat!("SatXComp-Manual-v", env!("CARGO_PKG_VERSION"), ".pdf"),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/manual/SatXComp-Manual-v", env!("CARGO_PKG_VERSION"), ".pdf")),
+        ))
+    }
     fn draw_flow(&mut self, r: Rect, byp: bool) {
         self.draw_flow_at(r, byp);
     }
@@ -1785,14 +1792,24 @@ impl<'a> Gui<'a> {
             let dim = (i == 4 && (eq_byp || !eq_any)) || (i == 5 && !lim_on);
             self.set_dk(if dim { prev * 0.5 } else { prev });
             let lit = (i == 4 && eq_any && !eq_byp) || (i == 5 && lim_on && self.lim_disp > 0.1);
-            self.setc(false);
+            // the EQ and LIM blocks are switches: click one to bypass it or bring it back
+            let hov = (i == 4 || i == 5) && self.hit(x, cy, bwi, bh);
+            if hov && self.kit.press && self.kit.act == 0 {
+                self.kit.press = false;
+                if i == 4 {
+                    self.click_set(EQ_BYPASS, if eq_byp { 0.0 } else { 1.0 });
+                } else {
+                    self.click_set(LIM_ON, if lim_on { 0.0 } else { 1.0 });
+                }
+            }
+            self.setc(hov);
             if lit {
                 self.cv.fill(x, cy, bwi, bh);
                 self.cv.setbg();
             } else {
                 self.cv.setbg();
                 self.cv.fill(x + 1.0, cy + 1.0, bwi - 2.0, bh - 2.0);
-                self.setc(false);
+                self.setc(hov);
                 self.cv.boxr(x, cy, bwi, bh);
             }
             self.cv.textc(x, cy + 7.0, bwi, names[i]);
@@ -1801,19 +1818,28 @@ impl<'a> Gui<'a> {
         // ---- the bands
         for b in 0..NB {
             let on = self.sget(band_base(b) + ON) > 0.5;
-            let lit = on && self.gr_disp[b] > 0.1;
+            // lit while the band works: reducing gain (downward) or lifting it (upward)
+            let lit = on && (self.gr_disp[b] > 0.1 || self.gl_disp[b] > 0.1);
             self.set_dk(if on { prev } else { prev * 0.5 });
-            self.setc(false);
+            // each band block is a switch: click to turn the band off or on
+            let hov = self.hit(bx[2], ys[b], bwb, bhb);
+            if hov && self.kit.press && self.kit.act == 0 {
+                self.kit.press = false;
+                self.click_set(band_base(b) + ON, if on { 0.0 } else { 1.0 });
+            }
+            self.setc(hov);
             if lit {
                 self.cv.fill(bx[2], ys[b], bwb, bhb);
                 self.cv.setbg();
             } else {
                 self.cv.setbg();
                 self.cv.fill(bx[2] + 1.0, ys[b] + 1.0, bwb - 2.0, bhb - 2.0);
-                self.setc(false);
+                self.setc(hov);
                 self.cv.boxr(bx[2], ys[b], bwb, bhb);
             }
-            self.cv.textc(bx[2], ys[b] + 5.0, bwb, &format!("{} SAT>COMP", BAND_NAMES[b]));
+            // the compressor in the label follows the band's mode: down, up, or both
+            let comp = ["COMP", "UP", "UP/DWN"][(self.sget(band_base(b) + UP).round() as usize).min(2)];
+            self.cv.textc(bx[2], ys[b] + 5.0, bwb, &format!("{} SAT>{}", BAND_NAMES[b], comp));
             self.setc(false);
         }
         self.set_dk(prev);
@@ -1822,14 +1848,21 @@ impl<'a> Gui<'a> {
             let (kw, ky) = (78.0f32, r.y + 3.0);
             let kx = (bx[2] + (bwb - kw) * 0.5).floor();
             let mx = (kx + kw * 0.5).floor();
-            self.setc(false);
+            // the key box is a switch too: click to turn the sidechain off
+            let hov = self.hit(kx, ky, kw, 16.0);
+            if hov && self.kit.press && self.kit.act == 0 {
+                self.kit.press = false;
+                self.click_set(SC_ON, 0.0);
+            }
+            self.setc(hov);
             self.cv.boxr(kx, ky, kw, 16.0);
             self.cv.textc(kx, ky + 4.0, kw, "SIDECHAIN");
+            self.setc(false);
             self.cv.fill(mx, ky + 16.0, 1.0, ys[0] - ky - 16.0 - 3.0);
             self.cv.tri((mx - 3.0, ys[0] - 4.0), (mx + 4.0, ys[0] - 4.0), (mx + 0.5, ys[0]));
             self.cv.text(kx + kw + 8.0, ky + 4.0, "KEY > COMP");
         }
-        self.cv.text(r.x + 6.0, r.y + r.h - 15.0, "EACH BAND: SAT > COMP, THEN THE SUM GOES THROUGH THE POST EQ AND THE LIMITER");
+        self.cv.text(r.x + 6.0, r.y + r.h - 15.0, "EACH BAND: SAT > COMP (DOWN, UP OR BOTH). CLICK A BAND, EQ OR LIM TO SWITCH IT");
     }
 
     // ------------------------------------------------------------------ popup menu

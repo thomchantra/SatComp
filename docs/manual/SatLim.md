@@ -92,7 +92,15 @@ The **gain reduction meter** splits the same way: the limiter's part solid, the 
 - **Latency** is the saturator oversampler plus the clipper oversampler plus the limiter lookahead. It is reported to the host and changes with the x1-x8 setting and L.AHEAD.
 - **Presets:** six factory presets ship with the plug-in; yours are saved to `SatLim/Presets` in your application-support folder.
 - **Themes:** click the logo for the next scheme, double-click it for dark/light, right-click for the list. **Preferences** has **SCOPE FILL**: solid bars or an outline.
+- **About page:** click the title for the signal flow, **OPEN MANUAL (PDF)**, Preferences and the changelog.
 - Double-click any slider to reset it.
+
+## Support and links
+
+- Source code, issues and releases: [github.com/thomchantra/SatComp](https://github.com/thomchantra/SatComp)
+- Support the project: [ko-fi.com/thomchantra](https://ko-fi.com/thomchantra)
+
+Found a bug or have an idea? Open an issue on GitHub. Thank you for using SatLim.
 
 ## Notes to check (delete before the PDF)
 

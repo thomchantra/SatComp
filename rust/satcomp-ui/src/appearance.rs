@@ -125,6 +125,30 @@ pub fn clear_defaults_for(key: &str) {
     }
 }
 
+/// Write an embedded manual to the temp folder (`SatComp/<name>`, rewritten when its size differs) and open it with the
+/// default PDF viewer. If the file cannot be written the online manual folder is opened instead.
+pub fn open_manual(name: &str, bytes: &[u8]) {
+    let dir = std::env::temp_dir().join("SatComp");
+    let path = dir.join(name);
+    let ok = std::fs::create_dir_all(&dir).is_ok()
+        && (std::fs::metadata(&path).map(|m| m.len() == bytes.len() as u64).unwrap_or(false) || std::fs::write(&path, bytes).is_ok());
+    open_target(&if ok { path.to_string_lossy().into_owned() } else { MANUAL_URL.to_string() });
+}
+
+/// Where the manuals live online (fallback of `open_manual`).
+pub const MANUAL_URL: &str = "https://github.com/thomchantra/SatComp/tree/main/docs/manual";
+
+/// Open a file or URL with the system's default application.
+fn open_target(t: &str) {
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(windows)]
+    let opener = "explorer";
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let opener = "xdg-open";
+    let _ = std::process::Command::new(opener).arg(t).spawn();
+}
+
 /// Show a folder in the system file browser (created first, so a fresh install opens somewhere).
 pub fn open_folder(dir: Option<PathBuf>) {
     let Some(dir) = dir else { return };
@@ -477,6 +501,10 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
     fn about_paras(&self) -> &'static [&'static [&'static str]];
     /// Changelog, newest first.
     fn changelog(&self) -> &'static [(&'static str, &'static [&'static str])];
+    /// The plug-in's manual: (file name, PDF bytes embedded in the binary). Shown as an OPEN MANUAL button on the About tab.
+    fn manual_pdf(&self) -> Option<(&'static str, &'static [u8])> {
+        None
+    }
     /// The signal-flow diagram at the top of the About tab (height `flow_h`).
     fn draw_flow(&mut self, r: Rect, byp: bool);
     fn flow_h(&self) -> f32 {
@@ -688,6 +716,17 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         self.setc(false);
         let (by, bh) = (r.y + fh + 6.0, r.h - fh - 6.0);
         self.cv().boxr(r.x, by, r.w, bh);
+        // OPEN MANUAL: the PDF is embedded in the plug-in, written to the temp folder and opened with the default viewer
+        let off = if let Some((name, bytes)) = self.manual_pdf() {
+            if self.btn(r.x + 4.0, by + 4.0, r.w - 8.0, 16.0, "OPEN MANUAL (PDF)", 0) {
+                open_manual(name, bytes);
+            }
+            self.setc(false);
+            22.0
+        } else {
+            0.0
+        };
+        let (by, bh) = (by + off, bh - off);
         let mut rows = Vec::new();
         for para in self.about_paras() {
             for l in *para {
