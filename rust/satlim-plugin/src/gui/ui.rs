@@ -437,16 +437,17 @@ impl<'a> DerefMut for Gui<'a> {
 /// About page copy (docs/abouttextcopy.md). Each inner slice is one paragraph, each string one source line.
 const ABOUT_TEXT: &[&[&str]] = &[
     &["A 2-stage clipper/limiter with waveshaping saturator", "When you need to nuke it from orbit B)"],
-    &["Use tube with low drive for warm saturation, opt for destruction with tri-fold, or annihilate with custom asymmetric waveshape.", "Left-click on the top-right pencil icon to enter custom draw mode."],
-    &["The lower the threshold, the more cooked it gets."],
-    &["Grab exposes more transients in the mix, then set release tail to taste."],
-    &["Double-click slider to reset parameter to its default value"],
-    &["Left/Right-click top-left icon for more color ways", "Double-click top-left icon to switch between dark and light mode"],
+    &["Use tube with low drive for warm saturation, opt for destruction with tri-fold, or annihilate with a custom asymmetric waveshape.", "[Click] the top-right pencil icon to enter custom draw mode.", "[Click] the lower-right SAT value to auto-match the gain."],
+    &["Turn on lookahead for brickwall, true peak limiting. Lowering the threshold chews the input signal deeper. Clip exposes and bricks more transients in the mix."],
+    &["Balance threshold (limiter) and clip (clipper) to dial in the desired loudness and character."],
+    &["A shorter release gives a denser, punchier result while introducing distortion artifacts, a longer release is smoother with lower distortion."],
+    &["Transient/GR meter: solid = limiter gain reduction, striped = clipper gain reduction."],
+    &["[Double-click] slider resets the parameter to its default value", "[Click] GR meter cycles its range", "[Click] clip meter resets the readout", "[Left/Right-click] top-left icon cycles the colour theme", "[Double-click] top-left icon switches between dark and light mode"],
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
-    ("v0.1", &["First version: the SatComp saturator, an oversampled clipper (CLIP, x1 to x8) and a true-peak brickwall limiter with a transient scope.", "L.AHD off gives a zero-latency limiter. OUT GAIN sits after the limiter on purpose."]),
+    ("v0.1", &["First version: the SatComp saturator, an oversampled clipper (CLIP, x1 to x8) and a true-peak brickwall limiter with a transient scope.", "L.AHEAD off gives a zero-latency limiter. OUT GAIN sits after the limiter on purpose.", "The limiter and the TRU.PK readout detect true peaks at 8x, with L.AHEAD on or off, so inter-sample peaks of a clipped or folded signal are caught. Bypass is a plain bypass."]),
 ];
 
 /// Crate version for the header: "0.4" for 0.4.0, "0.4.1" for a patch release.

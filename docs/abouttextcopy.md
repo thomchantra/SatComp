@@ -5,7 +5,7 @@ Misc control copy - repeat for all 3 plugins, common shared controls
 [LMB]        GR meter cycle ranges
 [LMB]        Clip meter resets readout
 [LMB/RMB]    Top-left logo cycles color theme
-[Doube-LMB]  Top-left logo cycles dark/light mode
+[Double-LMB]  Top-left logo cycles dark/light mode
 
 SatComp about copy
 ===
@@ -32,17 +32,18 @@ Use Sidechain mode for dynamic EQ style ducking, then cook hard with waveshaping
 [LMB] Top-right pencil icon enters custom draw mode.
 [LMB] Lower-right SAT value triggers auto-gain match.
 
-Generally slower Attack and Release is ideal for low freq, faster Attack and Release for high freq
+Slower Attack and Release is ideal for low freq, faster Attack and Release for high freq.
 
 Refine tone with post-compressor 5-band EQ, or sculpt with notch, bandpass and allpass with dry signal blending.
 
 **== Spectrum Viewport ==**
-[Accent]     Gain Reduction
-[Inv Accent] Gain Increase
+[Accent]     Gain Reduction vs Dry
+[Inv Accent] Gain Increase vs Dry
 
 **== Multiband Handle Display ==**
 [Top Horizontal Meter]  In/Out Gain Difference
 [Bottom Vertical Meter] Gain Reduction
+[Top Vertical Meter] Gain Increase
 
 **== Misc Controls ==**
 

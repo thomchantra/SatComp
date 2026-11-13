@@ -545,14 +545,23 @@ impl<'a> Gui<'a> {
 /// About page copy (docs/abouttextcopy.md). Each inner slice is one paragraph, each string one source line.
 const ABOUT_TEXT: &[&[&str]] = &[
     &["A 4-band compressor with waveshaping saturator and 5-band EQ", "For surgical baking intentions :3"],
-    &["Set crossover range with X-OVR sliders with 12dB, 24dB, 48dB, and 96dB slope options, then drive each band to taste."],
-    &["Use sidechain mode for dynamic EQ style ducking, then cook hard with waveshaping distortion.", "Left-click on the top-right pencil icon to enter custom draw mode."],
-    &["Refine tone with post-compressor 5-band EQ, or sculpt with notch, bandpass and allpass with dry signal blending."],
-    &["Double-click slider to reset parameter to its default value", "Left/Right-click top-left icon for more color ways", "Double-click top-left icon to switch between dark and light mode"],
+    &["Set the crossover ranges with the XOV sliders (12, 24, 48 and 96 dB slopes), then drive each band to taste."],
+    &["Use sidechain mode for dynamic EQ style ducking, then cook hard with waveshaping distortion.", "[Click] the top-right pencil icon to enter custom draw mode.", "[Click] the lower-right SAT value to auto-match the gain."],
+    &["Slower attack and release suit low frequencies, faster attack and release suit high ones."],
+    &["Refine tone with the post-compressor 5-band EQ, or sculpt with notch, bandpass and allpass with dry signal blending."],
+    &["Spectrum viewport: accent = gain reduction vs dry, inverted accent = gain increase vs dry."],
+    &["Band handles: the top horizontal bar is the in/out gain difference, the vertical bar above it the gain increase (upward compression), the vertical bar below it the gain reduction."],
+    &["[Double-click] slider resets the parameter to its default value", "[Click] GR meter cycles its range", "[Click] clip meter resets the readout", "[Left/Right-click] top-left icon cycles the colour theme", "[Double-click] top-left icon switches between dark and light mode"],
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
-const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &["First release: four bands (LO, ML, MH, HI) with three 12 to 96 dB crossovers, a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.", "Colour schemes with light mode, custom themes, fonts and the spectrum fill (outline or solid) under About > Appearance.", "Saturator per band: DRIVE and BIAS side by side, ASYM over TONE and HP over LP as stacked sliders.", "Each band handle in the spectrum carries a small bar for the band's level change (left = quieter, right = louder).", "ASYM next to DRIVE keeps lopsided waveshaper curves from dragging DC and sub-bass pulses into the signal. A true-peak output limiter (LIM, on by default) catches rogue peaks; its reduction shows in the LIM readout. The icon in the viewport corner opens a waveform scope (transient meter): half or full wave, with the gain reduction stacked in the accent colour; drag the view to change the window and ceiling."])];
+const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &[
+    "First release: four bands (LO, ML, MH, HI) with three crossovers (12, 24, 48 or 96 dB), a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.",
+    "Compressor mode per band: DWNWARD, UPWARD (lifts what is below the threshold, up to RANGE) or UP/DWN (both). The band handles show the lift as a bar above and the reduction below.",
+    "Saturator per band: DRIVE, BIAS and ASYM, HP and LP, SAT GAIN with auto-match, custom curves with a symmetry tool, and a post-saturator level meter.",
+    "A true-peak output limiter (LIM, on by default) catches rogue peaks; its reduction shows in the LIM readout. BYPASS is a plain bypass.",
+    "The viewport shows gain reduction in the accent colour and gain increase in its inverse. The corner icon opens a waveform scope (transient meter).",
+    "Colour schemes (27) with light mode, custom themes, fonts and the spectrum fill under About > Preferences."])];
 
 impl<'a> AppearanceUi<'a> for Gui<'a> {
     fn app(&mut self) -> &mut AppState {
