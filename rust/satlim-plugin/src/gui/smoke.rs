@@ -433,3 +433,21 @@ fn the_dice_rolls_a_different_scheme_each_time_and_scrolls_the_list_to_it() {
     assert!(seen.len() >= 4, "twelve rolls should land on several different schemes: {seen:?}");
     assert!(r.log().is_empty(), "UI-only, no host writes");
 }
+
+#[test]
+fn the_logo_and_the_title_light_up_under_the_pointer() {
+    // the picture with the pointer parked on an empty spot, on the logo, on the title: three different frames
+    let frame_with_pointer_at = |x: f32, y: f32| {
+        let mut r = Rig::new();
+        for _ in 0..4 {
+            r.frame(vec![]);
+        }
+        r.frame(vec![Event::PointerMoved(Rig::at(x, y))]);
+        r.frame(vec![]);
+        r.last
+    };
+    let (idle, logo, title) = (frame_with_pointer_at(200.0, 120.0), frame_with_pointer_at(22.0, 15.0), frame_with_pointer_at(80.0, 15.0));
+    assert_ne!(idle, logo, "the logo should invert under the pointer");
+    assert_ne!(idle, title, "the title should get a highlight under the pointer");
+    assert_ne!(logo, title);
+}

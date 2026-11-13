@@ -576,7 +576,8 @@ impl<'a> Gui<'a> {
         }
         // plug-in icon in a square box: fill = BG, stroke = UI (so light mode inverts it with the scheme)
         self.setc(false);
-        if self.light {
+        // hovering inverts the icon (a plate in the UI colour, or back to the outline in light mode): it is clickable
+        if self.light != hv {
             // light mode inverts the icon: UI-coloured plate, BG-coloured glyph
             self.cv.fill(x - 3.0, y - 3.0, 27.0, 27.0);
             self.cv.setbg();
@@ -1683,7 +1684,13 @@ impl<'a> Gui<'a> {
             self.app.about_scroll = 0;
             self.press = false;
         }
+        // hovering highlights the title (a UI-coloured rectangle behind it, the text in the background colour): it opens About
+        if self.hit(42.0, 5.0, tw + 4.0, 21.0) {
+            self.cv.fill(42.0, 8.0, tw + 4.0, 15.0);
+            self.cv.setbg();
+        }
         self.cv.text(44.0, 12.0, &title);
+        self.setc(false);
         let label = format!("{:.0}%", self.cur_scale() * 100.0);
         if self.btn(176.0, 7.0, 42.0, 17.0, &label, 0) {
             let cur = SIZES.iter().position(|v| (v - self.cur_scale()).abs() < 0.13).unwrap_or(0);
