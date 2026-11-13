@@ -108,9 +108,19 @@ where
                 let setter = ParamSetter::new(context.as_ref());
 
                 // If the window was requested to resize
-                if let Some(new_size) = egui_state.requested_size.swap(None) {
+                // SatComp patch: keep `requested_size` set while asking the host. The host answers `request_resize()`
+                // by calling `Editor::size()`, which returns `requested_size` if set; clearing it first made the host
+                // read the previous size (REAPER's FX window lagged one step behind the content).
+                if let Some(new_size) = egui_state.requested_size.load() {
                     // Ask the plugin host to resize to self.size()
-                    if context.request_resize() {
+                    let accepted = context.request_resize();
+                    if accepted {
+                        // The new size becomes the stored one before the request is cleared, so `size()` never
+                        // reports the old value to a late host query.
+                        egui_state.size.store(new_size);
+                    }
+                    egui_state.requested_size.store(None);
+                    if accepted {
                         // Resize the content of egui window
                         // SatComp patch: `queue.resize` wants physical pixels, `new_size` is logical (broken on HiDPI otherwise)
                         let ppp = egui_ctx.pixels_per_point();
