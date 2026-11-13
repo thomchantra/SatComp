@@ -1192,14 +1192,7 @@ impl<'a> Gui<'a> {
 
     /// Colour of gain that is ADDED (the spectrum's gain area and the upward compressor's lift): the inverse of the accent.
     fn gain_colour(&self) -> [f32; 3] {
-        let ac = self.cv.ac;
-        let mut inv = [1.0 - ac[0], 1.0 - ac[1], 1.0 - ac[2]];
-        // grey schemes: the inverted accent lands on the background colour, so the gain area vanishes - use solid white (black on a light scheme) then
-        let lum = |c: [f32; 3]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-        if (lum(inv) - lum(self.cv.bk)).abs() < 0.3 {
-            inv = if lum(self.cv.bk) < 0.5 { [1.0; 3] } else { [0.0; 3] };
-        }
-        inv
+        satcomp_ui::canvas::gain_colour(self.cv.bk, self.cv.fg, self.cv.ac)
     }
 
     // ------------------------------------------------------------------ meters
@@ -1519,6 +1512,15 @@ impl<'a> Gui<'a> {
             if gr > 0.05 && on {
                 self.setc(true);
                 self.cv.fill(cx - 1.0, by + 12.0, 3.0, (gr * 2.0).min(36.0).floor().max(1.0));
+            }
+            // upward compressor lift: a bar rising from the top of the handle, above the level-change tick, in the gain colour
+            let gl = self.gl_disp[b];
+            if gl > 0.05 && on {
+                let room = (by - 6.0 - y - 1.0).max(0.0);
+                let lh = (gl * 2.0).min(36.0).min(room).floor().max(1.0);
+                let ic = self.gain_colour();
+                self.cv.setrgb(ic);
+                self.cv.fill(cx - 1.0, by - 6.0 - lh, 3.0, lh);
             }
             // level change across the band on top of the handle: centre tick, bar to the left (accent) or right
             let d = if on { self.env.shared.band_diff[b].load(Ordering::Relaxed).clamp(-12.0, 12.0) } else { 0.0 };

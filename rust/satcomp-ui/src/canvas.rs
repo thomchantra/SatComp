@@ -91,6 +91,60 @@ pub struct Canvas<'a> {
     pub face: usize,
 }
 
+fn lum(c: [f32; 3]) -> f32 {
+    0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+}
+
+fn hue_sat(c: [f32; 3]) -> (f32, f32) {
+    let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+    let d = mx - mn;
+    if d <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let h = if mx == c[0] { ((c[1] - c[2]) / d).rem_euclid(6.0) } else if mx == c[1] { (c[2] - c[0]) / d + 2.0 } else { (c[0] - c[1]) / d + 4.0 };
+    (h * 60.0, d / mx)
+}
+
+/// True when a scheme has no real hue to invert: the accent is (nearly) grey, or the chromatic swatches all sit within ~30 degrees of each other.
+pub fn is_grey_scheme(bk: [f32; 3], fg: [f32; 3], ac: [f32; 3]) -> bool {
+    let hs: Vec<(f32, f32)> = [bk, fg, ac].iter().map(|&c| hue_sat(c)).collect();
+    if hs[2].1 < 0.2 {
+        return true;
+    }
+    let ch: Vec<f32> = hs.iter().filter(|h| h.1 >= 0.2).map(|h| h.0).collect();
+    ch.len() >= 3
+        && (0..ch.len()).all(|i| (0..ch.len()).all(|j| {
+            let d = (ch[i] - ch[j]).abs();
+            d.min(360.0 - d) < 30.0
+        }))
+}
+
+/// Colour of gain that is ADDED (spectrum gain area, upward-compressor lift): the inverse of the accent, kept readable on the background.
+/// A dark inverse is lightened toward white (a light scheme: darkened toward black) until it stands off the background; greyscale
+/// schemes (see `is_grey_scheme`) and inverses that cannot be made to stand off use white, or black on a light scheme.
+pub fn gain_colour(bk: [f32; 3], fg: [f32; 3], ac: [f32; 3]) -> [f32; 3] {
+    let dark_bg = lum(bk) < 0.5;
+    let plain = if dark_bg { [1.0; 3] } else { [0.0; 3] };
+    if is_grey_scheme(bk, fg, ac) {
+        return plain;
+    }
+    let mut inv = [1.0 - ac[0], 1.0 - ac[1], 1.0 - ac[2]];
+    for _ in 0..8 {
+        if (lum(inv) - lum(bk)).abs() >= 0.3 {
+            break;
+        }
+        for k in 0..3 {
+            inv[k] += (plain[k] - inv[k]) * 0.15;
+        }
+    }
+    let dist = (0..3).map(|k| (inv[k] - bk[k]).powi(2)).sum::<f32>().sqrt();
+    if dist < 0.4 {
+        plain
+    } else {
+        inv
+    }
+}
+
 fn rgb(c: [f32; 3]) -> Color32 {
     Color32::from_rgb((c[0] * 255.0 + 0.5) as u8, (c[1] * 255.0 + 0.5) as u8, (c[2] * 255.0 + 0.5) as u8)
 }
@@ -211,5 +265,28 @@ impl<'a> Canvas<'a> {
 
     pub fn disc(&self, x: f32, y: f32, r: f32) {
         self.p.circle_filled(Pos2::new(self.ox + x * self.s, self.oy + y * self.s), r * self.s, self.col);
+    }
+}
+
+#[cfg(test)]
+mod gain_colour_tests {
+    use super::*;
+
+    #[test]
+    fn gain_colour_keeps_its_hue_except_on_grey_schemes() {
+        for (name, d, l) in PALETTES.iter() {
+            for (mode, a) in [("dark", d), ("light", l)] {
+                let (bk, fg, ac) = ([a[0], a[1], a[2]], [a[3], a[4], a[5]], [a[6], a[7], a[8]]);
+                let g = gain_colour(bk, fg, ac);
+                let plain = g == [1.0; 3] || g == [0.0; 3];
+                if is_grey_scheme(bk, fg, ac) {
+                    assert!(plain, "{name} {mode}");
+                } else {
+                    assert!(!plain, "{name} {mode}: gain colour fell back to plain {g:?}");
+                }
+            }
+        }
+        let a = &PALETTES[13]; // Ashen
+        assert!(is_grey_scheme([a.1[0]; 3], [a.1[3]; 3], [a.1[6]; 3]));
     }
 }
