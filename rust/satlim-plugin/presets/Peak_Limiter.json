@@ -1,0 +1,22 @@
+{
+  "format": "satlim-preset",
+  "version": 1,
+  "name": "Peak Limiter",
+  "params": {
+    "bias": 0.0,
+    "ceiling": -0.3,
+    "clip": 0.0,
+    "drive": 0.0,
+    "lookahead": 1.0,
+    "os": 2.0,
+    "out_gain": 0.0,
+    "release": 25.0,
+    "sat_gain": 0.0,
+    "sat_hp": 20.0,
+    "sat_lp": 9680.0,
+    "sat_mix": 0.0,
+    "shape": 1.0,
+    "threshold": -6.0,
+    "tone": 20000.0
+  }
+}

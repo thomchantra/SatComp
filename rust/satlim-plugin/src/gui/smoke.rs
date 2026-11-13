@@ -380,3 +380,22 @@ fn the_font_dropdown_opens_over_the_page_and_picks_a_face() {
     assert_eq!(r.params.font.load(Relaxed), 7);
     assert!(r.log().is_empty(), "UI-only, no host writes: {:?}", r.log());
 }
+
+#[test]
+fn the_theme_editor_page_has_a_filled_scope_in_stacking_order() {
+    let r = Rig::new();
+    r.st.fill_dummy();
+    let ring = &r.st.dummy_shared.scope;
+    assert!(ring.head() > 1000, "the mock scope should hold a couple of seconds");
+    let h = ring.head();
+    let mut peak = 0.0f32;
+    for i in h - 1000..h {
+        let (out, handed, pre) = ring.get3(i % satcomp_dsp::ScopeRing::LEN);
+        assert!(out <= handed + 1e-6 && handed <= pre + 1e-6, "bucket {i}: {out} {handed} {pre}");
+        peak = peak.max(pre);
+    }
+    assert!(peak > 1.0, "hits should reach over the ceiling so the removal shows");
+    let before = ring.head();
+    r.st.fill_dummy();
+    assert_eq!(ring.head(), before, "filled once, then still");
+}

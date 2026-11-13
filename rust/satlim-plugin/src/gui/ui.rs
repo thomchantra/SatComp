@@ -283,6 +283,18 @@ impl State {
         d.sat_pk.store(0.4, Ordering::Relaxed);
         d.tpk.store(0.9, Ordering::Relaxed);
         d.clip_gr_pk.store(1.0, Ordering::Relaxed);
+        // an active-looking scope: drum hits every half second (alternating strong / softer) with some of each hit taken off
+        // by the clipper and the limiter. Filled once; the ring then never moves, so the picture stands still.
+        if d.scope.head() == 0 {
+            for i in 0..1600u32 {
+                let phase = (i % 250) as f32;
+                let amp = if (i / 250) % 2 == 0 { 1.0 } else { 0.7 };
+                let pre = 0.08 + 1.2 * amp * (-phase / 30.0).exp() + 0.04 * ((i as f32) * 0.9).sin().abs();
+                let handed = pre.min(1.1);
+                let out = handed.min(0.85);
+                d.scope.push3(out, handed, pre);
+            }
+        }
     }
 }
 
@@ -1725,8 +1737,9 @@ impl<'a> Gui<'a> {
         let (cx, cw) = (232.0, 98.0);
         if !ab {
             // OVERSAMPL sits on the shape selector's row, centred over the meter bars; x1..x8 share that row at the column width
-            self.setc(false);
             self.cv.set_font(1);
+            self.set_dk(if byp { 0.3 } else { 0.6 }); // a caption, not a control: dimmer than the buttons, and half again on bypass
+            self.setc(false);
             self.cv.textc(146.0, 192.0, 78.0, "OVERSAMPLE");
             self.set_dk(if byp { 0.5 } else { 1.0 });
             let os_i = (self.sget(7) + 0.5).floor() as i32;

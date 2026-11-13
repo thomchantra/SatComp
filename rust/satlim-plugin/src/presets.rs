@@ -170,6 +170,22 @@ mod tests {
     }
 
     #[test]
+    fn the_factory_bank_has_the_six_presets_and_every_value_is_in_range() {
+        let f = factory();
+        for want in ["Baked", "Drums_Crunch", "Faulty Gate", "Master_Clean", "Master_Loud", "Peak Limiter"] {
+            assert!(f.iter().any(|p| p.name == want), "missing factory preset {want}");
+        }
+        for p in &f {
+            for (k, v) in &p.params {
+                let e = TABLE.iter().find(|e| e.1 == k).unwrap();
+                assert!(*v >= e.2 - 1e-3 && *v <= e.3 + 1e-3, "{}: {k} = {v} outside {}..{}", p.name, e.2, e.3);
+            }
+        }
+        let fg = f.iter().find(|p| p.name == "Faulty Gate").unwrap();
+        assert_eq!(fg.curve.len(), 4, "Faulty Gate carries its custom curve");
+    }
+
+    #[test]
     fn factory_starts_with_init_and_every_preset_uses_known_ids() {
         let f = factory();
         assert_eq!(f[0].name, "INIT");
