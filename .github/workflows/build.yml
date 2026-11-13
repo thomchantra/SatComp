@@ -83,14 +83,25 @@ jobs:
           plugin="${{ matrix.plugin }}"
           case "$plugin" in satcomp) disp=SatComp ;; satxcomp) disp=SatXComp ;; satlim) disp=SatLim ;; sateq) disp=SatEQ ;; esac
           ver=$(grep -m1 '^version' "rust/${plugin}-plugin/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
-          mkdir -p dist
+          # zip layout mirrors the install folders: VST3/<plugin>.vst3, CLAP/<plugin>.clap, INSTALL.txt, LICENSE (+ the manual on the macOS job)
+          mkdir -p dist/VST3 dist/CLAP
           cp LICENSE dist/
-          cp -R "rust/target/bundled/${plugin}.vst3" "rust/target/bundled/${plugin}.clap" dist/
+          cp -R "rust/target/bundled/${plugin}.vst3" dist/VST3/
+          cp -R "rust/target/bundled/${plugin}.clap" dist/CLAP/
+          case "${{ matrix.name }}" in macOS*) os=macOS ;; *) os=Windows ;; esac
+          sed -e "s/@PLUGIN@/${plugin}/g" -e "s/@NAME@/${disp}/g" -e "s/@VER@/v${ver}/g" "docs/install/INSTALL-${os}.txt" > dist/INSTALL.txt
+          manual="docs/manual/${disp}-Manual-v${ver}.pdf"
+          if [ -f "$manual" ]; then
+            cp "$manual" dist/
+            if [ "$os" = macOS ]; then cp "$manual" .; fi
+          fi
           cd dist && 7z a -tzip "../${disp}-v${ver}-${{ matrix.name }}.zip" . || zip -r "../${disp}-v${ver}-${{ matrix.name }}.zip" .
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.plugin }}-${{ matrix.name }}
-          path: "*.zip"
+          path: |
+            *.zip
+            *.pdf
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -106,7 +117,9 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.zip
+          files: |
+            artifacts/*.zip
+            artifacts/*.pdf
           # notes come from docs/releases/<tag>.md (falls back to generated notes when there is no file)
           body_path: ${{ hashFiles(format('docs/releases/{0}.md', github.ref_name)) != '' && format('docs/releases/{0}.md', github.ref_name) || '' }}
           generate_release_notes: ${{ !hashFiles(format('docs/releases/{0}.md', github.ref_name)) }}

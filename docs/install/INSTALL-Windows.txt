@@ -1,0 +1,28 @@
+@NAME@ @VER@ - installation (Windows)
+=====================================
+
+This zip contains two plug-in formats. Install the one your host uses (or both):
+
+  VST3\@PLUGIN@.vst3    the VST3 plug-in. It is a FOLDER: copy the whole folder, do not open it
+  CLAP\@PLUGIN@.clap    the CLAP plug-in (a single file)
+
+1. Unzip the download anywhere.
+2. VST3: copy the folder  VST3\@PLUGIN@.vst3  into
+       C:\Program Files\Common Files\VST3\
+   (Windows asks for administrator permission. No admin rights? Use
+       %LOCALAPPDATA%\Programs\Common\VST3\
+   instead; most hosts scan it.)
+3. CLAP: copy  CLAP\@PLUGIN@.clap  into
+       C:\Program Files\Common Files\CLAP\
+   (or %LOCALAPPDATA%\Programs\Common\CLAP\)
+4. Rescan plug-ins in your host (or restart it). The plug-in appears as "@NAME@".
+
+Your settings and presets
+-------------------------
+  Presets:  %APPDATA%\@NAME@\Presets
+  Themes:   %APPDATA%\SatComp\themes.json   (shared by SatComp, SatXComp and SatLim)
+
+Uninstall: delete the folder or file you copied.
+
+Trouble?  Open an issue: https://github.com/thomchantra/satcomp/issues
+Licence: GPL-3.0-or-later, see LICENSE.

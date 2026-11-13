@@ -1,0 +1,34 @@
+@NAME@ @VER@ - installation (macOS)
+===================================
+
+This zip contains two plug-in formats. Install the one your host uses (or both):
+
+  VST3/@PLUGIN@.vst3    the VST3 plug-in
+  CLAP/@PLUGIN@.clap    the CLAP plug-in
+
+The build is universal (Apple silicon and Intel).
+
+1. Unzip the download.
+2. VST3: copy  VST3/@PLUGIN@.vst3  into
+       ~/Library/Audio/Plug-Ins/VST3/
+   (for all users: /Library/Audio/Plug-Ins/VST3/)
+3. CLAP: copy  CLAP/@PLUGIN@.clap  into
+       ~/Library/Audio/Plug-Ins/CLAP/
+   (for all users: /Library/Audio/Plug-Ins/CLAP/)
+4. Rescan plug-ins in your host (or restart it). The plug-in appears as "@NAME@".
+
+The build is not notarized. If macOS says the plug-in is damaged or from an unidentified
+developer, run this in Terminal once (adjust the path to what you installed):
+
+    xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/@PLUGIN@.vst3
+    xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/@PLUGIN@.clap
+
+Your settings and presets
+-------------------------
+  Presets:  ~/Library/Application Support/@NAME@/Presets
+  Themes:   ~/Library/Application Support/SatComp/themes.json   (shared by SatComp, SatXComp and SatLim)
+
+Uninstall: delete the files you copied.
+
+Trouble?  Open an issue: https://github.com/thomchantra/satcomp/issues
+Licence: GPL-3.0-or-later, see LICENSE.

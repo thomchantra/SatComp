@@ -25,6 +25,8 @@ Shared: `satcomp-ui` (canvas, 27 palettes, 11 embedded fonts, FFT, widget kit, A
 ## Release and tag convention
 - `v*` tag: bundle release of everything that changed (0.5.2 is the first bundle). `satxcomp-v*`, `satlim-v*`, `sateq-v*`: a single plug-in on its own.
 - Zip name = `<Display>-v<the plug-in's own Cargo.toml version>-<platform>.zip`, not the tag's version.
+- Manuals: `docs/manual/<Plugin>.md` is the source, `python3 docs/manual/build.py` writes `<Plugin>-Manual-v<version>.pdf` (committed; CI attaches it to the release and puts it in the zips). Rebuild it whenever the plug-in version changes.
+- Zip layout: `VST3/<plugin>.vst3`, `CLAP/<plugin>.clap`, `INSTALL.txt` (from `docs/install/`), `LICENSE`, the manual.
 - Notes file `docs/releases/<tag>.md` before tagging (the release workflow uses it as the body); verify the release through the API afterwards. See `FOUNDATION.md`.
 
 ## Version history

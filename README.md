@@ -57,7 +57,7 @@ A 2-stage clipper/limiter with a waveshaping saturator. When you need to nuke it
 - Resizable window (100% to 250%). Double-click any slider to reset it. Click the title for an About page with the signal flow, Preferences and the changelog.
 
 ## Install
-Download the zip for your plug-in and system from the [Releases](../../releases) page and copy the bundles (`satcomp`, `satxcomp` or `satlim`):
+Download the zip for your plug-in and system from the [Releases](../../releases) page. Inside are `VST3/` and `CLAP/` folders that mirror the install locations, an `INSTALL.txt` and the plug-in's manual (PDF; the manuals are also in `docs/manual/`). Copy the bundle (`satcomp`, `satxcomp` or `satlim`) to:
 
 | | macOS | Windows |
 |---|---|---|
