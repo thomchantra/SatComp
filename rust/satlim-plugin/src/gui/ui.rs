@@ -1738,7 +1738,7 @@ impl<'a> Gui<'a> {
         if !ab {
             // OVERSAMPL sits on the shape selector's row, centred over the meter bars; x1..x8 share that row at the column width
             self.cv.set_font(1);
-            self.set_dk(if byp { 0.3 } else { 0.6 }); // a caption, not a control: dimmer than the buttons, and half again on bypass
+            self.set_dk(if byp { 0.5 } else { 1.0 }); // full UI colour like the other components, dimmed on bypass like them
             self.setc(false);
             self.cv.textc(146.0, 192.0, 78.0, "OVERSAMPLE");
             self.set_dk(if byp { 0.5 } else { 1.0 });
