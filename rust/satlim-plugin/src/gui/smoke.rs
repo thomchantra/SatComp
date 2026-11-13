@@ -405,3 +405,29 @@ fn the_theme_editor_page_has_a_filled_scope_in_stacking_order() {
     r.st.fill_dummy();
     assert_eq!(ring.head(), before, "filled once, then still");
 }
+
+#[test]
+fn the_dice_rolls_a_different_scheme_each_time_and_scrolls_the_list_to_it() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut r = Rig::new();
+    r.click(60.0, 12.0); // About
+    r.click(182.0, 38.0); // PREFERENCES tab
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    let n = r.st.app.n_schemes() as i32;
+    assert!(n >= 27, "the built-in table has grown to 27: {n}");
+    let mut seen = std::collections::BTreeSet::new();
+    let mut prev = r.params.palette_v2.load(Relaxed);
+    for _ in 0..12 {
+        r.click(110.0, 109.0); // the dice, right of the COLOR SCHEME label
+        let now = r.params.palette_v2.load(Relaxed);
+        assert!(now >= 0 && now < n, "scheme {now} of {n}");
+        assert_ne!(now, prev, "a roll never lands on the current scheme");
+        assert_eq!(r.st.app.ap_scroll, (now as usize).saturating_sub(2), "the list follows the roll");
+        seen.insert(now);
+        prev = now;
+    }
+    assert!(seen.len() >= 4, "twelve rolls should land on several different schemes: {seen:?}");
+    assert!(r.log().is_empty(), "UI-only, no host writes");
+}

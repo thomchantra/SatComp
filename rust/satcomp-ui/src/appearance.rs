@@ -150,6 +150,21 @@ pub fn clear_defaults() {
     }
 }
 
+/// A quick pseudo-random number from the clock (xorshift over the nanoseconds): good enough to roll a die.
+fn rand_u32(salt: f64) -> u32 {
+    let ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as u64 ^ d.as_secs()).unwrap_or(1);
+    let mut x = ns ^ salt.to_bits() ^ 0x9E37_79B9_7F4A_7C15;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    (x >> 16) as u32
+}
+
+/// Index of the built-in scheme called `name` (case-insensitive).
+pub fn builtin_by_name(name: &str) -> Option<usize> {
+    PALETTES.iter().position(|p| p.0.eq_ignore_ascii_case(name.trim()))
+}
+
 pub fn load_themes() -> Vec<UserTheme> {
     themes_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -340,7 +355,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), font_open: false, def_menu: 0, has_global: load_defaults().is_some(), themes: load_themes(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
+        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), font_open: false, def_menu: 0, has_global: load_defaults().is_some(), themes: load_themes().into_iter().filter(|t| builtin_by_name(&t.name).is_none()).collect(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
     }
 
     /// The egui clock restarted (editor reopened): re-base stored timestamps.
@@ -383,18 +398,29 @@ impl AppState {
     /// A project that used a user theme: find it in the themes file by name, or restore it from the project copy.
     /// `saved` is the project's `custom-theme` string. Returns the scheme index to use.
     pub fn restore_custom(&mut self, pal: usize, saved: &str) -> usize {
-        if pal < PALETTES.len() {
-            return pal;
-        }
+        // A saved user theme (the project carries a copy: `saved`) wins over the stored index: the built-in table has grown
+        // since projects were saved, so an old "user theme" index (>= 20) can now be a built-in one. A user theme that has
+        // since become a built-in (same name) resolves to the built-in.
         match decode(saved) {
-            Some(t) => match self.themes.iter().position(|u| u.name == t.name) {
-                Some(i) => PALETTES.len() + i,
-                None => {
-                    self.themes.push(t);
-                    PALETTES.len() + self.themes.len() - 1
+            Some(t) => {
+                if let Some(i) = builtin_by_name(&t.name) {
+                    return i;
                 }
-            },
-            None => 0,
+                match self.themes.iter().position(|u| u.name == t.name) {
+                    Some(i) => PALETTES.len() + i,
+                    None => {
+                        self.themes.push(t);
+                        PALETTES.len() + self.themes.len() - 1
+                    }
+                }
+            }
+            None => {
+                if pal < PALETTES.len() {
+                    pal
+                } else {
+                    0
+                }
+            }
         }
     }
 
@@ -508,7 +534,7 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
     fn apply_defaults(&mut self, d: Option<&Defaults>) {
         match d {
             Some(d) => {
-                let pal = if d.pal >= 0 && (d.pal as usize) >= PALETTES.len() { self.app().restore_custom(d.pal as usize, &d.theme) } else { d.pal.max(0) as usize };
+                let pal = self.app().restore_custom(d.pal.max(0) as usize, &d.theme);
                 self.set_pal(pal);
                 self.set_light(d.light);
                 self.commit_face(d.face_index() as usize);
@@ -752,6 +778,28 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         let pal = self.pal();
         let user_sel = pal >= PALETTES.len();
         let bx = r.x + r.w - 170.0;
+        // dice: pick a random scheme (built-in or user theme), never the current one
+        let tw = self.cv().text_w("COLOR SCHEME");
+        let dx0 = lx + tw + 8.0;
+        let dy0 = r.y + 26.0 + hx;
+        if dx0 + 18.0 < bx - 4.0 {
+            if self.btn(dx0, dy0, 18.0, 14.0, "", 0) {
+                let n = self.app_ref().n_schemes();
+                if n > 1 {
+                    let mut idx = (rand_u32(self.kit_ref().now) as usize) % (n - 1);
+                    if idx >= pal {
+                        idx += 1; // skip the current one
+                    }
+                    self.set_pal(idx);
+                    self.app().ap_scroll = idx.saturating_sub(2);
+                }
+            }
+            self.setc(false);
+            self.cv().boxr(dx0 + 4.0, dy0 + 2.0, 10.0, 10.0);
+            for (px, py) in [(2.0, 2.0), (6.0, 2.0), (4.0, 4.0), (2.0, 6.0), (6.0, 6.0)] {
+                self.cv().fill(dx0 + 4.0 + px, dy0 + 2.0 + py, 2.0, 2.0);
+            }
+        }
         if self.btn(bx, r.y + 26.0 + hx, 82.0, 14.0, "NEW THEME", 0) {
             self.begin_edit(None);
             return;
@@ -1410,6 +1458,38 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_user_theme_keeps_its_look_after_the_builtin_table_grew() {
+        let mut a = AppState { themes: Vec::new(), ..AppState::new() };
+        let t = UserTheme { name: "Mine".into(), dark: [0.1; 9], light: [0.9; 9] };
+        // an old project: user themes were indices 20, 21, ... (the table had 20 entries then), the project carries the theme
+        let i = a.restore_custom(20, &encode(&t));
+        assert_eq!(i, PALETTES.len(), "the user theme, not whatever built-in now sits at index 20");
+        assert_eq!(a.themes.len(), 1);
+        assert_eq!(a.restore_custom(20, &encode(&t)), i, "restoring twice does not add a second copy");
+        // a built-in index with no theme string stays itself, a stale out-of-range index falls back to Mono
+        assert_eq!(a.restore_custom(5, ""), 5);
+        assert_eq!(a.restore_custom(200, ""), 0);
+        // a user theme that is a built-in now (same name, any case) resolves to the built-in
+        let b = UserTheme { name: "BRICK".into(), dark: [0.3; 9], light: [0.7; 9] };
+        assert_eq!(a.restore_custom(21, &encode(&b)), builtin_by_name("brick").unwrap());
+    }
+
+    #[test]
+    fn the_new_schemes_are_in_the_table_and_ultramarine_has_the_lighter_accent() {
+        for n in ["Brick", "Bob", "Carbon", "Olive", "Jade", "Honey", "Stealth"] {
+            assert!(builtin_by_name(n).is_some(), "{n}");
+        }
+        assert_eq!(PALETTES.len(), 27);
+        let u = &PALETTES[builtin_by_name("Ultramarine").unwrap()];
+        assert!((u.1[6] - 0x77 as f32 / 255.0).abs() < 0.001, "ultramarine accent {:?}", u.1);
+        // names are unique, ignoring case
+        let mut names: Vec<String> = PALETTES.iter().map(|p| p.0.to_ascii_lowercase()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), PALETTES.len());
+    }
 
     #[test]
     fn theme_encoding_roundtrips_and_hsv_inverts() {
