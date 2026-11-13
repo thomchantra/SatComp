@@ -42,6 +42,23 @@ pub const PALETTES: [(&str, [f32; 9], [f32; 9]); 20] = [
 /// Selectable UI fonts (index persisted as `ui-font`: append, do not reorder). All are SIL OFL 1.1.
 pub const FONT_NAMES: [&str; 9] = ["Fira Code", "JetBrains Mono", "Geist Mono", "Roboto Mono", "Oxygen Mono", "Doto", "DM Mono", "Victor Mono", "Anonymous Pro"];
 
+/// Per-typeface tuning, SAME ORDER as `FONT_NAMES`: `(size multiplier, vertical shift)`.
+/// * size multiplier: 1.0 = unchanged. Fonts differ in cap height (Victor Mono is tall, Anonymous Pro small), so each is
+///   scaled to land near Fira Code's cap height (about 0.71 em). Raise it if a font looks small, lower it if it looks big.
+/// * vertical shift: in em of the scaled font; positive moves the text DOWN, negative UP (1 unit of the shift is the font
+///   size, so 0.05 is about half a pixel at 100%).
+pub const FONT_TUNE: [(f32, f32); 9] = [
+    (1.00, 0.0), // Fira Code
+    (0.97, 0.0), // JetBrains Mono
+    (1.00, 0.0), // Geist Mono
+    (1.00, 0.0), // Roboto Mono
+    (0.97, 0.0), // Oxygen Mono
+    (1.00, 0.0), // Doto
+    (1.01, 0.0), // DM Mono
+    (0.89, 0.0), // Victor Mono
+    (1.11, 0.0), // Anonymous Pro
+];
+
 pub fn font_family(i: usize) -> FontFamily {
     FontFamily::Name(format!("f{i}").into())
 }
@@ -138,7 +155,7 @@ impl<'a> Canvas<'a> {
             1 => 12.0,
             2 => 14.0,
             _ => 18.0,
-        } * self.s * FONT_SCALE;
+        } * self.s * FONT_SCALE * FONT_TUNE[self.face].0;
         FontId::new(sz.max(5.0), font_family(self.face))
     }
 
@@ -152,7 +169,7 @@ impl<'a> Canvas<'a> {
     }
 
     pub fn text(&self, x: f32, y: f32, s: &str) {
-        let lift = TEXT_LIFT_EM * self.fid().size;
+        let lift = (TEXT_LIFT_EM - FONT_TUNE[self.face].1) * self.fid().size;
         self.p.text(
             Pos2::new(self.snap(self.ox + x * self.s), self.snap(self.oy + y * self.s - lift)),
             Align2::LEFT_TOP,

@@ -1483,7 +1483,7 @@ impl<'a> Gui<'a> {
 
     /// Header preset bar (save icon | name | prev next) and the window-scale button.
     fn preset_bar(&mut self) {
-        let (y, h) = (30.0, 16.0);
+        let (y, h) = (32.0, 16.0); // the logo box ends at 29: a 3 unit gap above, 4 to the scope below
         // save icon
         if self.btn(10.0, y, 26.0, h, "", 0) {
             self.pending = 2;
@@ -1670,16 +1670,16 @@ impl<'a> Gui<'a> {
         }
         self.cv.text(44.0, 12.0, &title);
         let label = format!("{:.0}%", self.cur_scale() * 100.0);
-        if self.btn(176.0, 6.0, 42.0, 16.0, &label, 0) {
+        if self.btn(176.0, 7.0, 42.0, 17.0, &label, 0) {
             let cur = SIZES.iter().position(|v| (v - self.cur_scale()).abs() < 0.13).unwrap_or(0);
             let items = SIZES.iter().map(|v| format!("{:.0}%", v * 100.0)).collect();
-            self.open_menu(MenuKind::Size, 176.0, 22.0, items, cur);
+            self.open_menu(MenuKind::Size, 176.0, 24.0, items, cur);
         }
         let delta = sh.delta_on.load(Ordering::Relaxed);
-        if self.btn(222.0, 6.0, 50.0, 16.0, "DELTA", if delta { 2 } else { 0 }) {
+        if self.btn(222.0, 7.0, 50.0, 17.0, "DELTA", if delta { 2 } else { 0 }) {
             sh.delta_on.store(!delta, Ordering::Relaxed);
         }
-        if self.btn(274.0, 6.0, 56.0, 16.0, "BYPASS", byp as u8) {
+        if self.btn(274.0, 7.0, 56.0, 17.0, "BYPASS", byp as u8) {
             self.click_set(26, if byp { 0.0 } else { 1.0 });
         }
 
@@ -1690,7 +1690,7 @@ impl<'a> Gui<'a> {
         }
         self.set_dk(if byp { 0.5 } else { 1.0 });
         if ab {
-            self.draw_about(Rect::new(10.0, 52.0, 320.0, 440.0), byp);
+            self.draw_about(Rect::new(10.0, 54.0, 320.0, 438.0), byp);
         }
 
         if !ab {
