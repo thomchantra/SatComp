@@ -30,5 +30,13 @@ Your settings and presets
 
 Uninstall: delete the files you copied.
 
-Trouble?  Open an issue: https://github.com/thomchantra/satcomp/issues
+Got issues?
+-----------
+Found a bug, or something sounds or looks odd? Please submit a bug report on GitHub:
+  https://github.com/thomchantra/SatComp/issues
+Say which plug-in and version, your host (DAW) and operating system, and what you did. A screenshot
+or a short description of how to reproduce it helps a lot.
+
+Enjoying it? You can support the project here: https://ko-fi.com/thomchantra
+
 Licence: GPL-3.0-or-later, see LICENSE.

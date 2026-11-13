@@ -97,6 +97,10 @@ jobs:
           cp -R "rust/target/bundled/${plugin}.clap" dist/CLAP/
           case "${{ matrix.name }}" in macOS*) os=macOS ;; Linux*) os=Linux ;; *) os=Windows ;; esac
           sed -e "s/@PLUGIN@/${plugin}/g" -e "s/@NAME@/${disp}/g" -e "s/@VER@/v${ver}/g" "docs/install/INSTALL-${os}.txt" > dist/INSTALL.txt
+          if [ "$os" = Linux ]; then
+            sed -e "s/@PLUGIN@/${plugin}/g" -e "s/@NAME@/${disp}/g" -e "s/@VER@/v${ver}/g" docs/install/install-linux.sh > dist/install.sh
+            chmod +x dist/install.sh
+          fi
           manual="docs/manual/${disp}-Manual-v${ver}.pdf"
           if [ -f "$manual" ]; then
             cp "$manual" dist/
