@@ -81,6 +81,10 @@ pub fn user_dir() -> Option<PathBuf> {
 /// (display name, path) of the user presets, sorted case-insensitively.
 pub fn scan_user() -> Vec<(String, PathBuf)> {
     let mut v = Vec::new();
+    // tests are hermetic: the machine's own user presets must not change what the editor lists (the UI golden steps through them)
+    if cfg!(test) {
+        return v;
+    }
     if let Some(d) = user_dir() {
         if let Ok(rd) = std::fs::read_dir(d) {
             for e in rd.flatten() {
