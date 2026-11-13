@@ -182,6 +182,8 @@ pub struct State {
     clip_lat: bool,
     rd_last: f64,
     rd_pk: f32,
+    /// per band: loudness change across the saturator (readout in the plot corner, refreshed ~8x/s)
+    rd_sat: [f32; 4],
     rd_rms: f32,
     rd_diff: f32,
     lut: ShaperLut,
@@ -333,6 +335,7 @@ impl State {
             clip_lat: false,
             rd_last: 0.0,
             rd_pk: 0.0,
+            rd_sat: [0.0; 4],
             rd_rms: 0.0,
             rd_diff: 0.0,
             lut: ShaperLut::new(0),
@@ -1853,8 +1856,15 @@ impl<'a> Gui<'a> {
             }
         }
         let hv = self.hit(x, y, w, h) && !self.curve_edit;
+        // the SAT readout in the bottom right corner: click = measure 3 s, then write this band's SAT GAIN (click again cancels)
+        let tb = self.hit(x + w - 84.0, y + h - 14.0, 82.0, 12.0);
         if hv && self.kit.press && self.kit.act == 0 {
-            self.begin_drag(gain_n);
+            if tb {
+                sh.sat_req[b].store(true, Ordering::Relaxed);
+                self.kit.press = false;
+            } else {
+                self.begin_drag(gain_n);
+            }
         }
         if hv && self.kit.wheel != 0 {
             self.wheel_adj(gain_n);
@@ -1915,6 +1925,14 @@ impl<'a> Gui<'a> {
         self.setc(false);
         self.cv.set_font(1);
         self.cv.text(x + 3.0, y + 3.0, &format!("OUT {:+.1}dB", tot));
+        let s = if sh.sat_meas[b].load(Ordering::Relaxed) {
+            self.setc(appearance::blink(self.kit.now));
+            format!("MEAS {:.1}s", sh.sat_mt[b].load(Ordering::Relaxed))
+        } else {
+            format!("SAT {:+.1}dB", self.rd_sat[b])
+        };
+        self.cv.textr(x, y + h - 14.0, w - 3.0, &s);
+        self.setc(false);
     }
 
     /// Draw view of the selected band's custom curve (unity input, independent of drive/bias).
@@ -2575,10 +2593,20 @@ impl<'a> Gui<'a> {
                 self.s.test_capture = Some(self.capture("test"));
             }
         }
+        // a finished sat level match writes that band's SAT GAIN (the audio thread cannot set parameters)
+        for b in 0..NB {
+            if sh.sat_result_new[b].swap(false, Ordering::Acquire) {
+                let v = sh.sat_result[b].load(Ordering::Relaxed);
+                self.click_set(band_base(b) + SAT_GAIN, v);
+            }
+        }
         // readouts refresh ~8x/s
         if self.kit.now - self.rd_last >= 0.12 {
             self.rd_last = self.kit.now;
             self.rd_pk = self.opk_max;
+            for b in 0..NB {
+                self.rd_sat[b] = sh.sat_db[b].load(Ordering::Relaxed);
+            }
             self.rd_rms = sh.fms.load(Ordering::Relaxed);
             self.rd_diff = sh.diff_disp.load(Ordering::Relaxed);
             self.rd_eq_diff = sh.eq_diff.load(Ordering::Relaxed);

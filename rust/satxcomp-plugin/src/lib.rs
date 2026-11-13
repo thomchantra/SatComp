@@ -43,6 +43,14 @@ pub struct Shared {
     pub out_mt: AtomicF32,
     // UI -> audio
     pub match_req: AtomicBool,
+    /// per band: SAT GAIN level match request (UI -> audio), live loudness change across the saturator (dB), measurement
+    /// state and progress, and the finished result the UI writes to the band's SAT GAIN (audio -> UI)
+    pub sat_req: [AtomicBool; 4],
+    pub sat_db: [AtomicF32; 4],
+    pub sat_meas: [AtomicBool; 4],
+    pub sat_mt: [AtomicF32; 4],
+    pub sat_result: [AtomicF32; 4],
+    pub sat_result_new: [AtomicBool; 4],
     pub delta_on: AtomicBool,
     /// monitor the conditioned sidechain key instead of the output (UI -> audio)
     pub sc_solo: AtomicBool,
@@ -74,6 +82,12 @@ impl Shared {
             out_meas: AtomicBool::new(false),
             out_mt: AtomicF32::new(0.0),
             match_req: AtomicBool::new(false),
+            sat_req: std::array::from_fn(|_| AtomicBool::new(false)),
+            sat_db: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            sat_meas: std::array::from_fn(|_| AtomicBool::new(false)),
+            sat_mt: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            sat_result: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            sat_result_new: std::array::from_fn(|_| AtomicBool::new(false)),
             delta_on: AtomicBool::new(false),
             sc_solo: AtomicBool::new(false),
             sc_bus: AtomicBool::new(true),
@@ -182,6 +196,11 @@ impl Plugin for SatXComp {
             self.last_latency = lat;
             context.set_latency_samples(lat);
         }
+        for b in 0..4 {
+            if sh.sat_req[b].swap(false, Ordering::Relaxed) {
+                self.engine.request_sat_match(b);
+            }
+        }
         if sh.match_req.swap(false, Ordering::Relaxed) {
             self.engine.request_match();
         }
@@ -217,6 +236,13 @@ impl Plugin for SatXComp {
             sh.sat_vz[b].store(e.sat_vz[b] as f32, Ordering::Relaxed);
             sh.sat_out_pk[b].fetch_max(e.sat_out[b] as f32, Ordering::Relaxed);
             e.sat_out[b] = 0.0;
+            sh.sat_db[b].store(e.sat_db[b] as f32, Ordering::Relaxed);
+            sh.sat_meas[b].store(e.sat_matching(b), Ordering::Relaxed);
+            sh.sat_mt[b].store(e.sat_match_progress(b) as f32, Ordering::Relaxed);
+            if let Some(v) = e.take_sat_result(b) {
+                sh.sat_result[b].store(v as f32, Ordering::Relaxed);
+                sh.sat_result_new[b].store(true, Ordering::Release);
+            }
         }
         sh.fms.store(e.fms as f32, Ordering::Relaxed);
         sh.diff_disp.store(e.diff_disp as f32, Ordering::Relaxed);

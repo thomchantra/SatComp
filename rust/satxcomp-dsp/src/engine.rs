@@ -95,6 +95,12 @@ pub struct XEngine {
     match_on: bool,
     prev_match_on: bool,
     out_m: Matcher,
+    /// per band: the SAT GAIN level match (3 s measurement of the saturator's loudness change, then the gain that cancels it)
+    sat_m: [Matcher; NB],
+    sat_req: [bool; NB],
+    sat_result: [Option<f64>; NB],
+    /// per band: live loudness change across the saturator, dB (SAT GAIN not included)
+    pub sat_db: [f64; NB],
     pub match_trim: f64,
     match_req: bool,
 
@@ -180,6 +186,10 @@ impl XEngine {
             match_on: false,
             prev_match_on: false,
             out_m: Matcher::default(),
+            sat_m: [Matcher::default(); NB],
+            sat_req: [false; NB],
+            sat_result: [None; NB],
+            sat_db: [0.0; NB],
             match_trim: 0.0,
             match_req: false,
             tap_out: Arc::new(TapRing::new()),
@@ -232,6 +242,27 @@ impl XEngine {
     /// PDC latency to report (saturator oversampling + lookahead; all bands are aligned).
     pub fn latency(&self) -> u32 {
         (self.strips[0].latency() + self.lim.latency()) as u32
+    }
+
+    /// Measure band `b`'s saturator loudness change for 3 s, then report the SAT GAIN that cancels it (a second call cancels).
+    pub fn request_sat_match(&mut self, b: usize) {
+        if b < NB {
+            self.sat_req[b] = true;
+        }
+    }
+
+    pub fn sat_matching(&self, b: usize) -> bool {
+        self.sat_m[b].active
+    }
+
+    /// Seconds measured so far (0..3) for band `b`.
+    pub fn sat_match_progress(&self, b: usize) -> f64 {
+        self.sat_m[b].t
+    }
+
+    /// The finished match of band `b`, once (the shell writes it to that band's SAT GAIN parameter).
+    pub fn take_sat_result(&mut self, b: usize) -> Option<f64> {
+        self.sat_result[b].take()
     }
 
     pub fn request_match(&mut self) {
@@ -338,6 +369,28 @@ impl XEngine {
             self.gr_blk[b] = self.strips[b].gr_blk;
             self.gr_pk[b] = self.gr_pk[b].max(self.gr_blk[b]);
             self.strips[b].gr_blk = 0.0;
+        }
+        for b in 0..NB {
+            let change = self.strips[b].sat_change_db();
+            if let Some(db) = change {
+                self.sat_db[b] = db;
+            }
+            if std::mem::take(&mut self.sat_req[b]) {
+                let was = self.sat_m[b].active;
+                self.sat_m[b].start();
+                if was {
+                    self.sat_m[b].stop(); // a second click cancels
+                }
+            }
+            if self.sat_m[b].active {
+                if let Some(db) = change {
+                    if let Some(avg) = self.sat_m[b].step(db, dt) {
+                        let v = (avg.clamp(-24.0, 12.0) * 10.0 + 0.5).floor() * 0.1;
+                        self.strips[b].sat.set_out_db(v);
+                        self.sat_result[b] = Some(v);
+                    }
+                }
+            }
         }
         let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
         for b in 0..NB {
@@ -751,6 +804,32 @@ mod tests {
         e.set_params(&p);
         run(&mut e, &tone);
         assert!(e.eq_diff.abs() < 0.5, "eq mix 0 should read 0 dB, got {}", e.eq_diff);
+    }
+
+    #[test]
+    fn the_sat_match_of_a_band_cancels_that_bands_saturator_change() {
+        // drive the low band hard on a low tone: the saturator is louder, the match turns SAT GAIN down; other bands untouched
+        let tone = sine(48000 * 5, 80.0, 0.3);
+        let mut p = neutral();
+        p.bands[0].drive = 70.0;
+        let mut e = XEngine::new(SR);
+        e.set_params(&p);
+        e.request_sat_match(0);
+        let (mut l, mut r): (Vec<f32>, Vec<f32>) = (tone.iter().map(|&v| v as f32).collect(), tone.iter().map(|&v| v as f32).collect());
+        let mut got = None;
+        for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            e.process(cl, cr);
+            if let Some(v) = e.take_sat_result(0) {
+                got = Some(v);
+            }
+        }
+        let v = got.expect("the measurement finishes within 5 s");
+        assert!(v < -0.5 && v > -24.0, "drive 70 on a tone is louder, the match turns it down: {v}");
+        assert!((v + e.sat_db[0]).abs() < 1.0, "match {v} vs measured change {}", e.sat_db[0]);
+        assert!(e.take_sat_result(0).is_none() && !e.sat_matching(0));
+        for b in 1..NB {
+            assert!(e.take_sat_result(b).is_none(), "band {b} was not asked");
+        }
     }
 
     #[test]

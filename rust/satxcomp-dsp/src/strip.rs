@@ -3,7 +3,7 @@
 use crate::confine::{Confine, Edge};
 use crate::params::BandParams;
 use satcomp_dsp::delay::StereoDelay;
-use satcomp_dsp::level::{one_pole, LN10_20};
+use satcomp_dsp::level::{ms_step, one_pole, LN10_20};
 use satcomp_dsp::{Compressor, SatParams, Saturator};
 use satcomp_dsp::CompParams;
 
@@ -37,6 +37,11 @@ pub struct Strip {
     pub gr_blk: f64,
     /// peak of the saturator output (before the compressor) since the owner last reset it
     pub sat_pk: f64,
+    /// slow mean squares of the band's input and of the saturator's result before SAT GAIN (after the band confine): the
+    /// loudness change the SAT GAIN level match cancels
+    ims: f64,
+    sms: f64,
+    ms_c: f64,
 }
 
 impl Default for Strip {
@@ -64,7 +69,15 @@ impl Strip {
             on_c: 0.0,
             gr_blk: 0.0,
             sat_pk: 0.0,
+            ims: 1e-9,
+            sms: 1e-9,
+            ms_c: 0.0,
         }
+    }
+
+    /// Loudness change of the band across its saturator in dB (SAT GAIN not included); `None` while the band is silent.
+    pub fn sat_change_db(&self) -> Option<f64> {
+        (self.ims > 0.000001).then(|| 4.3429448 * (self.sms.max(1e-12) / self.ims.max(1e-12)).ln())
     }
 
     pub fn sat_params(p: &BandParams, os: i32) -> SatParams {
@@ -104,6 +117,7 @@ impl Strip {
         self.on_t = if p.on { 1.0 } else { 0.0 };
         self.sm_c = one_pole(sr, 0.02);
         self.on_c = one_pole(sr, 0.01);
+        self.ms_c = one_pole(sr, 0.5);
         if snap {
             self.cmix = self.cmix_t;
             self.cg = self.cg_t;
@@ -127,7 +141,10 @@ impl Strip {
         let (raw, clean) = self.sat.tick_split(inp, smoothing);
         let add = self.confine.tick([raw[0] - clean[0], raw[1] - clean[1]]);
         let g = self.sat.gain_step();
-        let cc = [(clean[0] + add[0]) * g, (clean[1] + add[1]) * g];
+        let shaped = [clean[0] + add[0], clean[1] + add[1]];
+        ms_step(&mut self.ims, inp[0], inp[1], self.ms_c);
+        ms_step(&mut self.sms, shaped[0], shaped[1], self.ms_c);
+        let cc = [shaped[0] * g, shaped[1] * g];
         self.sat_pk = self.sat_pk.max(cc[0].abs().max(cc[1].abs()));
         self.lk.advance();
         self.lk.put(cc);

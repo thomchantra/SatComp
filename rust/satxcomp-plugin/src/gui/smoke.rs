@@ -614,3 +614,22 @@ fn solo_and_delta_follow_the_selected_band_tab() {
     q.click(167.0, 206.0);
     assert!(!q.log()[n0..].iter().any(|l| l.contains("Solo") || l.contains("Delta")), "{:?}", &q.log()[n0..]);
 }
+
+/// SAT GAIN level match: the SAT readout in a band's plot corner requests a measurement for that band, and the finished
+/// result is written to that band's SAT GAIN.
+#[test]
+fn clicking_the_sat_readout_requests_that_bands_level_match_and_its_result_writes_sat_gain() {
+    use std::sync::atomic::Ordering::{Relaxed, Release};
+    let mut r = Rig::new();
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    r.click(100.0, 382.0); // the SAT readout of the selected (LO) band
+    assert!(r.shared.sat_req[0].swap(false, Relaxed), "no match request for band 0");
+    assert!(!r.shared.sat_req[1].load(Relaxed), "only the selected band is measured");
+    let n0 = r.log().len();
+    r.shared.sat_result[0].store(-3.5, Relaxed);
+    r.shared.sat_result_new[0].store(true, Release);
+    r.frame(vec![]);
+    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Sat Gain 0.569")), "{:?}", &r.log()[n0..]);
+}
