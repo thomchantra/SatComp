@@ -81,9 +81,13 @@ pub struct CompParams {
     pub gr_dist: f64,
     /// 0..100 %: external key vs main detector level when a key is supplied (0 = main only, 100 = key only)
     pub key_mix: f64,
-    /// upward mode: signals BELOW the threshold are lifted (ratio and knee as in the downward mode, mirrored around the
-    /// threshold), nothing above it is touched. The default (false) is the ordinary downward compressor, bit-identical.
+    /// upward: signals BELOW the threshold are lifted (ratio and knee as in the downward mode, mirrored around the threshold).
+    /// With `down` off nothing above the threshold is touched; with both on the band lifts below and reduces above the same
+    /// threshold. The default (up off, down on) is the ordinary downward compressor, bit-identical.
     pub up: bool,
+    /// reduce what is above the threshold (the ordinary compressor); only meaningful together with `up` (without `up` it is
+    /// always on)
+    pub down: bool,
     /// dB: the most the upward mode lifts
     pub up_range: f64,
 }
@@ -104,6 +108,7 @@ impl Default for CompParams {
             gr_dist: 0.0,
             key_mix: 100.0,
             up: false,
+            down: true,
             up_range: 12.0,
         }
     }
@@ -150,6 +155,7 @@ pub struct Compressor {
     ms_env: f64,
     gavg: f64,
     up: bool,
+    down: bool,
     up_range: f64,
     /// smoothed gain lift per channel (upward mode)
     gl: [f64; 2],
@@ -165,7 +171,7 @@ impl Compressor {
     }
 
     pub fn derive(&mut self, p: &CompParams, sr: f64) {
-        if p.up != self.up {
+        if p.up != self.up || p.down != self.down {
             // the two modes keep separate ballistics state: start the new mode from unity
             self.gl = [0.0; 2];
             self.grf = [0.0; 2];
@@ -173,6 +179,7 @@ impl Compressor {
             self.gavg = 0.0;
         }
         self.up = p.up;
+        self.down = p.down;
         self.up_range = p.up_range.max(0.0);
         self.gc = GainComputer::from_params(p);
         let spd = 4f64.powf((p.speed - 50.0) / 50.0);
@@ -217,11 +224,11 @@ impl Compressor {
         }
         let lmx = lv[0].max(lv[1]);
 
+        // Upward part: the gain computer mirrored around the threshold gives the lift for a level below it (same ratio, same
+        // knee), capped at the range. The lift rises when the level falls (release ballistics) and is pulled back quickly
+        // when it rises (attack), so loud transients are never boosted.
+        let mut lift = [0.0f64; 2];
         if self.up {
-            // Upward mode: the gain computer mirrored around the threshold gives the lift for a level below it (same ratio, same
-            // knee), capped at the range. The lift rises when the level falls (release ballistics) and is pulled back quickly
-            // when it rises (attack), so loud transients are never boosted.
-            let mut lift = [0.0f64; 2];
             for c in 0..2 {
                 let x = DB_AMP * lv[c].max(0.000001).ln();
                 let tl = self.gc.gr(2.0 * self.gc.thr - x).min(self.up_range);
@@ -238,9 +245,11 @@ impl Compressor {
                 }
                 lift[c] = self.gl[c];
             }
-            let y = [sig[0] * (lift[0] * LN10_20).exp(), sig[1] * (lift[1] * LN10_20).exp()];
-            self.prev = y;
-            return CompOut { y, g: [0.0; 2], lift, level: lmx };
+            if !self.down {
+                let y = [sig[0] * (lift[0] * LN10_20).exp(), sig[1] * (lift[1] * LN10_20).exp()];
+                self.prev = y;
+                return CompOut { y, g: [0.0; 2], lift, level: lmx };
+            }
         }
 
         let mut tg = [0.0f64; 2];
@@ -276,7 +285,7 @@ impl Compressor {
             g = self.grf;
         }
 
-        let mut y = [sig[0] * (-g[0] * LN10_20).exp(), sig[1] * (-g[1] * LN10_20).exp()];
+        let mut y = [sig[0] * ((lift[0] - g[0]) * LN10_20).exp(), sig[1] * ((lift[1] - g[1]) * LN10_20).exp()];
         if self.gdist > 0.0 {
             for c in 0..2 {
                 let dd = self.gdist * (g[c] * 0.0833333).min(1.0);
@@ -284,7 +293,7 @@ impl Compressor {
             }
         }
         self.prev = y;
-        CompOut { y, g, lift: [0.0; 2], level: lmx }
+        CompOut { y, g, lift, level: lmx }
     }
 }
 
@@ -342,7 +351,7 @@ mod tests {
 
     #[test]
     fn upward_mode_lifts_a_quiet_signal_up_to_the_range_and_leaves_a_loud_one_alone() {
-        let p = CompParams { up: true, up_range: 12.0, ..base() };
+        let p = CompParams { up: true, down: false, up_range: 12.0, ..base() };
         // -50 dB tone: 20 dB under the threshold, ratio 2 would lift 10 dB (under the 12 dB range)
         let (ratio, lift, gr) = run(&p, 0.00316, 1.0);
         assert!((lift - 10.0).abs() < 1.0, "lift {lift}");
@@ -357,8 +366,20 @@ mod tests {
     }
 
     #[test]
+    fn both_mode_lifts_below_and_reduces_above_the_same_threshold() {
+        let p = CompParams { up: true, down: true, up_range: 12.0, ..base() };
+        let (ratio, lift, gr) = run(&p, 0.00316, 1.0); // -50 dB: lifted
+        assert!((lift - 10.0).abs() < 1.0 && gr == 0.0, "quiet: lift {lift} gr {gr}");
+        assert!((20.0 * ratio.log10() - lift).abs() < 1.0);
+        let (ratio, lift, gr) = run(&p, 0.5, 1.0); // -6 dB: reduced like the plain compressor
+        let (plain, _, plain_gr) = run(&base(), 0.5, 1.0);
+        assert!(lift < 0.01, "no lift up there: {lift}");
+        assert!((gr - plain_gr).abs() < 0.2 && (ratio - plain).abs() < 0.01, "same reduction as downward: {gr} vs {plain_gr}");
+    }
+
+    #[test]
     fn upward_lift_gives_way_quickly_when_the_level_rises() {
-        let p = CompParams { up: true, up_range: 12.0, attack: 1.0, release: 400.0, ..base() };
+        let p = CompParams { up: true, down: false, up_range: 12.0, attack: 1.0, release: 400.0, ..base() };
         let mut c = Compressor::new();
         c.derive(&p, SR);
         let tone = |i: usize, a: f64| a * (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / SR).sin();

@@ -644,8 +644,18 @@ fn the_comp_up_switch_writes_the_band_and_the_meter_turns_centre_tapped() {
         r.frame(vec![]);
     }
     let n0 = r.log().len();
-    r.click(400.0, 229.0); // COMP DOWN -> UP (second column, top row)
-    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Up 1.000")), "{:?}", &r.log()[n0..]);
+    r.click(400.0, 229.0); // DWNWARD -> UPWARD (second column, top row); the mode is 0..2, so UPWARD is 0.500 normalised
+    assert!(r.log()[n0..].iter().any(|l| l.starts_with("Lo Comp Mode 0.500")), "{:?}", &r.log()[n0..]);
+    // the rest of the cycle, each from a rig that starts in that mode (the fake host logs writes but does not apply them)
+    for (from, want) in [(1, "Lo Comp Mode 1.000"), (2, "Lo Comp Mode 0.000")] {
+        let mut q = Rig::with_params(|p| p.lo_up = IntParam::new("Lo Comp Mode", from, IntRange::Linear { min: 0, max: 2 }));
+        for _ in 0..4 {
+            q.frame(vec![]);
+        }
+        let n = q.log().len();
+        q.click(400.0, 229.0);
+        assert!(q.log()[n..].iter().any(|l| l.starts_with(want)), "from mode {from}: {:?}", &q.log()[n..]);
+    }
     // KNEE and K.SHAPE still reach their parameters from the stacked pair in the second row
     let n0 = r.log().len();
     r.drag(400.0, 273.0, 400.0, 255.0);
@@ -655,7 +665,7 @@ fn the_comp_up_switch_writes_the_band_and_the_meter_turns_centre_tapped() {
 
     // the same lift on the meter draws differently with UP on than with it off (centre-tapped, gain colour)
     let frame_hash = |up: bool| {
-        let mut q = Rig::with_params(|p| p.lo_up = BoolParam::new("Lo Up", up));
+        let mut q = Rig::with_params(|p| p.lo_up = IntParam::new("Lo Comp Mode", up as i32 * 2, IntRange::Linear { min: 0, max: 2 }));
         q.shared.gl_pk[0].store(6.0, Relaxed);
         for _ in 0..12 {
             q.shared.gl_pk[0].fetch_max(6.0, Relaxed);

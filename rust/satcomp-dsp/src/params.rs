@@ -112,6 +112,7 @@ impl Params {
             gr_dist: self.gr_dist,
             key_mix: self.sc_mix,
             up: false,
+            down: true,
             up_range: 12.0,
         }
     }

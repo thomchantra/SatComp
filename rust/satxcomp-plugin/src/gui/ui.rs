@@ -1299,6 +1299,7 @@ impl<'a> Gui<'a> {
     /// colour (inverse of the accent), gain reduction (the band is not reducing in this mode, but the scale stays symmetric)
     /// grows downward in the accent. Same range cycling as the plain meter; the number window shows the lift.
     fn draw_gr_meter_up(&mut self, x: f32, y: f32, w: f32, h: f32, b: usize) {
+        let both = self.sget(band_base(b) + UP) > 1.5;
         let rng = |i: usize| [3.0f32, 6.0, 12.0, 18.0][i.min(3)];
         let peak = self.gl_disp[b].max(self.gr_disp[b]);
         while self.gr_ri < 3 && peak > rng(self.gr_ri) {
@@ -1336,6 +1337,18 @@ impl<'a> Gui<'a> {
         self.cv.setrgb(inv);
         self.cv.textc(x, y + 3.0, w, &gs);
         self.setc(false);
+        // UP/DWN also reduces: a second number window at the bottom, in the accent colour
+        if both {
+            self.cv.setbg();
+            self.cv.fill(x + 1.0, y + h - 12.0, w - 2.0, 11.0);
+            self.setc(false);
+            self.cv.fill(x + 1.0, y + h - 13.0, w - 2.0, 1.0);
+            let r = self.gr_txt[b];
+            let rs = if r > 0.04 { format!("-{:.1}", r) } else { "0.0".to_string() };
+            self.setc(true);
+            self.cv.textc(x, y + h - 10.0, w, &rs);
+            self.setc(false);
+        }
         // scale: ticks and numbers mirrored around the centre
         let mj = if rg == 3.0 { 1.0 } else if rg == 6.0 { 2.0 } else if rg == 12.0 { 3.0 } else { 6.0 };
         let stp = if rg <= 6.0 { 0.5 } else { 1.0 };
@@ -1343,13 +1356,13 @@ impl<'a> Gui<'a> {
             let v = j as f32 * stp;
             let off = (half + 1.0) * (v / rg);
             for (ty, dir) in [(cy + off, 1.0f32), (cy - off, -1.0)] {
-                if dir < 0.0 && ty < y + 13.0 {
-                    continue; // under the number window
+                if (dir < 0.0 && ty < y + 13.0) || (both && dir > 0.0 && ty > y + h - 13.0) {
+                    continue; // under a number window
                 }
                 if v == v.floor() && (v.floor() % mj) == 0.0 {
                     self.cv.fill(x + w - 5.0, ty, 4.0, 1.0);
                     let s = format!("{}", v as i32);
-                    self.cv.text(x + 2.0, (ty - 4.0).clamp(y + 14.0, y + h - 11.0), &s);
+                    self.cv.text(x + 2.0, (ty - 4.0).clamp(y + 14.0, y + h - if both { 24.0 } else { 11.0 }), &s);
                 } else {
                     self.cv.fill(x + w - 3.0, ty, 2.0, 1.0);
                 }
@@ -2384,16 +2397,22 @@ impl<'a> Gui<'a> {
         }
     }
 
-    /// COMP DOWN / UP mode switch with the RANGE slider (the most the upward mode lifts) stacked under it; the range reads
-    /// dim while the band is in the ordinary downward mode.
+    /// Compressor mode switch (DWNWARD / UPWARD / UP/DWN, click or wheel steps through them) with the RANGE slider (the most
+    /// the upward part lifts) stacked under it; the range reads dim while the band is in the plain downward mode.
     fn up_group(&mut self, b: usize, x: f32, y: f32) {
         let n = band_base(b) + UP;
-        let up = self.sget(n) > 0.5;
-        if self.btn(x, y, CELL_W, 19.0, if up { "COMP UP" } else { "COMP DOWN" }, up as u8) {
-            self.click_set(n, if up { 0.0 } else { 1.0 });
+        let mode = (self.sget(n) + 0.5).floor().clamp(0.0, 2.0) as i32;
+        let label = ["DWNWARD", "UPWARD", "UP/DWN"][mode as usize];
+        if self.btn(x, y, CELL_W, 19.0, label, (mode > 0) as u8) {
+            self.click_set(n, ((mode + 1) % 3) as f32);
+        } else if self.hit(x, y, CELL_W, 19.0) && self.kit.wheel != 0 {
+            let nx = (mode + if self.kit.wheel > 0 { 1 } else { -1 }).clamp(0, 2);
+            if nx != mode {
+                self.click_set(n, nx as f32);
+            }
         }
         let keep = self.kit.dk;
-        if !up {
+        if mode == 0 {
             self.set_dk(keep * 0.5);
         }
         self.cell1(range_slot(b), x, y + 18.0, CELL_W, 20.0, "RANGE");

@@ -54,7 +54,7 @@ BAND_FIELDS = [  # offset, field, name, kind, min, max, default, step, unit
     (20, "comp_gain", "Comp Gain", "f", -12, 24, 0, 0.1, " dB"),
     (21, "hp", "HP", "f", 20, 2000, 20, 1, " Hz"),
     (22, "lp", "LP", "f", 200, 20000, 20000, 1, " Hz"),
-    (23, "up", "Up", "bool", 0, 1, 0),  # upward compression (lift what is below the threshold)
+    (23, "up", "Comp Mode", "int", 0, 2, 0),  # 0 downward, 1 upward (lift below the threshold), 2 both
     (1160, "up_range", "Range", "f", 0, 24, 12, 0.1, " dB"),  # offsets >= 1000 are absolute slots: 160 + band (160-163)
 ]
 for b, (bid, bname) in enumerate(BANDS):

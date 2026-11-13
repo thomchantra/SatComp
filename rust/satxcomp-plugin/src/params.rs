@@ -53,7 +53,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (30, "lo_comp_gain", -12.0, 24.0, 0.0),
     (31, "lo_hp", 20.0, 2000.0, 20.0),
     (32, "lo_lp", 200.0, 20000.0, 20000.0),
-    (33, "lo_up", 0.0, 1.0, 0.0),
+    (33, "lo_up", 0.0, 2.0, 0.0),
     (160, "lo_up_range", 0.0, 24.0, 12.0),
     (34, "mid_on", 0.0, 1.0, 1.0),
     (35, "mid_solo", 0.0, 1.0, 0.0),
@@ -78,7 +78,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (54, "mid_comp_gain", -12.0, 24.0, 0.0),
     (55, "mid_hp", 20.0, 2000.0, 20.0),
     (56, "mid_lp", 200.0, 20000.0, 20000.0),
-    (57, "mid_up", 0.0, 1.0, 0.0),
+    (57, "mid_up", 0.0, 2.0, 0.0),
     (161, "mid_up_range", 0.0, 24.0, 12.0),
     (58, "mh_on", 0.0, 1.0, 1.0),
     (59, "mh_solo", 0.0, 1.0, 0.0),
@@ -103,7 +103,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (78, "mh_comp_gain", -12.0, 24.0, 0.0),
     (79, "mh_hp", 20.0, 2000.0, 20.0),
     (80, "mh_lp", 200.0, 20000.0, 20000.0),
-    (81, "mh_up", 0.0, 1.0, 0.0),
+    (81, "mh_up", 0.0, 2.0, 0.0),
     (162, "mh_up_range", 0.0, 24.0, 12.0),
     (82, "hi_on", 0.0, 1.0, 1.0),
     (83, "hi_solo", 0.0, 1.0, 0.0),
@@ -128,7 +128,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (102, "hi_comp_gain", -12.0, 24.0, 0.0),
     (103, "hi_hp", 20.0, 2000.0, 20.0),
     (104, "hi_lp", 200.0, 20000.0, 20000.0),
-    (105, "hi_up", 0.0, 1.0, 0.0),
+    (105, "hi_up", 0.0, 2.0, 0.0),
     (163, "hi_up_range", 0.0, 24.0, 12.0),
     (120, "eq1_on", 0.0, 1.0, 1.0),
     (121, "eq1_type", 0.0, 5.0, 1.0),
@@ -296,7 +296,7 @@ pub struct SatXCompParams {
     #[id = "lo_lp"]
     pub lo_lp: FloatParam,
     #[id = "lo_up"]
-    pub lo_up: BoolParam,
+    pub lo_up: IntParam,
     #[id = "lo_up_range"]
     pub lo_up_range: FloatParam,
     #[id = "mid_on"]
@@ -346,7 +346,7 @@ pub struct SatXCompParams {
     #[id = "mid_lp"]
     pub mid_lp: FloatParam,
     #[id = "mid_up"]
-    pub mid_up: BoolParam,
+    pub mid_up: IntParam,
     #[id = "mid_up_range"]
     pub mid_up_range: FloatParam,
     #[id = "mh_on"]
@@ -396,7 +396,7 @@ pub struct SatXCompParams {
     #[id = "mh_lp"]
     pub mh_lp: FloatParam,
     #[id = "mh_up"]
-    pub mh_up: BoolParam,
+    pub mh_up: IntParam,
     #[id = "mh_up_range"]
     pub mh_up_range: FloatParam,
     #[id = "hi_on"]
@@ -446,7 +446,7 @@ pub struct SatXCompParams {
     #[id = "hi_lp"]
     pub hi_lp: FloatParam,
     #[id = "hi_up"]
-    pub hi_up: BoolParam,
+    pub hi_up: IntParam,
     #[id = "hi_up_range"]
     pub hi_up_range: FloatParam,
     #[id = "eq1_on"]
@@ -584,7 +584,7 @@ impl SatXCompParams {
             lo_comp_gain: FloatParam::new("Lo Comp Gain", 0.0, FloatRange::Linear { min: -12.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             lo_hp: FloatParam::new("Lo HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             lo_lp: FloatParam::new("Lo LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
-            lo_up: BoolParam::new("Lo Up", false),
+            lo_up: IntParam::new("Lo Comp Mode", 0, IntRange::Linear { min: 0, max: 2 }),
             lo_up_range: FloatParam::new("Lo Range", 12.0, FloatRange::Linear { min: 0.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             mid_on: BoolParam::new("ML On", true),
             mid_solo: BoolParam::new("ML Solo", false),
@@ -609,7 +609,7 @@ impl SatXCompParams {
             mid_comp_gain: FloatParam::new("ML Comp Gain", 0.0, FloatRange::Linear { min: -12.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             mid_hp: FloatParam::new("ML HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             mid_lp: FloatParam::new("ML LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
-            mid_up: BoolParam::new("ML Up", false),
+            mid_up: IntParam::new("ML Comp Mode", 0, IntRange::Linear { min: 0, max: 2 }),
             mid_up_range: FloatParam::new("ML Range", 12.0, FloatRange::Linear { min: 0.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             mh_on: BoolParam::new("MH On", true),
             mh_solo: BoolParam::new("MH Solo", false),
@@ -634,7 +634,7 @@ impl SatXCompParams {
             mh_comp_gain: FloatParam::new("MH Comp Gain", 0.0, FloatRange::Linear { min: -12.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             mh_hp: FloatParam::new("MH HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             mh_lp: FloatParam::new("MH LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
-            mh_up: BoolParam::new("MH Up", false),
+            mh_up: IntParam::new("MH Comp Mode", 0, IntRange::Linear { min: 0, max: 2 }),
             mh_up_range: FloatParam::new("MH Range", 12.0, FloatRange::Linear { min: 0.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             hi_on: BoolParam::new("Hi On", true),
             hi_solo: BoolParam::new("Hi Solo", false),
@@ -659,7 +659,7 @@ impl SatXCompParams {
             hi_comp_gain: FloatParam::new("Hi Comp Gain", 0.0, FloatRange::Linear { min: -12.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             hi_hp: FloatParam::new("Hi HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
             hi_lp: FloatParam::new("Hi LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
-            hi_up: BoolParam::new("Hi Up", false),
+            hi_up: IntParam::new("Hi Comp Mode", 0, IntRange::Linear { min: 0, max: 2 }),
             hi_up_range: FloatParam::new("Hi Range", 12.0, FloatRange::Linear { min: 0.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             eq1_on: BoolParam::new("EQ1 On", true),
             eq1_type: IntParam::new("EQ1 Type", 1, IntRange::Linear { min: 0, max: 5 }),

@@ -822,7 +822,7 @@ mod tests {
         p.bands[0].thresh = -30.0;
         p.bands[0].ratio = 2.0;
         p.bands[0].knee = 0.0;
-        p.bands[0].up = true;
+        p.bands[0].up = 1;
         p.bands[0].up_range = 12.0;
         let mut e = XEngine::new(SR);
         e.set_params(&p);

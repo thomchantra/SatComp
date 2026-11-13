@@ -101,7 +101,8 @@ impl Strip {
             ff_fb: p.ff_fb,
             gr_dist: p.gr_dist,
             key_mix,
-            up: p.up,
+            up: p.up >= 1,
+            down: p.up != 1,
             up_range: p.up_range,
         }
     }
