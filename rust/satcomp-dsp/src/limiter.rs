@@ -2,6 +2,8 @@
 //!
 //! * Detection: the stereo-linked peak of the input, including the inter-sample peaks found by a 4x polyphase
 //!   interpolator (2x at 96 kHz-class rates, plain sample peak above that: inter-sample overs vanish at high rates).
+//!   `set_hi(true)` (SatLim) doubles each of those (8x / 4x / 2x) for material that is all inter-sample peaks: clipped,
+//!   heavily shaped programme, where a 4x grid under-reads by a few tenths of a dB.
 //! * Hard clip: every sample is clipped at `CLIP_OVER_DB` above the ceiling before detection and again on the delayed
 //!   audio, so a tall transient is shaved off clean and the gain stage only ever has to find the small remainder (a limiter
 //!   alone would duck the whole body for the length of its release after an 8 dB spike). Faded in with the limiter.
@@ -58,8 +60,27 @@ fn i0(x: f64) -> f64 {
 
 /// Kaiser-windowed sinc phases: for `r` x oversampling, `r - 1` filters that interpolate at `(i + 1) / r` between the
 /// two centre samples of the `TAPS`-sample window.
-fn phase_taps(r: usize) -> [[f64; TAPS]; 3] {
-    let mut c = [[0.0; TAPS]; 3];
+/// Most interpolated points per sample (8x oversampling).
+const PH: usize = 7;
+
+/// Oversampling factor of the detector for a sample rate; `hi` doubles it.
+fn factor(sr: f64, hi: bool) -> usize {
+    let r = if sr <= 50_000.0 {
+        4
+    } else if sr <= 100_000.0 {
+        2
+    } else {
+        1
+    };
+    if hi {
+        r * 2
+    } else {
+        r
+    }
+}
+
+fn phase_taps(r: usize) -> [[f64; TAPS]; PH] {
+    let mut c = [[0.0; TAPS]; PH];
     let beta = 5.0;
     let half = TAPS as f64 * 0.5;
     for ph in 0..r.saturating_sub(1) {
@@ -84,20 +105,19 @@ fn phase_taps(r: usize) -> [[f64; TAPS]; 3] {
 /// running every sample. Reads `TAPS / 2` samples late, which a meter does not mind.
 pub struct TruePeak {
     r: usize,
-    coef: [[f64; TAPS]; 3],
+    coef: [[f64; TAPS]; PH],
     hist: [[f64; 2 * TAPS]; 2],
     pos: usize,
 }
 
 impl TruePeak {
     pub fn new(sr: f64) -> Self {
-        let r = if sr <= 50_000.0 {
-            4
-        } else if sr <= 100_000.0 {
-            2
-        } else {
-            1
-        };
+        Self::with_precision(sr, false)
+    }
+
+    /// `hi` doubles the oversampling (8x at 48 kHz-class rates, 4x at 96 kHz-class, 2x above): see `Limiter::set_hi`.
+    pub fn with_precision(sr: f64, hi: bool) -> Self {
+        let r = factor(sr, hi);
         Self { r, coef: phase_taps(r), hist: [[0.0; 2 * TAPS]; 2], pos: 0 }
     }
 
@@ -131,7 +151,7 @@ pub struct Limiter {
     d: usize,
     l: usize,
     ceil: f64,
-    coef: [[f64; TAPS]; 3],
+    coef: [[f64; TAPS]; PH],
     /// largest sum of |tap| over the phases: an interpolated point can't exceed `lam * max|window|`, so a quiet
     /// window needs no interpolation at all (exactly the same result, far less work on quiet programme)
     lam: f64,
@@ -166,6 +186,12 @@ pub struct Limiter {
     clip_en: bool,
     /// lookahead + true-peak detection (on by default); off = zero latency, sample-peak, instant attack
     look: bool,
+    /// detector oversampling doubled (off by default; SatLim)
+    hi: bool,
+    /// after the lookahead is switched on: for `seed_n` more samples no target may be above `seed_g` (the audio already in
+    /// the delay line was never seen by the detector)
+    seed_n: usize,
+    seed_g: f64,
     /// The input sample that `tick` just returned the limited version of (the delayed input), for a delta monitor.
     pub last_in: [f64; 2],
     /// Smallest applied gain since the engine last reset it (linear, 1.0 = no reduction).
@@ -180,7 +206,7 @@ impl Limiter {
             d: 0,
             l: 4,
             ceil: 10f64.powf(CEILING_DB / 20.0),
-            coef: [[0.0; TAPS]; 3],
+            coef: [[0.0; TAPS]; PH],
             lam: 1.0,
             hot: 0,
             hist: [[0.0; 2 * TAPS]; 2],
@@ -205,6 +231,9 @@ impl Limiter {
             tau1: tune("LIM_TAU1", TAU_MAX),
             clip_en: true,
             look: true,
+            hi: false,
+            seed_n: 0,
+            seed_g: 1.0,
             last_in: [0.0; 2],
             gmin: 1.0,
         };
@@ -218,13 +247,8 @@ impl Limiter {
             return;
         }
         self.sr = sr;
-        self.r = if sr <= 50_000.0 {
-            4
-        } else if sr <= 100_000.0 {
-            2
-        } else {
-            1
-        };
+        self.seed_n = 0;
+        self.r = factor(sr, self.hi);
         self.d = if self.r > 1 { TAPS / 2 } else { 0 };
         self.l = ((LOOKAHEAD_S * sr).round() as usize).clamp(4, CAP - TAPS - 8);
         self.coef = phase_taps(self.r);
@@ -257,6 +281,17 @@ impl Limiter {
         self.tau0 = self.tau1.min(TAU_MIN);
     }
 
+    /// Double the detector's oversampling (8x at 48 kHz-class rates, 4x at 96 kHz-class, 2x above, where the latency
+    /// then grows by the interpolator's `TAPS / 2`). For programme that is mostly inter-sample peaks. Resets the state.
+    pub fn set_hi(&mut self, hi: bool) {
+        if hi == self.hi {
+            return;
+        }
+        self.hi = hi;
+        let sr = std::mem::replace(&mut self.sr, 0.0);
+        self.set_sample_rate(sr);
+    }
+
     /// The internal hard clip at the ceiling.
     pub fn set_clip(&mut self, on: bool) {
         self.clip_en = on;
@@ -269,14 +304,28 @@ impl Limiter {
             return;
         }
         self.look = on;
+        // Switching on: the delay line already holds the last `d + l` samples, which the detector never saw. Start from
+        // the gain that keeps the loudest of them at the ceiling (and from the gain in force), and hold every target at
+        // or below it until they have left the line: no burst of unlimited audio. Switching off needs nothing (instant).
+        let mut seed = 1.0f64;
+        if on {
+            let mut pk = 0.0f64;
+            for k in 0..self.d + self.l {
+                let y = self.delay.tap(k);
+                pk = pk.max(y[0].abs()).max(y[1].abs());
+            }
+            seed = self.g.min(if pk > self.ceil { self.ceil / pk } else { 1.0 });
+        }
+        self.seed_g = seed;
+        self.seed_n = if on && seed < 1.0 { self.d + self.l } else { 0 };
         self.hot = 0;
         self.hist = [[0.0; 2 * TAPS]; 2];
         self.need_prev = 1.0;
         self.dq.clear();
-        self.ring.iter_mut().for_each(|v| *v = 1.0);
+        self.ring.iter_mut().for_each(|v| *v = seed);
         self.rpos = 0;
-        self.sum = self.l as f64;
-        self.g = 1.0;
+        self.sum = self.l as f64 * seed;
+        self.g = seed;
         self.avg = 0.0;
         self.rc_n = 0;
     }
@@ -352,8 +401,12 @@ impl Limiter {
         let xc = [x[0].clamp(-cv, cv), x[1].clamp(-cv, cv)];
         let pk = self.detect(xc);
         let need = if pk > self.ceil { self.ceil / pk } else { 1.0 };
-        let t = need.min(self.need_prev);
+        let mut t = need.min(self.need_prev);
         self.need_prev = need;
+        if self.seed_n > 0 {
+            self.seed_n -= 1;
+            t = t.min(self.seed_g);
+        }
 
         // ---- sliding minimum over the last l + 1 targets
         self.n += 1;
@@ -728,6 +781,53 @@ mod tests {
         let x: Vec<f64> = (0..5000).map(|i| 0.4 * (i as f64 * 0.03).sin()).collect();
         let (y, _) = run(&mut q, &x, &x, true);
         assert_eq!(y, x);
+    }
+
+    #[test]
+    fn switching_the_lookahead_on_mid_stream_lets_nothing_over_the_ceiling() {
+        let sr = 48000.0;
+        let mut lim = Limiter::new(sr);
+        lim.set_lookahead(false);
+        lim.snap_on(true);
+        let ceil = 10f64.powf(CEILING_DB / 20.0);
+        let mut worst = 0.0f64;
+        for i in 0..24000 {
+            if i == 12000 {
+                lim.set_lookahead(true);
+            }
+            let v = 3.0 * (2.0 * PI * 1000.0 * i as f64 / sr).sin();
+            let y = lim.tick([v, -v * 0.5], true);
+            worst = worst.max(y[0].abs()).max(y[1].abs());
+        }
+        assert!(worst <= ceil + 1e-9, "peak {:.2} dB", db(worst));
+        assert_eq!(lim.latency(), 104);
+    }
+
+    #[test]
+    fn hi_precision_doubles_the_detector_grid_and_reads_closer() {
+        // a tone whose crest falls between the 4x points: the 8x grid reads it closer to its true peak of 1.0
+        let read = |hi: bool| {
+            let mut lim = Limiter::new(48000.0);
+            lim.set_hi(hi);
+            let mut worst = 0.0f64;
+            for i in 0..400 {
+                let v = (2.0 * PI * 0.45 * i as f64 + 0.3).sin();
+                let p = lim.detect([v, v]);
+                if i > 80 {
+                    worst = worst.max(p);
+                }
+            }
+            worst
+        };
+        let (lo, hi) = (read(false), read(true));
+        assert!(hi >= lo && hi <= 1.0 + 1e-3 && hi > 0.99, "4x {lo} 8x {hi}");
+        // the latency only grows where the plain detector has no interpolator (192 kHz-class)
+        let lat = |sr: f64| {
+            let mut l = Limiter::new(sr);
+            l.set_hi(true);
+            l.latency()
+        };
+        assert_eq!((lat(48000.0), lat(96000.0), lat(192000.0)), (104, 176, 320));
     }
 
     #[test]
