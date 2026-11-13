@@ -1,7 +1,8 @@
 @NAME@ @VER@ - installation (Linux, experimental)
 =================================================
 
-This Linux build is new and lightly tested. Feedback is very welcome (see "Got issues?" below).
+This Linux build is new and lightly tested. Known issue: the meters and the scope can stutter on some
+systems (a fix is planned). Feedback is very welcome (see "Got issues?" below).
 
 This zip contains two plug-in formats (VST3 and CLAP). The VST3 is a FOLDER, not a single file.
 

@@ -73,9 +73,9 @@ where
 
         let (unscaled_width, unscaled_height) = self.egui_state.size();
         let scaling_factor = self.scaling_factor.load();
-        // SatComp patch (Linux frame pacing): the GL swap interval. A blocking vsync swap on top of baseview's own frame timer
-        // made the meters stutter on X11, so Linux starts with vsync off; `SATCOMP_VSYNC=1` / `=0` forces it either way (A/B).
-        let vsync = std::env::var("SATCOMP_VSYNC").map(|v| v != "0").unwrap_or(!cfg!(target_os = "linux"));
+        // SatComp patch (Linux frame pacing): the GL swap interval, on by default as upstream. Turning it off on Linux did not cure
+        // the stuttering meters on X11 (owner's test, 2026-11-14), so it stays on; `SATCOMP_VSYNC=0` / `=1` forces it for experiments.
+        let vsync = std::env::var("SATCOMP_VSYNC").map(|v| v != "0").unwrap_or(true);
         // SatComp patch: `SATCOMP_FPS=1` prints the frame rate and the average / worst frame time to stderr once a second.
         let fps_log = std::env::var_os("SATCOMP_FPS").is_some();
         let mut fps = (std::time::Instant::now(), std::time::Instant::now(), 0u32, 0f32);

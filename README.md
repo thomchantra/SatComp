@@ -8,7 +8,7 @@ Three saturator-based dynamics plug-ins in one black-and-white (or any colour yo
 | [**SatXComp**](#satxcomp) | 0.1.0 | 4-band multiband compressor with a saturator per band and a 5-band EQ |
 | [**SatLim**](#satlim) | 0.1.0 | saturator into an oversampled clipper and a true-peak brickwall limiter |
 
-VST3 and CLAP for macOS (Apple silicon and Intel) and Windows. Free, GPL-3.0-or-later.
+VST3 and CLAP for macOS (Apple silicon and Intel), Windows and Linux (experimental: see Install). Free, GPL-3.0-or-later.
 
 ## SatComp
 
@@ -63,6 +63,8 @@ Download the zip for your plug-in and system from the [Releases](../../releases)
 |---|---|---|
 | VST3 | `~/Library/Audio/Plug-Ins/VST3/` | `C:\Program Files\Common Files\VST3\` |
 | CLAP | `~/Library/Audio/Plug-Ins/CLAP/` | `C:\Program Files\Common Files\CLAP\` |
+
+**Linux (experimental):** unzip and run `bash install.sh`, which copies both formats into the hidden `~/.vst3` and `~/.clap` folders (`--system` for all users). It needs an X11 session. Known issue: the meters and the scope can stutter on some systems. Bug reports are welcome.
 
 Then rescan plug-ins in your DAW.
 

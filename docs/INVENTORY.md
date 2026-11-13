@@ -20,6 +20,8 @@ Internal record of what exists, at which version, and when it got there. Update 
 
 Shared: `satcomp-ui` (canvas, 27 palettes, 11 embedded fonts, FFT, widget kit, About / Preferences / Changelog pages), `themes.json` and `defaults*.json` under `SatComp/` in the user's application-support folder. Parameter ids never change once released (presets, projects and automation depend on them).
 
+**Platforms:** macOS (universal), Windows x64 and Linux x64 (experimental from 0.5.2: X11 only, built on ubuntu-22.04; known issue: the meters and the scope stutter on some systems, probably frame pacing under X11; `SATCOMP_FPS=1` and `SATCOMP_VSYNC=0|1` help diagnose it).
+
 **Not built:** SatEQ (5-band EQ with a waveshaper per band) exists only as a pitch, `docs/internal/SATEQ_PITCH.md`. The CI matrix knows the `sateq-v*` tag but there is no crate. AU is shelved (no demand yet).
 
 ## Release and tag convention
