@@ -73,6 +73,12 @@ where
 
         let (unscaled_width, unscaled_height) = self.egui_state.size();
         let scaling_factor = self.scaling_factor.load();
+        // SatComp patch (Linux frame pacing): the GL swap interval. A blocking vsync swap on top of baseview's own frame timer
+        // made the meters stutter on X11, so Linux starts with vsync off; `SATCOMP_VSYNC=1` / `=0` forces it either way (A/B).
+        let vsync = std::env::var("SATCOMP_VSYNC").map(|v| v != "0").unwrap_or(!cfg!(target_os = "linux"));
+        // SatComp patch: `SATCOMP_FPS=1` prints the frame rate and the average / worst frame time to stderr once a second.
+        let fps_log = std::env::var_os("SATCOMP_FPS").is_some();
+        let mut fps = (std::time::Instant::now(), std::time::Instant::now(), 0u32, 0f32);
         let window = EguiWindow::open_parented(
             &ParentWindowHandleAdapter(parent),
             WindowOpenOptions {
@@ -97,7 +103,7 @@ where
                     samples: None,
                     srgb: true,
                     double_buffer: true,
-                    vsync: true,
+                    vsync,
                     ..Default::default()
                 }),
             },
@@ -106,6 +112,18 @@ where
             move |egui_ctx, _queue, state| build(egui_ctx, &mut state.write()),
             move |egui_ctx, queue, state| {
                 let setter = ParamSetter::new(context.as_ref());
+                if fps_log {
+                    let now = std::time::Instant::now();
+                    let dt = now.duration_since(fps.1).as_secs_f32() * 1000.0;
+                    fps.1 = now;
+                    fps.2 += 1;
+                    fps.3 = fps.3.max(dt);
+                    if now.duration_since(fps.0).as_secs_f32() >= 1.0 {
+                        let secs = now.duration_since(fps.0).as_secs_f32();
+                        eprintln!("[satcomp] {:.0} frames/s, average {:.1} ms, worst {:.1} ms, vsync {}", fps.2 as f32 / secs, secs * 1000.0 / fps.2 as f32, fps.3, vsync);
+                        fps = (now, now, 0, 0.0);
+                    }
+                }
 
                 // If the window was requested to resize
                 // SatComp patch: keep `requested_size` set while asking the host. The host answers `request_resize()`
