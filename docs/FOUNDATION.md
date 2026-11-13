@@ -49,7 +49,7 @@ scheme menu (right-click the icon). Not verified in REAPER (clicks go through th
 | Path | What |
 |---|---|
 | `SatComp.jsfx` | prototype, v0.3 |
-| `docs/` | this file, HANDOFF, PARAMETERS, TEST_CHECKLIST, colorscheme, SatComp_spec |
+| `docs/` | this file, HANDOFF, PARAMETERS, TEST_CHECKLIST, colorscheme (`docs/internal/`, `docs/crashlogs/` and `docs/feedbacknotes/` are the owner's working files, not tracked) |
 | `proto/` | numpy reference scripts |
 | `rust/satcomp-dsp` | DSP blocks + the SatComp engine + tests. `Engine::begin_block(n)` = JSFX `@block`, `tick` = `@sample` (see Architecture) |
 | `rust/satcomp-ui` | shared egui toolkit: `canvas` (drawing, 20 palettes, font list), `kit` (`Kit` interaction state + `Widgets` trait), `fft`, `init_ctx` + the embedded fonts in `assets/fonts/` |
