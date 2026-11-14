@@ -65,7 +65,7 @@ for n, i, name, k, mn, mx, df, st, u in P:
 o.append("}\n")
 o.append("impl Default for SatDiffParams {\n    /// A new instance starts from the shared defaults file (the host then restores a saved project's own look over this).\n    fn default() -> Self {\n        Self::from_defaults(satcomp_ui::appearance::load_defaults_for(\"satdiff\"))\n    }\n}\n")
 o.append("impl SatDiffParams {\n    pub fn from_defaults(d: Option<satcomp_ui::appearance::Defaults>) -> Self {\n        Self {")
-o.append("            editor_state: {\n                let (w, h) = d.as_ref().map(|d| d.size((340.0, 532.0))).unwrap_or((340, 532));\n                EguiState::from_size(w, h)\n            },")
+o.append("            editor_state: {\n                let (w, h) = d.as_ref().map(|d| d.size((316.0, 508.0))).unwrap_or((316, 508));\n                EguiState::from_size(w, h)\n            },")
 o.append("            palette_v2: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.pal_index()).unwrap_or(-1))),")
 o.append("            light: Arc::new(AtomicBool::new(d.as_ref().map(|d| d.light).unwrap_or(false))),")
 o.append("            font: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.face_index()).unwrap_or(0))),")

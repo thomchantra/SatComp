@@ -147,30 +147,30 @@ fn script() -> (u64, Vec<String>) {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.drag(50.0, 360.0, 50.0, 335.0); // DRIVE
-    r.click(299.0, 63.0); // LIMIT off
-    r.drag(220.0, 500.0, 220.0, 486.0); // OUT GAIN
+    r.drag(46.0, 336.0, 46.0, 311.0); // DRIVE
+    r.click(275.0, 63.0); // LIMIT off
+    r.drag(200.0, 482.0, 200.0, 468.0); // OUT GAIN
     r.click(50.0, 63.0); // scene B
-    r.click(18.0, 425.0); // fx on
-    r.click(240.0, 425.0); // fx POST
-    r.click(148.0, 402.0); // tile REPEAT
-    r.click(299.0, 86.0); // morph direction
-    r.drag(299.0, 130.0, 299.0, 118.0); // morph DEPTH
-    r.click(299.0, 41.0); // oversample dropdown
-    r.click(290.0, 100.0); // 8x
-    r.click(296.0, 16.0); // BYPASS on
-    r.click(296.0, 16.0); // and off
-    r.click(165.0, 63.0); // shaper selector menu
-    r.click(165.0, 63.0);
-    r.click(120.0, 41.0); // preset dropdown
-    r.click(120.0, 41.0);
+    r.click(18.0, 401.0); // fx on
+    r.click(220.0, 401.0); // fx POST
+    r.click(135.0, 378.0); // tile REPEAT
+    r.click(275.0, 86.0); // morph direction
+    r.drag(275.0, 130.0, 275.0, 118.0); // morph DEPTH
+    r.click(275.0, 41.0); // oversample dropdown
+    r.click(266.0, 100.0); // 8x
+    r.click(275.0, 16.0); // BYPASS on
+    r.click(275.0, 16.0); // and off
+    r.click(150.0, 63.0); // shaper selector menu
+    r.click(150.0, 63.0);
+    r.click(110.0, 41.0); // preset dropdown
+    r.click(110.0, 41.0);
     r.click(60.0, 12.0); // About page on
     for _ in 0..3 {
         r.frame(vec![]);
     }
     r.click(60.0, 12.0); // and off
-    r.rclick(332.0, 524.0); // grip: size menu
-    r.rclick(332.0, 524.0);
+    r.rclick(308.0, 500.0); // grip: size menu
+    r.rclick(308.0, 500.0);
     r.reopen_editor();
     r.frame(vec![]);
     (r.hash, r.log())
@@ -192,7 +192,7 @@ fn the_limit_button_switches_it_off() {
     for _ in 0..3 {
         r.frame(vec![]);
     }
-    r.click(299.0, 63.0);
+    r.click(275.0, 63.0);
     assert!(r.log().iter().any(|l| l.starts_with("Limiter") && l.ends_with("0.000")), "{:?}", r.log());
 }
 
@@ -214,7 +214,7 @@ fn clicking_the_sat_readout_requests_the_level_match_and_its_result_writes_sat_g
     for _ in 0..3 {
         r.frame(vec![]);
     }
-    r.click(220.0, 320.0); // the SAT readout in the plot's bottom right corner
+    r.click(190.0, 290.0); // the SAT readout in the plot's bottom right corner
     assert!(r.shared.sat_req.swap(false, std::sync::atomic::Ordering::Relaxed), "no match request");
     r.shared.sat_result.store(-3.5, std::sync::atomic::Ordering::Relaxed);
     r.shared.sat_result_new.store(true, std::sync::atomic::Ordering::Release);
@@ -229,7 +229,7 @@ fn clicking_the_output_bars_cycles_the_range_without_writing_parameters() {
         r.frame(vec![]);
     }
     for _ in 0..5 {
-        r.click(316.0, 420.0);
+        r.click(292.0, 400.0);
     }
     assert!(r.log().is_empty(), "{:?}", r.log());
 }
@@ -324,7 +324,7 @@ fn preferences_defaults_are_per_plugin_with_a_global_one_behind_a_chevron() {
     assert!(load_defaults().is_none(), "the main button does not touch the global default");
     // the chevron opens a one-item menu: SET AS GLOBAL DEFAULT
     r.click(140.0, 64.0); // DARK again
-    r.click(158.0, 435.0); // chevron
+    r.click(146.0, 435.0); // chevron
     assert!(r.st.app.def_menu == 1, "the chevron opens the menu");
     r.click(80.0, 449.0); // SET AS GLOBAL DEFAULT
     assert!(r.st.app.def_menu == 0, "picking closes the menu");
@@ -336,15 +336,15 @@ fn preferences_defaults_are_per_plugin_with_a_global_one_behind_a_chevron() {
     // RESET (main part): drops the plug-in's own default, this instance takes what a new one would get now (the global look)
     r.click(208.0, 64.0); // LIGHT
     assert!(r.params.light.load(Relaxed));
-    r.click(240.0, 435.0);
+    r.click(190.0, 435.0);
     assert!(!r.params.light.load(Relaxed), "back on the global look");
     assert!(!load_defaults_for("satdiff").unwrap().light && load_defaults().is_some());
     // RESET GLOBAL DEFAULT (its chevron): nothing left, the factory look
-    r.click(314.0, 435.0);
-    r.click(240.0, 449.0);
+    r.click(288.0, 435.0);
+    r.click(190.0, 449.0);
     assert!(load_defaults().is_none() && load_defaults_for("satdiff").is_none(), "everything cleared");
     // a click outside an open menu only closes it
-    r.click(158.0, 435.0);
+    r.click(146.0, 435.0);
     r.click(30.0, 300.0);
     assert!(r.st.app.def_menu == 0 && load_defaults().is_none());
     let _ = std::fs::remove_dir_all(&dir);
@@ -436,4 +436,18 @@ fn the_logo_and_the_title_light_up_under_the_pointer() {
     assert_ne!(idle, logo, "the logo should invert under the pointer");
     assert_ne!(idle, title, "the title should get a highlight under the pointer");
     assert_ne!(logo, title);
+}
+
+#[test]
+fn dragging_the_derived_half_of_an_odd_curve_moves_the_real_point_the_right_way() {
+    let mut r = Rig::new();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(225.0, 87.0); // pencil: opens the draw view (odd tool for the linear start curve)
+    // the derived end point sits at (-1, -1): lower-left corner of the inset domain; pull it up to y = -0.5
+    r.drag(32.0, 279.0, 32.0, 232.0);
+    let c = satcomp_dsp::shapers::Curve::from_points(&r.params.custom_curve.lock());
+    assert!(c.is_odd(), "an odd curve must stay odd: {:?}", c.pts());
+    assert!((c.eval(1.0) - 0.5).abs() < 0.05 && (c.eval(-1.0) + 0.5).abs() < 0.05, "f(1) = {}, f(-1) = {}", c.eval(1.0), c.eval(-1.0));
 }

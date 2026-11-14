@@ -136,7 +136,7 @@ impl SatDiffParams {
     pub fn from_defaults(d: Option<satcomp_ui::appearance::Defaults>) -> Self {
         Self {
             editor_state: {
-                let (w, h) = d.as_ref().map(|d| d.size((340.0, 532.0))).unwrap_or((340, 532));
+                let (w, h) = d.as_ref().map(|d| d.size((316.0, 508.0))).unwrap_or((316, 508));
                 EguiState::from_size(w, h)
             },
             palette_v2: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.pal_index()).unwrap_or(-1))),
