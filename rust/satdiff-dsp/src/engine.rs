@@ -327,7 +327,7 @@ impl DiffEngine {
         self.sc_p = self.sc_p.max(pl).max(ao);
         self.sc_n += 1;
         if self.sc_n >= self.sc_len {
-            self.scope.push(self.sc_o as f32, self.sc_p as f32);
+            self.scope.push3(self.sc_o as f32, self.sc_p as f32, self.sc_p as f32);
             self.sc_o = 0.0;
             self.sc_p = 0.0;
             self.sc_n = 0;
