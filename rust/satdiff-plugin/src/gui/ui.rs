@@ -23,6 +23,7 @@ enum MenuKind {
     Preset,
     Fx,
     Viz,
+    Os,
 }
 
 /// kind: 0 selectable item, 1 header (dim, not selectable), 2 separator
@@ -38,8 +39,9 @@ const VU_RANGES: [(f32, &[i32]); 4] = [(48.0, &[-6, -12, -24, -36]), (24.0, &[-3
 
 /// colour-fx types in the dropdown (only the diffusor exists so far)
 const FX_NAMES: [&str; 4] = ["DIFFUSOR", "PHASER", "FLANGER", "RINGMOD"];
-/// oscilloscope wipe windows (ms); the tap ring holds ~170 ms at 48 kHz
-const VIZ_WIN_MS: [u32; 6] = [5, 10, 20, 40, 80, 160];
+/// oscilloscope wipe windows (ms). The wipe gathers the tap samples frame by frame, so any length works. After each sweep it
+/// waits for the next transient (retrigger) so peaks land on the same row, and free-runs after one window without one.
+const VIZ_WIN_MS: [u32; 5] = [250, 500, 1000, 2000, 4000];
 
 /// ASYM slider drag (viewport-style act id: released with the mouse)
 const ACT_ASYM: i32 = 145;
@@ -145,6 +147,10 @@ pub struct State {
     sc_acc: f64,
     sc_cur: (f32, f32),
     sc_head: usize,
+    /// retrigger: waiting for a transient, samples waited, slow level follower
+    sc_wait: bool,
+    sc_wait_n: f64,
+    sc_env: f32,
     /// draw view: LINEAR / CURVE segment toggle (UI only for now) and the even-mirror tool (with `sym_mode`)
     seg_linear: bool,
     even: bool,
@@ -274,6 +280,9 @@ impl State {
             iclip_t: -10.0,
             viz_mode: 0,
             viz_win: 2,
+            sc_wait: false,
+            sc_wait_n: 0.0,
+            sc_env: 0.0,
             spec: Spectrum::new(),
             sc_rows: Vec::new(),
             sc_row: 0,
@@ -992,12 +1001,12 @@ impl<'a> Gui<'a> {
         res
     }
 
-    /// MORPH block (right of the sat cells): direction toggle on top, DEPTH and SPEED below. No sound yet.
+    /// MORPH block (top of the right column): direction toggle on top, DEPTH and SPEED below. No sound yet.
     fn morph_block(&mut self, x: f32, y: f32, w: f32) {
         let dir = (self.sget(39) + 0.5).floor() as i32;
         let depth_on = self.sget(40) > 0.0;
         // direction toggle: MORPH over "A > B" (or "B > A") drawn with a small arrow
-        let (th, hv) = (32.0, self.hit(x, y, w, 32.0));
+        let (th, hv) = (30.0, self.hit(x, y, w, 30.0));
         if hv && self.press && self.act == 0 {
             self.click_set(39, if dir == 0 { 1.0 } else { 0.0 });
             self.press = false;
@@ -1011,16 +1020,16 @@ impl<'a> Gui<'a> {
             self.cv.boxr(x, y, w, th);
         }
         self.cv.set_font(1);
-        self.cv.textc(x, y + 4.0, w, "MORPH");
+        self.cv.textc(x, y + 3.0, w, "MORPH");
         let (l, r) = if dir == 0 { ("A", "B") } else { ("B", "A") };
-        let cy = y + 22.0;
+        let cy = y + 20.0;
         self.cv.text(x + w * 0.5 - 14.0, cy - 4.0, l);
         self.cv.line(x + w * 0.5 - 6.0, cy, x + w * 0.5 + 3.0, cy);
         self.cv.tri((x + w * 0.5 + 1.0, cy - 3.0), (x + w * 0.5 + 1.0, cy + 3.0), (x + w * 0.5 + 5.0, cy));
         self.cv.text(x + w * 0.5 + 8.0, cy - 4.0, r);
         self.setc(false);
-        self.cell_acc(40, x, y + 38.0, w, 35.0, "DEPTH", depth_on);
-        self.cell_acc(41, x, y + 76.0, w, 34.0, "SPEED", depth_on);
+        self.cell_acc(40, x, y + 33.0, w, 32.0, "DEPTH", depth_on);
+        self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", depth_on);
     }
 
     /// Row with the fx enable square, the fx type dropdown (right-click anywhere or click the arrow) and PRE | POST.
@@ -1033,7 +1042,7 @@ impl<'a> Gui<'a> {
         self.sqind(x + 2.0, y + (h - sq) * 0.5, sq, on, false, false);
         self.sq_tog(31, x + 2.0, y + (h - sq) * 0.5, sq);
         // dropdown
-        let (dx, dw) = (x + 24.0, 157.0);
+        let (dx, dw) = (x + 22.0, 143.0);
         let ty = (self.sget(32) + 0.5).floor() as usize;
         let hv = self.hit(dx, y, dw, h);
         let arrow = self.hit(dx + dw - 24.0, y, 24.0, h);
@@ -1058,7 +1067,7 @@ impl<'a> Gui<'a> {
         self.setc(false);
         // PRE | POST
         let pos = (self.sget(33) + 0.5).floor() as usize;
-        if let Some(i) = self.seg(x + 190.0, y, 85.0, h, &["PRE", "POST"], pos) {
+        if let Some(i) = self.seg(x + 170.0, y, 80.0, h, &["PRE", "POST"], pos) {
             self.click_set(33, i as f32);
             self.press = false;
         }
@@ -1182,8 +1191,25 @@ impl<'a> Gui<'a> {
             let spr = (VIZ_WIN_MS[self.viz_win] as f64 * 0.001 * sr as f64 / rows as f64).max(1.0);
             let span = satcomp_dsp::TapRing::LEN - 256;
             let from = if head.wrapping_sub(self.sc_head) > span { head.wrapping_sub(span) } else { self.sc_head };
+            let win_n = VIZ_WIN_MS[self.viz_win] as f64 * 0.001 * sr as f64;
             for k in 0..head.wrapping_sub(from) {
                 let v = tap.get(from.wrapping_add(k));
+                let av = v.abs();
+                if self.sc_wait {
+                    // armed: start the next sweep on a rise well above the recent level, or after one window of nothing
+                    let hit = av > 0.05 && av > self.sc_env * 2.2 + 0.02;
+                    self.sc_env += (av - self.sc_env) * 0.0007;
+                    self.sc_wait_n += 1.0;
+                    if !hit && self.sc_wait_n < win_n {
+                        continue;
+                    }
+                    self.sc_wait = false;
+                    self.sc_row = 0;
+                    self.sc_acc = 0.0;
+                    self.sc_cur = (0.0, 0.0);
+                } else {
+                    self.sc_env += (av - self.sc_env) * 0.0007;
+                }
                 self.sc_cur.0 = self.sc_cur.0.min(v);
                 self.sc_cur.1 = self.sc_cur.1.max(v);
                 self.sc_acc += 1.0;
@@ -1192,7 +1218,12 @@ impl<'a> Gui<'a> {
                     self.sc_rows[r] = c;
                     self.sc_cur = (0.0, 0.0);
                     self.sc_acc -= spr;
-                    self.sc_row = (self.sc_row + 1) % rows;
+                    self.sc_row += 1;
+                    if self.sc_row >= rows {
+                        self.sc_row = rows - 1;
+                        self.sc_wait = true;
+                        self.sc_wait_n = 0.0;
+                    }
                 }
             }
             self.sc_head = head;
@@ -1212,7 +1243,8 @@ impl<'a> Gui<'a> {
             self.cv.fill(x + 1.0, y + 1.0, w - 2.0, 11.0);
             self.setc(false);
             self.cv.set_font(1);
-            let lab = if self.viz_mode == 0 { "SPECTRUM".to_string() } else { format!("SCOPE {}ms", VIZ_WIN_MS[self.viz_win]) };
+            let ms = VIZ_WIN_MS[self.viz_win];
+            let lab = if self.viz_mode == 0 { "SPECTRUM".to_string() } else if ms >= 1000 { format!("SCOPE {}s", ms / 1000) } else { format!("SCOPE {}ms", ms) };
             self.cv.textc(x, y + 2.0, w, &lab);
         }
         self.setc(false);
@@ -1232,7 +1264,7 @@ impl<'a> Gui<'a> {
             l.eval(v) * (1.0 - r) - r * l.eval(-v)
         };
         // pencil (top right): toggles the custom-curve draw view; entering selects the Custom shaper so edits are audible
-        let pen = self.hit(x + w - 14.0, y + 2.0, 12.0, 12.0);
+        let pen = self.hit(x + w - 19.0, y + 3.0, 16.0, 16.0);
         if pen && self.press && self.act == 0 {
             self.curve_edit = !self.curve_edit;
             self.edit_seen = false;
@@ -1273,9 +1305,9 @@ impl<'a> Gui<'a> {
             self.cv.fill(x + (w / 2.0).floor(), y + i as f32 * 2.0, 1.0, 1.0);
         }
         if self.curve_edit {
-            self.close_glyph(x + w - 14.0, y + 2.0, pen);
+            self.tool_btn(x + w - 19.0, y + 3.0, 3, false);
         } else {
-            self.pencil_glyph(x + w - 14.0, y + 2.0, false, pen);
+            self.tool_btn(x + w - 19.0, y + 3.0, 0, false);
         }
         if self.curve_edit {
             self.draw_curve_edit(x, y, w, h);
@@ -1329,34 +1361,46 @@ impl<'a> Gui<'a> {
         self.setc(false);
     }
 
-    /// 12x12 even-symmetry glyph: a parabola mirrored about the vertical axis (a dotted axis through it).
-    fn even_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
-        let prev = self.dk;
-        self.set_dk(prev * if on || hover { 1.0 } else { 0.6 });
-        self.setc(on);
-        let pts = [(0.0, 1.0), (2.0, 6.0), (4.0, 9.0), (6.0, 10.0), (8.0, 9.0), (10.0, 6.0), (12.0, 1.0)];
-        for w in pts.windows(2) {
-            self.cv.line(x + w[0].0, y + w[0].1, x + w[1].0, y + w[1].1);
-        }
-        for k in [0.0, 4.0, 8.0] {
-            self.cv.fill(x + 6.0, y + k, 1.0, 2.0);
-        }
-        self.set_dk(prev);
+    /// 16x16 square tool button with a hover fill, lit while its tool is active: 0 pencil (free), 1 odd (point mirror),
+    /// 2 even (Y mirror), 3 close cross. The icons are drawn in the background colour on the fill, else in the UI colour.
+    fn tool_btn(&mut self, x: f32, y: f32, kind: u8, lit: bool) {
+        let hv = self.hit(x, y, 16.0, 16.0);
         self.setc(false);
-    }
-
-    /// 12x12 pencil icon; lit while the draw view is open, bright on hover.
-    fn pencil_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
-        let prev = self.dk; // keep the bypass dimming of the surrounding module
-        self.set_dk(prev * if on || hover { 1.0 } else { 0.6 });
-        self.setc(on);
-        let l = |s: &Self, a: f32, b: f32, c: f32, d: f32| s.cv.line(x + a, y + b, x + c, y + d);
-        l(self, 8.0, 1.0, 10.0, 3.0); // eraser cap
-        l(self, 8.0, 1.0, 1.0, 8.0); // body
-        l(self, 10.0, 3.0, 3.0, 10.0);
-        l(self, 1.0, 8.0, 0.0, 11.0); // tip
-        l(self, 3.0, 10.0, 0.0, 11.0);
-        self.set_dk(prev);
+        if lit || hv {
+            self.cv.fill(x, y, 16.0, 16.0);
+            self.cv.setbg();
+        } else {
+            self.cv.boxr(x, y, 16.0, 16.0);
+        }
+        let (ox, oy) = (x + 2.0, y + 2.0);
+        let l = |s: &Self, a: f32, b: f32, c: f32, d: f32| s.cv.line(ox + a, oy + b, ox + c, oy + d);
+        match kind {
+            0 => {
+                l(self, 9.0, 1.0, 11.0, 3.0);
+                l(self, 9.0, 1.0, 1.0, 9.0);
+                l(self, 11.0, 3.0, 3.0, 11.0);
+                l(self, 1.0, 9.0, 0.0, 12.0);
+                l(self, 3.0, 11.0, 0.0, 12.0);
+            }
+            1 => {
+                for w in [(0.0, 11.0), (3.0, 11.0), (5.0, 9.0), (6.0, 6.0), (7.0, 3.0), (9.0, 1.0), (12.0, 1.0)].windows(2) {
+                    l(self, w[0].0, w[0].1, w[1].0, w[1].1);
+                }
+                self.cv.fill(ox + 5.0, oy + 5.0, 2.0, 2.0);
+            }
+            2 => {
+                for w in [(0.0, 2.0), (2.0, 7.0), (4.0, 10.0), (6.0, 11.0), (8.0, 10.0), (10.0, 7.0), (12.0, 2.0)].windows(2) {
+                    l(self, w[0].0, w[0].1, w[1].0, w[1].1);
+                }
+                for k in [0.0, 4.0, 8.0] {
+                    self.cv.fill(ox + 6.0, oy + k, 1.0, 2.0);
+                }
+            }
+            _ => {
+                l(self, 1.0, 1.0, 11.0, 11.0);
+                l(self, 11.0, 1.0, 1.0, 11.0);
+            }
+        }
         self.setc(false);
     }
 
@@ -1368,13 +1412,13 @@ impl<'a> Gui<'a> {
         let mut c = self.env.params.curve_snapshot();
         let before = c;
         // LINEAR | CURVE (top left; UI only for now)
-        if let Some(i) = self.seg(x + 3.0, y + 2.0, 100.0, 12.0, &["LINEAR", "CURVE"], if self.seg_linear { 0 } else { 1 }) {
+        if let Some(i) = self.seg(x + 3.0, y + 3.0, 104.0, 16.0, &["LINEAR", "CURVE"], if self.seg_linear { 0 } else { 1 }) {
             self.seg_linear = i == 0;
             self.press = false;
         }
         // tool icons left of the close cross: free draw (pencil), odd (point mirror), even (Y mirror)
-        let (pen_x, sym_x, ev_x) = (x + w - 56.0, x + w - 42.0, x + w - 28.0);
-        let (hp, hs, he) = (self.hit(pen_x, y + 2.0, 12.0, 12.0), self.hit(sym_x, y + 2.0, 12.0, 12.0), self.hit(ev_x, y + 2.0, 12.0, 12.0));
+        let (pen_x, sym_x, ev_x) = (x + w - 73.0, x + w - 55.0, x + w - 37.0);
+        let (hp, hs, he) = (self.hit(pen_x, y + 3.0, 16.0, 16.0), self.hit(sym_x, y + 3.0, 16.0, 16.0), self.hit(ev_x, y + 3.0, 16.0, 16.0));
         if self.press && self.act == 0 {
             // the right half of the curve as drawn (x > 0): switching between the two mirrors reinterprets it
             let half: Vec<(f32, f32)> = {
@@ -1401,7 +1445,7 @@ impl<'a> Gui<'a> {
         // y of the mirror image: odd = point reflection (-y), even = Y mirror (+y)
         let m: f32 = if self.even { 1.0 } else { -1.0 };
         // domain [-1,1]^2 is inset so end points and the icons never collide (symmetric margins keep the centre cross true)
-        let (ex, ey, ew, eh) = (x + 9.0, y + 14.0, w - 18.0, h - 28.0);
+        let (ex, ey, ew, eh) = (x + 22.0, y + 22.0, w - 44.0, h - 44.0);
         let (px, py) = (|vx: f32| ex + (vx + 1.0) * 0.5 * (ew - 1.0), |vy: f32| ey + (1.0 - (vy + 1.0) * 0.5) * (eh - 1.0));
         let to_v = |mx: f32, my: f32| (((mx - ex) / (ew - 1.0)) * 2.0 - 1.0, 1.0 - ((my - ey) / (eh - 1.0)) * 2.0);
         // working list: the whole curve, or in symmetry mode its right half (x > 0, ending at x = 1); the left is derived
@@ -1426,7 +1470,7 @@ impl<'a> Gui<'a> {
             }
             best.map(|b| b.0)
         };
-        let in_box = self.hit(x, y, w, h) && !self.hit(pen_x - 2.0, y, w - (pen_x - x) + 2.0, 16.0) && !self.hit(x, y, 106.0, 16.0);
+        let in_box = self.hit(x, y, w, h) && !self.hit(pen_x - 2.0, y, w - (pen_x - x) + 2.0, 22.0) && !self.hit(x, y, 110.0, 22.0);
         if in_box && self.press && self.act == 0 {
             let n = hv.len();
             if let Some(i) = pick(self, &hv) {
@@ -1530,10 +1574,11 @@ impl<'a> Gui<'a> {
         }
         self.setc(false);
         // tools: pencil (free draw), odd, even
-        self.pencil_glyph(pen_x, y + 2.0, !sym, hp);
-        self.sym_glyph(sym_x, y + 2.0, sym && !self.even, hs);
-        self.even_glyph(ev_x, y + 2.0, sym && self.even, he);
+        self.tool_btn(pen_x, y + 3.0, 0, !sym);
+        self.tool_btn(sym_x, y + 3.0, 1, sym && !self.even);
+        self.tool_btn(ev_x, y + 3.0, 2, sym && self.even);
         self.cv.set_font(1);
+        let _ = (hp, hs, he);
         let tool = if !sym { "FREE" } else if self.even { "EVEN" } else { "ODD" };
         self.cv.text(x + 3.0, y + h - 11.0, &format!("DRAW {tool}"));
         self.cv.textr(x, y + h - 11.0, w - 3.0, &format!("{}/{} PTS", c.n, MAX_PTS));
@@ -1639,6 +1684,7 @@ impl<'a> Gui<'a> {
                                 MenuKind::Preset => 3,
                                 MenuKind::Fx => 4,
                                 MenuKind::Viz => 5,
+                                MenuKind::Os => 6,
                             }));
                         } else {
                             return self.eat_menu_input();
@@ -1665,6 +1711,7 @@ impl<'a> Gui<'a> {
                         }
                     }
                     5 => self.viz_mode = id as u8,
+                    6 => self.click_set(7, id as f32),
                     _ => self.preset_action(id),
                 }
             }
@@ -1943,24 +1990,24 @@ impl<'a> Gui<'a> {
         self.dlg = None;
     }
 
-    /// Preset bar: save icon | name dropdown | prev next | INIT (red on hover, white text, whatever the scheme).
+    /// Preset bar: save icon | name dropdown | prev next (INIT lives in the preset list).
     fn preset_bar(&mut self, y: f32, h: f32) {
         // save icon
-        if self.hbtn(12.0, y, 36.0, h, "", 0) {
+        if self.hbtn(10.0, y, 28.0, h, "", 0) {
             self.pending = 2;
         }
-        let hv = self.hit(12.0, y, 36.0, h);
+        let hv = self.hit(10.0, y, 28.0, h);
         if hv {
             self.cv.setbg();
         } else {
             self.setc(false);
         }
-        self.cv.boxr(24.0, y + 5.0, 12.0, 12.0);
-        self.cv.fill(27.0, y + 5.0, 6.0, 4.0);
-        self.cv.boxr(26.0, y + 11.0, 8.0, 6.0);
+        self.cv.boxr(18.0, y + 3.0, 11.0, 11.0);
+        self.cv.fill(21.0, y + 3.0, 5.0, 4.0);
+        self.cv.boxr(20.0, y + 8.0, 7.0, 6.0);
         self.setc(false);
         // name -> dropdown
-        let (nx, nw) = (48.0, 192.0);
+        let (nx, nw) = (38.0, 178.0);
         let name = self.preset_name();
         let shown = if name.is_empty() || name == "INIT" { "-- INIT --".to_string() } else { name };
         let hv = self.hit(nx, y, nw, h);
@@ -1982,7 +2029,7 @@ impl<'a> Gui<'a> {
         self.cv.textc(nx, y + ((h - 8.0) * 0.5).floor(), nw, &t);
         // prev / next
         for (i, dir) in [(0, -1), (1, 1)] {
-            let (x, bw) = if i == 0 { (241.0, 23.0) } else { (265.0, 22.0) };
+            let (x, bw) = if i == 0 { (216.0, 22.0) } else { (238.0, 22.0) };
             if self.hbtn(x, y, bw, h, "", 0) {
                 self.step_preset(dir);
             }
@@ -1999,26 +2046,31 @@ impl<'a> Gui<'a> {
             }
             self.setc(false);
         }
-        // INIT: always red with white text on hover
-        let (ix, iw) = (297.0, 62.0);
-        let hv = self.hit(ix, y, iw, h);
+        self.setc(false);
+    }
+
+    /// Oversampling dropdown (top right of the preset row): 1x 2x 4x 8x of the saturator.
+    fn os_dropdown(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let os = ((self.sget(7) + 0.5).floor() as i32).clamp(0, 3);
+        let hv = self.hit(x, y, w, h);
         if hv && self.press && self.act == 0 {
-            let p = Preset::init();
-            self.apply_preset(&p);
+            let items = (0..4).map(|i| format!("{}x OVERSAMPLE", 1 << i)).collect();
+            self.open_menu(MenuKind::Os, x - 40.0, y + h, items, os as usize);
             self.press = false;
         }
-        self.cv.set_font(1);
+        if hv && self.wheel != 0 {
+            self.click_set(7, (os + if self.wheel > 0 { -1 } else { 1 }).clamp(0, 3) as f32);
+        }
         if hv {
-            self.cv.setrgb([1.0, 0.0, 0.0]);
-            self.cv.fill(ix, y, iw, h);
-            self.cv.setrgb([1.0, 1.0, 1.0]);
-            self.cv.boxr(ix, y, iw, h);
-            self.cv.textc(ix, y + ((h - 8.0) * 0.5).floor(), iw, "INIT");
+            self.setc(false);
+            self.cv.fill(x, y, w, h);
+            self.cv.setbg();
         } else {
             self.setc(false);
-            self.cv.boxr(ix, y, iw, h);
-            self.cv.textc(ix, y + ((h - 8.0) * 0.5).floor(), iw, "INIT");
+            self.cv.boxr(x, y, w, h);
         }
+        self.cv.set_font(2);
+        self.cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, &format!("{}x", 1 << os));
         self.setc(false);
     }
 
@@ -2151,37 +2203,44 @@ impl<'a> Gui<'a> {
         let lim_on = self.sget(24) > 0.5;
         self.gr_update();
 
-        // ---------- header row: logo, title, BYPASS
+        // ---------- header row: logo, title, size, BYPASS
         self.set_dk(1.0);
-        self.logo(13.0, 7.0);
+        self.logo(13.0, 5.0);
         self.setc(false);
         self.cv.set_font(2);
         let title = format!("SATDIFF {}", version_short());
         let tw = self.cv.text_w(&title);
-        if self.hit(42.0, 7.0, tw + 4.0, 21.0) && self.press && self.act == 0 {
+        if self.hit(42.0, 5.0, tw + 4.0, 21.0) && self.press && self.act == 0 {
             self.app.about = if self.app.about == 0 { 1 } else { 0 };
             self.app.about_scroll = 0;
             self.press = false;
         }
         // hovering highlights the title (a UI-coloured rectangle behind it, the text in the background colour): it opens About
-        if self.hit(42.0, 7.0, tw + 4.0, 21.0) {
-            self.cv.fill(42.0, 10.0, tw + 4.0, 15.0);
+        if self.hit(42.0, 5.0, tw + 4.0, 21.0) {
+            self.cv.fill(42.0, 8.0, tw + 4.0, 15.0);
             self.cv.setbg();
         }
-        self.cv.text(44.0, 14.0, &title);
+        self.cv.text(44.0, 12.0, &title);
         self.setc(false);
-        if self.hbtn(285.0, 8.0, 74.0, 21.0, "BYPASS", byp as u8) {
+        let label = format!("{:.0}%", self.cur_scale() * 100.0);
+        if self.hbtn(212.0, 6.0, 46.0, 20.0, &label, 0) {
+            let cur = SIZES.iter().position(|v| (v - self.cur_scale()).abs() < 0.13).unwrap_or(0);
+            let items = SIZES.iter().map(|v| format!("{:.0}%", v * 100.0)).collect();
+            self.open_menu(MenuKind::Size, 212.0, 26.0, items, cur);
+        }
+        if self.hbtn(262.0, 6.0, 68.0, 20.0, "BYPASS", byp as u8) {
             self.click_set(26, if byp { 0.0 } else { 1.0 });
         }
 
         // ---------- preset row (the About tabs take its place while the About page is open)
         let ab = self.app.about > 0;
         if !ab {
-            self.preset_bar(40.0, 22.0);
+            self.preset_bar(32.0, 18.0);
+            self.os_dropdown(268.0, 32.0, 62.0, 18.0);
         }
         self.set_dk(if byp { 0.5 } else { 1.0 });
         if ab {
-            self.draw_about(Rect::new(26.0, 66.0, 320.0, 438.0), byp);
+            self.draw_about(Rect::new(10.0, 54.0, 320.0, 438.0), byp);
         }
 
         if !ab {
@@ -2189,50 +2248,52 @@ impl<'a> Gui<'a> {
             // ---------- scene row: A | B, shape selector, LIMIT
             self.set_dk(bd);
             let abi = (self.sget(42) + 0.5).floor() as usize;
-            if let Some(i) = self.seg(12.0, 74.0, 63.0, 22.0, &["A", "B"], abi) {
+            if let Some(i) = self.seg(10.0, 54.0, 52.0, 18.0, &["A", "B"], abi) {
                 self.click_set(42, i as f32);
                 self.press = false;
             }
-            self.selector(1, 84.0, 74.0, 203.0, 22.0);
+            self.selector(1, 70.0, 54.0, 190.0, 18.0);
             let gr = self.rd_gr;
             let lim_lab = if lim_on && gr > 0.1 { format!("-{:.1}", gr) } else { "LIMIT".to_string() };
-            if self.hbtn(297.0, 74.0, 62.0, 22.0, &lim_lab, lim_on as u8) {
+            if self.hbtn(268.0, 54.0, 62.0, 18.0, &lim_lab, lim_on as u8) {
                 self.click_set(24, if lim_on { 0.0 } else { 1.0 });
             }
 
-            // ---------- plot (the sat plot / draw view) and the two vertical meters
-            self.draw_plot(12.0, 112.0, 275.0, 275.0);
-            self.in_vu(297.0, 112.0, 27.0, 275.0);
-            self.out_vu(332.0, 112.0, 27.0, 275.0);
+            // ---------- plot (the sat plot / draw view); right column: MORPH, then the viz down to the plot's bottom
+            self.draw_plot(10.0, 76.0, 250.0, 250.0);
+            self.morph_block(268.0, 76.0, 62.0);
+            self.vviz(268.0, 181.0, 62.0, 145.0);
 
-            // ---------- sat cells
+            // ---------- sat cells (SatLim's 38 px rows)
             if editing {
-                self.theme_cells(CellGrid { x0: 12.0, y0: 402.0, cw: 85.0, ch: 50.0, px: 95.0, py: 60.0 });
+                self.theme_cells(CellGrid { x0: 10.0, y0: 332.0, cw: 80.0, ch: 38.0, px: 85.0, py: 42.0 });
             } else {
-                self.cell(2, 12.0, 402.0, 85.0, 50.0, "DRIVE");
-                self.asym_cell(107.0, 402.0, 85.0, 50.0);
-                self.cell2(4, 5, 202.0, 402.0, 85.0, 50.0, "HPF", "LPF");
-                self.bias_tile(12.0, 462.0, 180.0, 50.0);
-                self.cell(6, 202.0, 462.0, 85.0, 50.0, "TONE");
-                self.morph_block(297.0, 402.0, 62.0);
+                self.cell(2, 10.0, 332.0, 80.0, 38.0, "DRIVE");
+                self.asym_cell(95.0, 332.0, 80.0, 38.0);
+                self.cell2(4, 5, 180.0, 332.0, 80.0, 38.0, "HPF", "LPF");
+                self.bias_tile(10.0, 374.0, 165.0, 38.0);
+                self.cell(6, 180.0, 374.0, 80.0, 38.0, "TONE");
             }
 
             // ---------- phase section: fx row, then viz + PHASE + SAT MIX, then the fx params and OUT GAIN
-            self.fx_row(12.0, 526.0, 22.0);
+            self.fx_row(10.0, 416.0, 18.0);
             let fx_on = self.sget(31) > 0.5;
             self.set_dk(if fx_on { bd } else { bd * 0.5 });
-            self.fx_viz(12.0, 560.0, 85.0, 51.0);
+            self.fx_viz(10.0, 438.0, 80.0, 38.0);
             self.set_dk(bd);
             if !editing {
-                self.cell(30, 107.0, 560.0, 85.0, 51.0, "PHASE");
-                self.cell(25, 202.0, 560.0, 85.0, 51.0, "SAT MIX");
+                self.cell(30, 95.0, 438.0, 80.0, 38.0, "PHASE");
+                self.cell(25, 180.0, 438.0, 80.0, 38.0, "SAT MIX");
                 self.set_dk(if fx_on { bd } else { bd * 0.5 });
-                self.cell2(34, 35, 12.0, 622.0, 85.0, 50.0, "FREQ", "Q");
-                self.cell2(36, 37, 107.0, 622.0, 85.0, 50.0, "STAGES", "D.MIX");
+                self.cell2(34, 35, 10.0, 480.0, 80.0, 38.0, "FREQ", "Q");
+                self.cell2(36, 37, 95.0, 480.0, 80.0, 38.0, "STAGES", "D.MIX");
                 self.set_dk(bd);
-                self.cell_o(22, 202.0, 622.0, 85.0, 50.0, "OUT GAIN");
+                self.cell_o(22, 180.0, 480.0, 80.0, 38.0, "OUT GAIN");
             }
-            self.vviz(297.0, 526.0, 62.0, 146.0);
+
+            // ---------- meters (input hatched, output solid) down the right column beside the cell rows
+            self.in_vu(268.0, 332.0, 27.0, 186.0);
+            self.out_vu(303.0, 332.0, 27.0, 186.0);
         }
         self.set_dk(1.0);
 
@@ -2246,10 +2307,10 @@ impl<'a> Gui<'a> {
             if osk {
                 self.mask_in(); // picker stays visible underneath but inert
             }
-            self.theme_picker(Rect::new(12.0, 112.0, 348.0, 275.0));
+            self.theme_picker(Rect::new(10.0, 76.0, 320.0, 250.0));
             if osk {
                 self.unmask_in();
-                self.theme_osk(Rect::new(12.0, 112.0, 348.0, 275.0));
+                self.theme_osk(Rect::new(10.0, 76.0, 320.0, 250.0));
             }
         }
     }

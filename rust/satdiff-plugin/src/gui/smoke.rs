@@ -147,28 +147,30 @@ fn script() -> (u64, Vec<String>) {
     for _ in 0..4 {
         r.frame(vec![]);
     }
-    r.drag(50.0, 440.0, 50.0, 410.0); // DRIVE
-    r.click(328.0, 85.0); // LIMIT off
-    r.drag(245.0, 650.0, 245.0, 636.0); // OUT GAIN
-    r.click(60.0, 85.0); // scene B
-    r.click(20.0, 537.0); // fx on
-    r.click(265.0, 537.0); // fx POST
-    r.click(162.0, 500.0); // tile REPEAT
-    r.click(328.0, 418.0); // morph direction
-    r.drag(328.0, 470.0, 328.0, 450.0); // morph DEPTH
-    r.click(322.0, 18.0); // BYPASS on
-    r.click(322.0, 18.0); // and off
-    r.click(185.0, 85.0); // shaper selector menu
-    r.click(185.0, 85.0);
-    r.click(140.0, 51.0); // preset dropdown
-    r.click(140.0, 51.0);
+    r.drag(50.0, 360.0, 50.0, 335.0); // DRIVE
+    r.click(299.0, 63.0); // LIMIT off
+    r.drag(220.0, 500.0, 220.0, 486.0); // OUT GAIN
+    r.click(50.0, 63.0); // scene B
+    r.click(18.0, 425.0); // fx on
+    r.click(240.0, 425.0); // fx POST
+    r.click(148.0, 402.0); // tile REPEAT
+    r.click(299.0, 86.0); // morph direction
+    r.drag(299.0, 130.0, 299.0, 118.0); // morph DEPTH
+    r.click(299.0, 41.0); // oversample dropdown
+    r.click(290.0, 100.0); // 8x
+    r.click(296.0, 16.0); // BYPASS on
+    r.click(296.0, 16.0); // and off
+    r.click(165.0, 63.0); // shaper selector menu
+    r.click(165.0, 63.0);
+    r.click(120.0, 41.0); // preset dropdown
+    r.click(120.0, 41.0);
     r.click(60.0, 12.0); // About page on
     for _ in 0..3 {
         r.frame(vec![]);
     }
     r.click(60.0, 12.0); // and off
-    r.rclick(364.0, 680.0); // grip: size menu
-    r.rclick(364.0, 680.0);
+    r.rclick(332.0, 524.0); // grip: size menu
+    r.rclick(332.0, 524.0);
     r.reopen_editor();
     r.frame(vec![]);
     (r.hash, r.log())
@@ -179,7 +181,7 @@ fn the_editor_runs_scripted_input_and_is_deterministic() {
     let (h1, _) = script();
     let (h2, log) = script();
     assert_eq!(h1, h2, "frames differ between two identical runs");
-    for want in ["Drive", "Limiter", "Out Gain", "Scene A/B", "FX On", "FX Pre/Post", "Tile", "Morph Dir", "Morph Depth", "Bypass"] {
+    for want in ["Drive", "Limiter", "Out Gain", "Scene A/B", "FX On", "FX Pre/Post", "Tile", "Morph Dir", "Morph Depth", "Oversampling", "Bypass"] {
         assert!(log.iter().any(|l| l.starts_with(want)), "no write to {want}: {log:?}");
     }
 }
@@ -190,7 +192,7 @@ fn the_limit_button_switches_it_off() {
     for _ in 0..3 {
         r.frame(vec![]);
     }
-    r.click(328.0, 85.0);
+    r.click(299.0, 63.0);
     assert!(r.log().iter().any(|l| l.starts_with("Limiter") && l.ends_with("0.000")), "{:?}", r.log());
 }
 
@@ -212,7 +214,7 @@ fn clicking_the_sat_readout_requests_the_level_match_and_its_result_writes_sat_g
     for _ in 0..3 {
         r.frame(vec![]);
     }
-    r.click(250.0, 379.0); // the SAT readout in the plot's bottom right corner
+    r.click(220.0, 320.0); // the SAT readout in the plot's bottom right corner
     assert!(r.shared.sat_req.swap(false, std::sync::atomic::Ordering::Relaxed), "no match request");
     r.shared.sat_result.store(-3.5, std::sync::atomic::Ordering::Relaxed);
     r.shared.sat_result_new.store(true, std::sync::atomic::Ordering::Release);
@@ -227,7 +229,7 @@ fn clicking_the_output_bars_cycles_the_range_without_writing_parameters() {
         r.frame(vec![]);
     }
     for _ in 0..5 {
-        r.click(345.0, 260.0);
+        r.click(316.0, 420.0);
     }
     assert!(r.log().is_empty(), "{:?}", r.log());
 }
@@ -248,15 +250,15 @@ fn the_scope_outline_mode_draws_and_differs_from_solid() {
 #[test]
 fn the_appearance_page_has_the_scope_fill_switch_on_its_own_row() {
     let mut r = Rig::new();
-    r.click(76.0, 24.0); // About
-    r.click(198.0, 50.0); // APPEARANCE tab
+    r.click(60.0, 12.0); // About
+    r.click(182.0, 38.0); // APPEARANCE tab
     for _ in 0..3 {
         r.frame(vec![]);
     }
     assert!(r.params.fft_solid.load(std::sync::atomic::Ordering::Relaxed), "solid by default");
-    r.click(162.0, 98.0); // OUTLINE (second row under COLOR MODE)
+    r.click(146.0, 86.0); // OUTLINE (second row under COLOR MODE)
     assert!(!r.params.fft_solid.load(std::sync::atomic::Ordering::Relaxed), "OUTLINE should switch the fill off");
-    r.click(226.0, 98.0); // SOLID
+    r.click(210.0, 86.0); // SOLID
     assert!(r.params.fft_solid.load(std::sync::atomic::Ordering::Relaxed));
     assert!(r.log().is_empty(), "UI-only setting, no host writes: {:?}", r.log());
 }
@@ -307,24 +309,24 @@ fn preferences_defaults_are_per_plugin_with_a_global_one_behind_a_chevron() {
     clear_defaults();
     clear_defaults_for("satdiff");
     let mut r = Rig::new();
-    r.click(76.0, 24.0); // About
-    r.click(198.0, 50.0); // PREFERENCES tab
+    r.click(60.0, 12.0); // About
+    r.click(182.0, 38.0); // PREFERENCES tab
     for _ in 0..3 {
         r.frame(vec![]);
     }
     // SET AS DEFAULT (the main part of the button) saves for THIS plug-in only
-    r.click(224.0, 76.0); // LIGHT
-    r.click(106.0, 447.0); // SET AS DEFAULT
+    r.click(208.0, 64.0); // LIGHT
+    r.click(90.0, 435.0); // SET AS DEFAULT
     let own = load_defaults_for("satdiff").expect("the plug-in's own default");
     assert!(own.light, "the current look is what gets saved");
     assert_eq!((own.pal, own.face), (0, 0));
     assert!((own.scale - 1.0).abs() < 1e-6, "SatDiff opens at 100%");
     assert!(load_defaults().is_none(), "the main button does not touch the global default");
     // the chevron opens a one-item menu: SET AS GLOBAL DEFAULT
-    r.click(156.0, 76.0); // DARK again
-    r.click(174.0, 447.0); // chevron
+    r.click(140.0, 64.0); // DARK again
+    r.click(158.0, 435.0); // chevron
     assert!(r.st.app.def_menu == 1, "the chevron opens the menu");
-    r.click(96.0, 461.0); // SET AS GLOBAL DEFAULT
+    r.click(80.0, 449.0); // SET AS GLOBAL DEFAULT
     assert!(r.st.app.def_menu == 0, "picking closes the menu");
     let global = load_defaults().expect("the global default");
     assert!(!global.light);
@@ -332,18 +334,18 @@ fn preferences_defaults_are_per_plugin_with_a_global_one_behind_a_chevron() {
     // a new instance picks up its own default, a project restore would then overwrite it
     assert!(SatDiffParams::from_defaults(load_defaults_for("satdiff")).light.load(Relaxed));
     // RESET (main part): drops the plug-in's own default, this instance takes what a new one would get now (the global look)
-    r.click(224.0, 76.0); // LIGHT
+    r.click(208.0, 64.0); // LIGHT
     assert!(r.params.light.load(Relaxed));
-    r.click(256.0, 447.0);
+    r.click(240.0, 435.0);
     assert!(!r.params.light.load(Relaxed), "back on the global look");
     assert!(!load_defaults_for("satdiff").unwrap().light && load_defaults().is_some());
     // RESET GLOBAL DEFAULT (its chevron): nothing left, the factory look
-    r.click(330.0, 447.0);
-    r.click(256.0, 461.0);
+    r.click(314.0, 435.0);
+    r.click(240.0, 449.0);
     assert!(load_defaults().is_none() && load_defaults_for("satdiff").is_none(), "everything cleared");
     // a click outside an open menu only closes it
-    r.click(174.0, 447.0);
-    r.click(46.0, 312.0);
+    r.click(158.0, 435.0);
+    r.click(30.0, 300.0);
     assert!(r.st.app.def_menu == 0 && load_defaults().is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -352,20 +354,20 @@ fn preferences_defaults_are_per_plugin_with_a_global_one_behind_a_chevron() {
 fn the_font_dropdown_opens_over_the_page_and_picks_a_face() {
     use std::sync::atomic::Ordering::Relaxed;
     let mut r = Rig::new();
-    r.click(76.0, 24.0); // About
-    r.click(198.0, 50.0); // PREFERENCES tab
+    r.click(60.0, 12.0); // About
+    r.click(182.0, 38.0); // PREFERENCES tab
     for _ in 0..3 {
         r.frame(vec![]);
     }
     let pal = r.params.palette_v2.load(Relaxed);
-    r.click(166.0, 425.0); // the FONT dropdown
+    r.click(150.0, 413.0); // the FONT dropdown
     assert!(r.st.app.font_open, "the list should be open");
-    r.click(166.0, 362.0); // 8th entry, Victor Mono (the list is 11 rows now), drawn over the scheme list
+    r.click(150.0, 350.0); // 8th entry, Victor Mono (the list is 11 rows now), drawn over the scheme list
     assert_eq!(r.params.font.load(Relaxed), 7, "Victor Mono");
     assert!(!r.st.app.font_open, "picking closes the list");
     assert_eq!(r.params.palette_v2.load(Relaxed), pal, "the click must not reach the scheme list under the open list");
-    r.click(166.0, 425.0);
-    r.click(36.0, 312.0); // a click elsewhere closes it without changing anything
+    r.click(150.0, 413.0);
+    r.click(20.0, 300.0); // a click elsewhere closes it without changing anything
     assert!(!r.st.app.font_open);
     assert_eq!(r.params.font.load(Relaxed), 7);
     assert!(r.log().is_empty(), "UI-only, no host writes: {:?}", r.log());
@@ -394,8 +396,8 @@ fn the_theme_editor_page_has_a_filled_scope_in_stacking_order() {
 fn the_dice_rolls_a_different_scheme_each_time_and_scrolls_the_list_to_it() {
     use std::sync::atomic::Ordering::Relaxed;
     let mut r = Rig::new();
-    r.click(76.0, 24.0); // About
-    r.click(198.0, 50.0); // PREFERENCES tab
+    r.click(60.0, 12.0); // About
+    r.click(182.0, 38.0); // PREFERENCES tab
     for _ in 0..3 {
         r.frame(vec![]);
     }
@@ -404,7 +406,7 @@ fn the_dice_rolls_a_different_scheme_each_time_and_scrolls_the_list_to_it() {
     let mut seen = std::collections::BTreeSet::new();
     let mut prev = r.params.palette_v2.load(Relaxed);
     for _ in 0..12 {
-        r.click(126.0, 121.0); // the dice, right of the COLOR SCHEME label
+        r.click(110.0, 109.0); // the dice, right of the COLOR SCHEME label
         let now = r.params.palette_v2.load(Relaxed);
         assert!(now >= 0 && now < n, "scheme {now} of {n}");
         assert_ne!(now, prev, "a roll never lands on the current scheme");
