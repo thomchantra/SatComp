@@ -2322,6 +2322,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "satdiff-dsp"
+version = "0.1.0"
+dependencies = [
+ "satcomp-dsp",
+]
+
+[[package]]
 name = "satlim"
 version = "0.1.0"
 dependencies = [
