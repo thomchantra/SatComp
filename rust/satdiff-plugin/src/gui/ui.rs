@@ -619,8 +619,15 @@ impl<'a> Gui<'a> {
             self.press = false;
         }
         sel = (self.sget(n) + 0.5).floor() as i32;
+        // scene B is edited / heard: the selector is drawn inverted (filled), everything on it in the background colour
+        let inv = self.sget(42) > 0.5;
         self.setc(false);
-        self.cv.boxr(x, y, w, h);
+        if inv {
+            self.cv.fill(x, y, w, h);
+            self.cv.setbg();
+        } else {
+            self.cv.boxr(x, y, w, h);
+        }
         self.cv.fill(x + aw, y, 1.0, h);
         self.cv.fill(x + w - aw - 1.0, y, 1.0, h);
         self.cv.tri((x + aw * 0.5 + 2.0, cy - 3.0), (x + aw * 0.5 + 2.0, cy + 3.0), (x + aw * 0.5 - 2.0, cy));
