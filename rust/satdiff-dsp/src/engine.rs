@@ -8,7 +8,7 @@
 use crate::params::DiffParams;
 use satcomp_dsp::delay::StereoDelay;
 use satcomp_dsp::level::{ms_step, one_pole, Matcher, DB_AMP, DB_POW, LN10_20};
-use satcomp_dsp::{Limiter, SatParams, Saturator, ScopeRing};
+use satcomp_dsp::{Limiter, SatParams, Saturator, ScopeRing, TapRing};
 use std::sync::Arc;
 
 /// Delay ring length: larger than the longest latency (saturator oversampler + the limiter's lookahead at the highest rates).
@@ -51,6 +51,8 @@ pub struct DiffEngine {
     /// monitor what the chain changed (UI -> audio)
     pub delta_on: bool,
     pub scope: Arc<ScopeRing>,
+    /// mono output samples for the editor's spectrum / oscilloscope
+    pub tap: Arc<TapRing>,
     sc_len: usize,
     sc_n: usize,
     sc_o: f64,
@@ -58,6 +60,8 @@ pub struct DiffEngine {
     // telemetry, audio -> UI. The shell takes the peaks with fetch_max and clears them.
     /// output peak per channel, linear
     pub opk: [f64; 2],
+    /// input peak per channel, linear (the left meter)
+    pub ipk: [f64; 2],
     /// post-saturator (after SAT GAIN) peak, linear
     pub sat_out: f64,
     /// decaying peak of the saturator input for the plot's live dot
@@ -108,11 +112,13 @@ impl DiffEngine {
             sat_result: None,
             delta_on: false,
             scope: Arc::new(ScopeRing::new()),
+            tap: Arc::new(TapRing::new()),
             sc_len: 96,
             sc_n: 0,
             sc_o: 0.0,
             sc_p: 0.0,
             opk: [0.0; 2],
+            ipk: [0.0; 2],
             sat_out: 0.0,
             sat_vz: 0.0,
             gr_pk: 0.0,
@@ -282,6 +288,8 @@ impl DiffEngine {
     #[inline]
     pub fn tick(&mut self, in_l: f64, in_r: f64) -> (f64, f64) {
         let inp = [in_l, in_r];
+        self.ipk[0] = self.ipk[0].max(in_l.abs());
+        self.ipk[1] = self.ipk[1].max(in_r.abs());
         ms_step(&mut self.ims, in_l, in_r, self.rms_c);
         self.dry.advance();
         self.dry.put(inp);
@@ -314,6 +322,7 @@ impl DiffEngine {
         }
 
         // telemetry
+        self.tap.push(((out[0] + out[1]) * 0.5) as f32);
         self.opk[0] = self.opk[0].max(out[0].abs());
         self.opk[1] = self.opk[1].max(out[1].abs());
         if out[0].abs() > 0.9999 || out[1].abs() > 0.9999 {

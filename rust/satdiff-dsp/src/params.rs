@@ -28,6 +28,27 @@ pub struct DiffParams {
     /// true-peak output limiter at -0.2 dBTP (the delay is always reported; this only engages the gain)
     pub lim_on: bool,
     pub bypass: bool,
+    // PHASE SECTION and morph / tile / scenes: stored and shown by the editor, no DSP behind them yet (spec steps 2 to 5)
+    /// A (0) or B (1) waveshaper scene
+    pub ab: i32,
+    /// phase rotator, degrees
+    pub phase: f64,
+    pub fx_on: bool,
+    /// 0 diffusor, 1 phaser, 2 flanger, 3 ringmod (only the diffusor is planned for the first build)
+    pub fx_type: i32,
+    /// 0 = before the shaper, 1 = after
+    pub fx_pos: i32,
+    /// the three colour-fx parameters (diffusor: FREQ Hz, Q, STAGES) and the fx mix, 0..100 %
+    pub fx_freq: f64,
+    pub fx_q: f64,
+    pub fx_stages: i32,
+    pub fx_mix: f64,
+    /// 0 off, 1 mirror, 2 repeat
+    pub tile: i32,
+    /// 0 = A>B, 1 = B>A
+    pub morph_dir: i32,
+    pub morph_depth: f64,
+    pub morph_speed: f64,
 }
 
 impl Default for DiffParams {
@@ -48,6 +69,19 @@ impl Default for DiffParams {
             gain_match: false,
             lim_on: false, // the plug-in's own default is on; the engine default stays off so bare-engine renders are untouched
             bypass: false,
+            ab: 0,
+            phase: 0.0,
+            fx_on: false,
+            fx_type: 0,
+            fx_pos: 0,
+            fx_freq: 1000.0,
+            fx_q: 0.7,
+            fx_stages: 4,
+            fx_mix: 100.0,
+            tile: 0,
+            morph_dir: 0,
+            morph_depth: 0.0,
+            morph_speed: 50.0,
         }
     }
 }

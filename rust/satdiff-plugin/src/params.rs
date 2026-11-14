@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 28;
+pub const SLOTS: usize = 43;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -25,6 +25,19 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (23, "gain_match", 0.0, 1.0, 0.0),
     (24, "lim_on", 0.0, 1.0, 1.0),
     (26, "bypass", 0.0, 1.0, 0.0),
+    (30, "phase", -180.0, 180.0, 0.0),
+    (31, "fx_on", 0.0, 1.0, 0.0),
+    (32, "fx_type", 0.0, 3.0, 0.0),
+    (33, "fx_pos", 0.0, 1.0, 0.0),
+    (34, "fx_freq", 20.0, 20000.0, 1000.0),
+    (35, "fx_q", 0.3, 8.0, 0.7),
+    (36, "fx_stages", 1.0, 16.0, 4.0),
+    (37, "fx_mix", 0.0, 100.0, 100.0),
+    (38, "tile", 0.0, 2.0, 0.0),
+    (39, "morph_dir", 0.0, 1.0, 0.0),
+    (40, "morph_depth", 0.0, 100.0, 0.0),
+    (41, "morph_speed", 0.0, 100.0, 50.0),
+    (42, "ab", 0.0, 1.0, 0.0),
 ];
 
 #[derive(Params)]
@@ -84,6 +97,32 @@ pub struct SatDiffParams {
     pub lim_on: BoolParam,
     #[id = "bypass"]
     pub bypass: BoolParam,
+    #[id = "phase"]
+    pub phase: FloatParam,
+    #[id = "fx_on"]
+    pub fx_on: BoolParam,
+    #[id = "fx_type"]
+    pub fx_type: IntParam,
+    #[id = "fx_pos"]
+    pub fx_pos: IntParam,
+    #[id = "fx_freq"]
+    pub fx_freq: FloatParam,
+    #[id = "fx_q"]
+    pub fx_q: FloatParam,
+    #[id = "fx_stages"]
+    pub fx_stages: IntParam,
+    #[id = "fx_mix"]
+    pub fx_mix: FloatParam,
+    #[id = "tile"]
+    pub tile: IntParam,
+    #[id = "morph_dir"]
+    pub morph_dir: IntParam,
+    #[id = "morph_depth"]
+    pub morph_depth: FloatParam,
+    #[id = "morph_speed"]
+    pub morph_speed: FloatParam,
+    #[id = "ab"]
+    pub ab: IntParam,
 }
 
 impl Default for SatDiffParams {
@@ -97,7 +136,7 @@ impl SatDiffParams {
     pub fn from_defaults(d: Option<satcomp_ui::appearance::Defaults>) -> Self {
         Self {
             editor_state: {
-                let (w, h) = d.as_ref().map(|d| d.size((340.0, 504.0))).unwrap_or((340, 504));
+                let (w, h) = d.as_ref().map(|d| d.size((372.0, 688.0))).unwrap_or((372, 688));
                 EguiState::from_size(w, h)
             },
             palette_v2: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.pal_index()).unwrap_or(-1))),
@@ -122,6 +161,19 @@ impl SatDiffParams {
             gain_match: BoolParam::new("Gain Match", false),
             lim_on: BoolParam::new("Limiter", true),
             bypass: BoolParam::new("Bypass", false),
+            phase: FloatParam::new("Phase", 0.0, FloatRange::Linear { min: -180.0, max: 180.0 }).with_unit(" deg").with_step_size(1.0),
+            fx_on: BoolParam::new("FX On", false),
+            fx_type: IntParam::new("FX Type", 0, IntRange::Linear { min: 0, max: 3 }),
+            fx_pos: IntParam::new("FX Pre/Post", 0, IntRange::Linear { min: 0, max: 1 }),
+            fx_freq: FloatParam::new("FX Freq", 1000.0, FloatRange::Linear { min: 20.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            fx_q: FloatParam::new("FX Q", 0.7, FloatRange::Linear { min: 0.3, max: 8.0 }).with_step_size(0.01),
+            fx_stages: IntParam::new("FX Stages", 4, IntRange::Linear { min: 1, max: 16 }),
+            fx_mix: FloatParam::new("FX Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            tile: IntParam::new("Tile", 0, IntRange::Linear { min: 0, max: 2 }),
+            morph_dir: IntParam::new("Morph Dir", 0, IntRange::Linear { min: 0, max: 1 }),
+            morph_depth: FloatParam::new("Morph Depth", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            morph_speed: FloatParam::new("Morph Speed", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            ab: IntParam::new("Scene A/B", 0, IntRange::Linear { min: 0, max: 1 }),
         }
     }
 }
@@ -159,7 +211,10 @@ impl SatDiffParams {
             sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64,
             sat_mix: self.sat_mix.value() as f64, sat_gain: self.sat_gain.value() as f64, os: self.os.value(),
             out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),
-            bypass: self.bypass.value(),
+            bypass: self.bypass.value(), ab: self.ab.value(), phase: self.phase.value() as f64, fx_on: self.fx_on.value(),
+            fx_type: self.fx_type.value(), fx_pos: self.fx_pos.value(), fx_freq: self.fx_freq.value() as f64, fx_q: self.fx_q.value() as f64,
+            fx_stages: self.fx_stages.value(), fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),
+            morph_depth: self.morph_depth.value() as f64, morph_speed: self.morph_speed.value() as f64,
         }
     }
 
@@ -179,6 +234,19 @@ impl SatDiffParams {
             23 => self.gain_match.as_ptr(),
             24 => self.lim_on.as_ptr(),
             26 => self.bypass.as_ptr(),
+            30 => self.phase.as_ptr(),
+            31 => self.fx_on.as_ptr(),
+            32 => self.fx_type.as_ptr(),
+            33 => self.fx_pos.as_ptr(),
+            34 => self.fx_freq.as_ptr(),
+            35 => self.fx_q.as_ptr(),
+            36 => self.fx_stages.as_ptr(),
+            37 => self.fx_mix.as_ptr(),
+            38 => self.tile.as_ptr(),
+            39 => self.morph_dir.as_ptr(),
+            40 => self.morph_depth.as_ptr(),
+            41 => self.morph_speed.as_ptr(),
+            42 => self.ab.as_ptr(),
             _ => return None,
         })
     }

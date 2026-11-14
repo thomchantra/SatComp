@@ -9,7 +9,7 @@ mod presets;
 use nih_plug::prelude::*;
 use params::SatDiffParams;
 use satcomp_dsp::shapers::Curve;
-use satcomp_dsp::ScopeRing;
+use satcomp_dsp::{ScopeRing, TapRing};
 use satdiff_dsp::DiffEngine;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +20,10 @@ use std::time::Instant;
 pub struct Shared {
     /// per 2 ms bucket: output peak and the peak ahead of the limiter
     pub scope: Arc<ScopeRing>,
+    /// mono output samples (spectrum / oscilloscope)
+    pub tap: Arc<TapRing>,
+    /// input peak per channel, linear (accumulates like `opk`)
+    pub ipk: [AtomicF32; 2],
     pub epoch: Instant,
     pub sample_rate: AtomicF32,
     // audio -> UI. Peaks accumulate with fetch_max and are consumed with swap(0).
@@ -49,6 +53,8 @@ impl Shared {
     pub fn new() -> Self {
         Self {
             scope: Arc::new(ScopeRing::new()),
+            tap: Arc::new(TapRing::new()),
+            ipk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
             epoch: Instant::now(),
             sample_rate: AtomicF32::new(48000.0),
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
@@ -87,6 +93,7 @@ impl SatDiff {
     fn new_engine(&self, sr: f64) -> DiffEngine {
         let mut e = DiffEngine::new(sr);
         e.scope = self.shared.scope.clone();
+        e.tap = self.shared.tap.clone();
         e
     }
 }
@@ -96,6 +103,7 @@ impl Default for SatDiff {
         let shared = Arc::new(Shared::new());
         let mut engine = DiffEngine::new(48000.0);
         engine.scope = shared.scope.clone();
+        engine.tap = shared.tap.clone();
         Self {
             params: Arc::new(SatDiffParams::default()),
             shared,
@@ -168,6 +176,9 @@ impl Plugin for SatDiff {
         sh.opk[0].fetch_max(e.opk[0] as f32, Ordering::Relaxed);
         sh.opk[1].fetch_max(e.opk[1] as f32, Ordering::Relaxed);
         e.opk = [0.0; 2];
+        sh.ipk[0].fetch_max(e.ipk[0] as f32, Ordering::Relaxed);
+        sh.ipk[1].fetch_max(e.ipk[1] as f32, Ordering::Relaxed);
+        e.ipk = [0.0; 2];
         if e.clip_f {
             sh.clip.store(true, Ordering::Relaxed);
             e.clip_f = false;
@@ -216,7 +227,7 @@ mod tests {
         let p = SatDiffParams::default();
         // plug-in parameters are f32, the engine's are f64: compare the way the plug-in stores them
         // the plug-in's limiter defaults to on, the bare engine's to off
-        let want = DiffParams { lim_on: true, ..DiffParams::default() };
+        let want = DiffParams { lim_on: true, fx_q: 0.7f32 as f64, ..DiffParams::default() };
         assert_eq!(p.to_dsp(), want);
     }
 
