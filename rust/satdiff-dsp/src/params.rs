@@ -28,13 +28,13 @@ pub struct DiffParams {
     /// true-peak output limiter at -0.2 dBTP (the delay is always reported; this only engages the gain)
     pub lim_on: bool,
     pub bypass: bool,
-    // PHASE SECTION and morph / tile / scenes: stored and shown by the editor, no DSP behind them yet (spec steps 2 to 5)
+    // PHASE SECTION (built: rotator + diffusor) and tile / morph / scenes (stored and shown by the editor, no DSP behind them yet, spec steps 3 to 5)
     /// A (0) or B (1) waveshaper scene
     pub ab: i32,
     /// phase rotator, degrees
     pub phase: f64,
     pub fx_on: bool,
-    /// 0 diffusor, 1 phaser, 2 flanger, 3 ringmod (only the diffusor is planned for the first build)
+    /// 0 diffusor, 1 phaser, 2 flanger, 3 ringmod (only the diffusor exists; the others act as off)
     pub fx_type: i32,
     /// 0 = before the shaper, 1 = after
     pub fx_pos: i32,

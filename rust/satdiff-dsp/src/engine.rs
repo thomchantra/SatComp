@@ -1,11 +1,14 @@
-//! SatDiff engine, step 1: SAT (shared saturator, with SAT MIX / SAT GAIN) -> OUT GAIN (+ gain-match trim) -> true-peak
-//! output limiter (optional). The phase rotator and the colour-fx slot (docs/internal/SatDiff_spec.md section 2) go in
-//! front of / around the saturator in the next steps. Stereo, f64 inside.
+//! SatDiff engine: PHASE (rotator) -> [DIFFUSOR if PRE] -> SAT (shared saturator, with SAT MIX / SAT GAIN) -> [DIFFUSOR if
+//! POST] -> OUT GAIN (+ gain-match trim) -> true-peak output limiter (optional). The rotator and the diffusor are linear
+//! IIR blocks with no latency (docs/internal/SatDiff_spec.md section 2). Tile, morph and the A/B scenes are not built yet.
+//! Stereo, f64 inside.
 //!
 //! The limiter's delay is always reported (so toggling LIMIT never changes the latency); bypass returns the input at that
 //! same latency. DELTA monitors what the processed path changed (processed minus the aligned input, before the limiter).
 
+use crate::diffuse::Diffusor;
 use crate::params::DiffParams;
+use crate::phase::Rotator;
 use satcomp_dsp::delay::StereoDelay;
 use satcomp_dsp::level::{ms_step, one_pole, Matcher, DB_AMP, DB_POW, LN10_20};
 use satcomp_dsp::{Limiter, SatParams, Saturator, ScopeRing, TapRing};
@@ -23,6 +26,10 @@ pub struct DiffEngine {
     snap: bool,
     /// Smooth Drive / Bias / Mix (set false for null tests).
     pub smoothing: bool,
+    rot: Rotator,
+    fx: Diffusor,
+    /// where the fx currently runs (0 before the saturator, 1 after)
+    fx_pos: i32,
     sat: Saturator,
     lim: Limiter,
     /// the input, kept to line up the bypass and the delta with the processed path
@@ -87,6 +94,9 @@ impl DiffEngine {
             first_set: true,
             snap: true,
             smoothing: true,
+            rot: Rotator::new(sr),
+            fx: Diffusor::new(sr),
+            fx_pos: 0,
             sat: Saturator::new(),
             lim: Limiter::new(sr),
             dry: StereoDelay::new(),
@@ -175,6 +185,8 @@ impl DiffEngine {
         if sr != self.sr_prev {
             self.sr_prev = sr;
             self.lim.set_sample_rate(sr);
+            self.rot.set_sample_rate(sr);
+            self.fx.set_sample_rate(sr);
             self.sc_len = ((sr * ScopeRing::BUCKET_S).round() as usize).max(1);
             self.sm_c = one_pole(sr, 0.02);
             self.byp_c = one_pole(sr, 0.01);
@@ -182,6 +194,13 @@ impl DiffEngine {
         }
         let sp: SatParams = p.sat();
         self.sat.derive(&sp, sr, self.snap, self.smoothing);
+        self.rot.set(p.phase, self.snap);
+        // only the diffusor exists so far: the other fx types behave as off
+        self.fx.set(p.fx_on && p.fx_type == 0, p.fx_freq, p.fx_q, p.fx_stages, p.fx_mix, self.snap);
+        if p.fx_pos != self.fx_pos {
+            self.fx_pos = p.fx_pos;
+            self.fx.reset(); // the filter state belongs to the other side of the saturator
+        }
         self.match_on = p.gain_match;
         if self.match_on && !self.prev_match_on {
             self.out_m.start();
@@ -295,8 +314,15 @@ impl DiffEngine {
         self.dry.put(inp);
         self.pre.advance();
 
-        // SAT (+ SAT GAIN)
-        let s = self.sat.tick(inp, self.smoothing);
+        // PHASE, then the diffusor when it runs before the saturator
+        let r = self.rot.tick(inp);
+        let pre = if self.fx_pos == 0 { self.fx.tick(r) } else { r };
+
+        // SAT (+ SAT GAIN), then the diffusor when it runs after
+        let mut s = self.sat.tick(pre, self.smoothing);
+        if self.fx_pos == 1 {
+            s = self.fx.tick(s);
+        }
 
         // OUT GAIN (+ the gain-match trim)
         self.og += (self.og_t - self.og) * self.sm_c;
@@ -474,6 +500,65 @@ mod tests {
         let x = noise(48000 * 5, 31, 0.2);
         let (_, e) = run(&DiffParams { out_gain: 6.0, gain_match: true, ..DiffParams::default() }, &x);
         assert!((e.match_trim + 6.0).abs() < 0.4, "{}", e.match_trim);
+    }
+
+    fn rms(v: &[f32]) -> f64 {
+        (v.iter().map(|a| (*a as f64).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
+    }
+
+    #[test]
+    fn phase_section_adds_no_latency() {
+        let base = DiffEngine::new(SR).latency();
+        let mut e = DiffEngine::new(SR);
+        e.set_params(&DiffParams { phase: 90.0, fx_on: true, fx_stages: 16, ..DiffParams::default() });
+        assert_eq!(e.latency(), base);
+    }
+
+    #[test]
+    fn the_diffusor_and_the_rotator_keep_the_level_on_a_linear_path() {
+        let x = noise(48000, 41, 0.4);
+        let (y0, _) = run(&DiffParams::default(), &x);
+        for p in [
+            DiffParams { fx_on: true, fx_freq: 700.0, fx_q: 4.0, fx_stages: 12, ..DiffParams::default() },
+            DiffParams { phase: 90.0, ..DiffParams::default() },
+            DiffParams { phase: -40.0, fx_on: true, fx_pos: 1, fx_stages: 6, ..DiffParams::default() },
+        ] {
+            let (y, _) = run(&p, &x);
+            let r = rms(&y[8000..]) / rms(&y0[8000..]);
+            assert!((r - 1.0).abs() < 0.03, "{p:?}: level ratio {r}");
+        }
+    }
+
+    #[test]
+    fn pre_and_post_only_differ_through_the_saturator() {
+        let x = noise(24000, 43, 0.5);
+        let fx = |pos: i32, drive: f64, shape: i32| DiffParams { fx_on: true, fx_pos: pos, fx_freq: 900.0, fx_q: 5.0, fx_stages: 8, drive, shape, ..DiffParams::default() };
+        let diff = |a: &[f32], b: &[f32]| rms(&a.iter().zip(b).skip(6000).map(|(p, q)| p - q).collect::<Vec<f32>>());
+        // linear path: allpass filters commute with the (unity) saturator, order is irrelevant
+        let (a, _) = run(&fx(0, 0.0, 0), &x);
+        let (b, _) = run(&fx(1, 0.0, 0), &x);
+        assert!(diff(&a, &b) < 1e-4, "linear {}", diff(&a, &b));
+        // a hot shaper in between: dispersing the waveform first changes what it clips
+        let (a, _) = run(&fx(0, 70.0, 1), &x);
+        let (b, _) = run(&fx(1, 70.0, 1), &x);
+        assert!(diff(&a, &b) > 0.02, "saturated {}", diff(&a, &b));
+    }
+
+    #[test]
+    fn phase_changes_what_the_shaper_does_to_the_same_spectrum() {
+        let x: Vec<f32> = (0..24000).map(|i| (0.45 * (2.0 * PI * 220.0 * i as f64 / SR).sin() + 0.25 * (2.0 * PI * 440.0 * i as f64 / SR).sin()) as f32).collect();
+        let at = |deg: f64| run(&DiffParams { phase: deg, drive: 60.0, shape: 1, ..DiffParams::default() }, &x).0;
+        let (a, b) = (at(0.5), at(90.0));
+        let d = rms(&a.iter().zip(&b).skip(8000).map(|(p, q)| p - q).collect::<Vec<f32>>());
+        assert!(d > 0.02, "a quarter turn should reshape the clipped output: {d}");
+    }
+
+    #[test]
+    fn other_fx_types_do_nothing_yet() {
+        let x = noise(8000, 47, 0.4);
+        let (a, _) = run(&DiffParams::default(), &x);
+        let (b, _) = run(&DiffParams { fx_on: true, fx_type: 2, fx_stages: 16, fx_q: 8.0, ..DiffParams::default() }, &x);
+        assert_eq!(a, b);
     }
 
     #[test]
