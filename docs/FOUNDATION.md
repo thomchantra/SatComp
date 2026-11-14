@@ -59,7 +59,8 @@ scheme menu (right-click the icon). Not verified in REAPER (clicks go through th
 | `rust/vendor/nih_plug_egui` | patched copy (see below) |
 | `rust/xtask` | `cargo xtask bundle satcomp --release` |
 | `rust/tools/gen_params.py` | generates `params.rs` |
-| `rust/tools/gen_xparams.py` / `gen_lparams.py` | generate the SatXComp / SatLim `params.rs` |
+| `rust/satdiff-dsp` / `rust/satdiff-plugin` | SatDiff (alpha, unreleased, on `feature/satdiff`): `DiffEngine` (sat -> out gain -> optional true-peak limiter; rotator and diffusor follow); shell + generated `params.rs` (`tools/gen_dparams.py`); presets `*.satdiff` |
+| `rust/tools/gen_xparams.py` / `gen_lparams.py` / `gen_dparams.py` | generate the SatXComp / SatLim / SatDiff `params.rs` (note: `gen_lparams.py` is behind the committed SatLim `params.rs`, which gained `from_defaults` by hand) |
 | `rust/tools/wavdiff.py` | null-test two WAV renders (peak/RMS of the difference); see Regression nets |
 | `rust/tools/gen_palettes.py` | rewrites `PALETTES` in `satcomp-ui/src/canvas.rs` from `docs/colorscheme.md` |
 

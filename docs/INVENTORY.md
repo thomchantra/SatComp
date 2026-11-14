@@ -22,6 +22,8 @@ Shared: `satcomp-ui` (canvas, 27 palettes, 11 embedded fonts, FFT, widget kit, A
 
 **Platforms:** macOS (universal), Windows x64 and Linux x64 (experimental from 0.5.2: X11 only, built on ubuntu-22.04; known issue: the meters and the scope stutter on some systems, probably frame pacing under X11; `SATCOMP_FPS=1` and `SATCOMP_VSYNC=0|1` help diagnose it).
 
+**In development:** SatDiff (working name was SatOne; saturator + phase rotator + diffusor), alpha on `feature/satdiff`, not released, not in CI or the README. Step 1 (SatComp saturator without comp and EQ, out gain, gain match, optional limiter) builds as VST3 / CLAP with `cargo xtask bundle satdiff`. Spec: `docs/internal/SatDiff_spec.md` (local only, `docs/internal` is gitignored). VST3 class id `thomchantraSatDf`, CLAP `com.thomchantra.satdiff`.
+
 **Not built:** SatEQ (5-band EQ with a waveshaper per band) exists only as a pitch, `docs/internal/SATEQ_PITCH.md`. The CI matrix knows the `sateq-v*` tag but there is no crate. AU is shelved (no demand yet).
 
 ## Release and tag convention
