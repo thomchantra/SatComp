@@ -122,6 +122,18 @@ impl Curve {
         Self::from_points(&v)
     }
 
+    /// The right half of the curve's even part: like `odd_half` with y = (f(x) + f(-x)) / 2. Feed it to `from_even_half`.
+    pub fn even_half(&self) -> Vec<(f32, f32)> {
+        self.odd_half().into_iter().map(|(x, _)| (x, ((self.eval(x as f64) + self.eval(-x as f64)) * 0.5) as f32)).collect()
+    }
+
+    /// The full even curve of a right half (x > 0, ending at x = 1): the left half is the Y-mirror image, `f(-x) = f(x)`.
+    pub fn from_even_half(h: &[(f32, f32)]) -> Self {
+        let mut v: Vec<(f32, f32)> = h.iter().rev().map(|&(x, y)| (-x, y)).collect();
+        v.extend_from_slice(h);
+        Self::from_points(&v)
+    }
+
     /// Value of the monotone cubic (Fritsch-Carlson) through the points; flat beyond the ends.
     /// Never overshoots between points, so the transfer curve stays single-valued and tame.
     pub fn eval(&self, x: f64) -> f64 {
