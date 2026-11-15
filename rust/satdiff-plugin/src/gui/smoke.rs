@@ -455,3 +455,24 @@ fn dragging_the_derived_half_of_an_odd_curve_moves_the_real_point_the_right_way(
     assert!(c.is_odd(), "an odd curve must stay odd: {:?}", c.pts());
     assert!((c.eval(1.0) - 0.5).abs() < 0.05 && (c.eval(-1.0) + 0.5).abs() < 0.05, "f(1) = {}, f(-1) = {}", c.eval(1.0), c.eval(-1.0));
 }
+
+#[test]
+fn tile_shows_in_the_plot_and_dims_on_the_periodic_shapers() {
+    use nih_plug::prelude::{FloatParam, FloatRange, IntParam, IntRange};
+    let run = |tile: i32, shape: i32| {
+        let mut r = Rig::with_params(|p| {
+            p.drive = FloatParam::new("Drive", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 });
+            p.tile = IntParam::new("Tile", tile, IntRange::Linear { min: 0, max: 2 });
+            p.shape = IntParam::new("Shape", shape, IntRange::Linear { min: 0, max: 14 });
+        });
+        for _ in 0..4 {
+            r.frame(vec![]);
+        }
+        r.hash
+    };
+    // Soft: the plot differs between off / mirror / repeat
+    let (off, mir, rep) = (run(0, 1), run(1, 1), run(2, 1));
+    assert!(off != mir && off != rep && mir != rep, "plot ignores TILE");
+    // Wrap tiles itself: the switch changes nothing, not even the buttons' look beyond the dimming already there
+    assert_eq!(run(1, 9), run(2, 9));
+}

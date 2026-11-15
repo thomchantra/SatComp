@@ -905,14 +905,19 @@ impl<'a> Gui<'a> {
         self.cv.textr(x, y + 3.0, w - 3.0, &sb);
         self.cv.fill(x + 2.0, y + hh - 3.0, ((tb * (w - 4.0)).floor()).max(1.0), 1.0);
         self.setc(false);
-        // tile segments
-        let sel = (self.sget(38) + 0.5).floor() as i32;
+        // tile segments: dimmed and inert on the periodic shapers (Tri Fold, Sine Fold, Wrap, Asym Fold already tile themselves)
+        let applies = satcomp_dsp::shapers::tile_applies((self.sget(1) + 0.5).floor() as i32);
+        let keep_dk = self.dk;
+        if !applies {
+            self.set_dk(keep_dk * 0.35);
+        }
+        let sel = if applies { (self.sget(38) + 0.5).floor() as i32 } else { -1 };
         let (sy, sh) = (y + hh + 1.0, h - hh - 1.0);
         for i in 0..3i32 {
             let sx = x + (w * i as f32 / 3.0).floor();
             let sx2 = x + (w * (i + 1) as f32 / 3.0).floor();
             let sw = sx2 - sx;
-            let hv = self.hit(sx, sy, sw, sh);
+            let hv = self.hit(sx, sy, sw, sh) && applies;
             if hv && self.press && self.act == 0 {
                 self.click_set(38, i as f32);
                 self.press = false;
@@ -943,6 +948,7 @@ impl<'a> Gui<'a> {
                 }
             }
         }
+        self.set_dk(keep_dk);
         self.setc(false);
     }
 
@@ -1346,7 +1352,7 @@ impl<'a> Gui<'a> {
         let sat_on = dsp.drive > 0.0 || dsp.bias != 0.0;
         let pre = (dsp.drive * 0.01 * 36.0 * 0.11512925).exp() as f32;
         let bias = (dsp.bias * 0.01) as f32;
-        self.lut.sync(dsp.shape, &dsp.curve);
+        self.lut.sync(dsp.shape, &dsp.tiled_curve());
         // static curve as heard: the shaper minus the part of its even half that ASYM removes
         let ak = dsp.asym[(dsp.shape.max(0) as usize).min(dsp.asym.len() - 1)] * 0.01;
         let eff = move |l: &ShaperLut, v: f64| {
@@ -1404,7 +1410,8 @@ impl<'a> Gui<'a> {
             return;
         }
         let pk = sh.sat_vz.load(Ordering::Relaxed).min(1.0);
-        let n = 64;
+        // one point per pixel column: a tiled curve under drive folds / wraps many times across the plot
+        let n = if dsp.effective_tile() != 0 { (w as usize).max(64) } else { 64 };
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
             let vx = -1.0 + 2.0 * i as f32 / n as f32;
@@ -2159,7 +2166,7 @@ impl<'a> Gui<'a> {
         }
         self.cv.set_font(2);
         // TILE on the drawn curve runs at x4 at least: show what is actually running
-        let forced = self.sget(38) > 0.5 && (self.sget(1) + 0.5).floor() as i32 == satcomp_dsp::shapers::CUSTOM;
+        let forced = self.env.dsp.effective_tile() != 0;
         self.cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, &format!("{}x", 1 << if forced { os.max(2) } else { os }));
         self.setc(false);
     }
