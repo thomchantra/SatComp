@@ -1,0 +1,15 @@
+[package]
+name = "plugbench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Offline benchmark host (not part of the workspace, not built by CI): loads CLAP and VST2 plug-ins, renders audio through them
+# block by block on one thread and times every block. See src/main.rs.
+[dependencies]
+clap-sys = { git = "https://github.com/micahrj/clap-sys.git", rev = "25d7f53fdb6363ad63fbd80049cb7a42a97ac156" }
+
+[workspace]
+
+[profile.release]
+debug = false
