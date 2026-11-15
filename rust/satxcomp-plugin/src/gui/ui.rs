@@ -203,8 +203,9 @@ pub struct State {
     scope_cfg: i32,
     /// steady scope scrolling: eased read position (bucket index) and the time of the last frame
     scope_clk: satcomp_ui::scroll::ScrollClock,
-    /// block-published telemetry shown through a glide (see satcomp-ui/src/glide.rs)
-    gl: [satcomp_ui::glide::Glide; 1 + NB],
+    /// animation values from the audio thread, replayed in audio time (see satcomp-ui/src/meter.rs)
+    meter: satcomp_ui::meter::MeterReader,
+    meter_t: f64,
     scope_t: f64,
     scope_drag: (f32, f32, usize, usize),
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
@@ -363,7 +364,8 @@ impl State {
             sym_mode: true,
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_clk: Default::default(),
-            gl: [satcomp_ui::glide::Glide::new(); 1 + NB],
+            meter: satcomp_ui::meter::MeterReader::new(vec![satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::State]),
+            meter_t: 0.0,
             scope_t: 0.0,
             scope_drag: (0.0, 0.0, 0, 0),
             asym_drag: (0.0, 0.0),
@@ -426,6 +428,7 @@ impl State {
             // the egui clock restarts when the editor window is reopened: re-base every stored timestamp
             self.rd_last = now;
             self.scope_t = now;
+            self.meter_t = now;
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = [now; NB];
@@ -483,6 +486,9 @@ impl State {
         }
         d.tap_out.w.store(satcomp_dsp::TapRing::LEN * 3, Relaxed);
         d.tap_dry.w.store(satcomp_dsp::TapRing::LEN * 3, Relaxed);
+        for _ in 0..16 {
+            d.meter.push([0.3, 0.3, 0.3, 0.3, 2.0, 0.0]);
+        }
     }
 }
 
@@ -1395,8 +1401,7 @@ impl<'a> Gui<'a> {
         let s = format!("{:+.1}dB", self.rd_diff);
         self.cv.textc(x, y + (h * 0.4 + 1.0).floor(), w, &s);
         let cx = x + (w * 0.5).floor();
-        let raw = self.env.shared.diff_disp.load(Ordering::Relaxed);
-        let d = self.gl_step(0, raw).clamp(-12.0, 12.0) / 12.0;
+        let d = self.mval(NB).clamp(-12.0, 12.0) / 12.0;
         let bw = (d.abs() * (w * 0.5 - 3.0)).floor();
         if d >= 0.0 {
             self.cv.fill(cx, y + h - 4.0, bw, 2.0);
@@ -1732,7 +1737,7 @@ impl<'a> Gui<'a> {
         let mut b_out = [0.0f32; NB];
         for b in 0..NB {
             let on = self.sget(band_base(b) + ON) > 0.5;
-            b_in[b] = lvf(self.gl_step(1 + b, sh.sat_vz[b].load(Ordering::Relaxed)));
+            b_in[b] = lvf(self.mval(b));
             b_out[b] = if on { (lvf(self.vu[b]) - self.gr_disp[b] / 48.0).max(0.0) } else { b_in[b] };
         }
         let inl = b_in.iter().cloned().fold(0.0, f32::max);
@@ -2064,7 +2069,7 @@ impl<'a> Gui<'a> {
             self.draw_curve_edit(x, y, w, h);
             return;
         }
-        let pk = self.gl_step(1 + b, sh.sat_vz[b].load(Ordering::Relaxed)).min(1.0);
+        let pk = self.mval(b).min(1.0);
         let n = 64;
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
@@ -2797,6 +2802,7 @@ impl<'a> Gui<'a> {
 
     // ------------------------------------------------------------------ frame
     pub fn frame(&mut self) {
+        self.meter_tick();
         let sh = self.env.shared;
         #[cfg(test)]
         {
@@ -3036,9 +3042,16 @@ impl<'a> Gui<'a> {
 }
 
 impl<'a> Gui<'a> {
-    /// A value that the audio thread publishes once per host block, as it should be drawn (continuous between blocks).
-    fn gl_step(&mut self, i: usize, raw: f32) -> f32 {
-        let now = self.now;
-        self.gl[i].step(raw, now)
+    /// Replay the audio thread's animation buckets up to the constant-rate clock: call once per frame, before anything reads a value.
+    fn meter_tick(&mut self) {
+        let ring = self.env.shared.meter.clone();
+        let dt = (self.now - self.meter_t).clamp(0.0, 0.25);
+        self.meter_t = self.now;
+        self.meter.update(ring.head(), dt, 1.0 / satcomp_dsp::ScopeRing::BUCKET_S, |i, c| ring.get(i)[c]);
+    }
+
+    /// Animation value `c` (see the plug-in's `meter` channels), continuous in audio time.
+    fn mval(&self, c: usize) -> f32 {
+        self.meter.value(c)
     }
 }

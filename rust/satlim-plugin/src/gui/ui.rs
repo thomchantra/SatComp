@@ -68,8 +68,9 @@ pub struct State {
     scope_drag: (f32, f32, usize, usize),
     /// eased read position in the scope ring (buckets) and the time of the last scope frame
     scope_clk: satcomp_ui::scroll::ScrollClock,
-    /// block-published telemetry shown through a glide (see satcomp-ui/src/glide.rs)
-    gl: [satcomp_ui::glide::Glide; 1],
+    /// animation values from the audio thread, replayed in audio time (see satcomp-ui/src/meter.rs)
+    meter: satcomp_ui::meter::MeterReader,
+    meter_t: f64,
     scope_t: f64,
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
     asym_drag: (f32, f32),
@@ -158,6 +159,7 @@ impl State {
             self.sat_clip_t = -10.0;
             self.hold_until = now;
             self.scope_t = now;
+            self.meter_t = now;
         }
     }
 
@@ -192,7 +194,8 @@ impl State {
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_drag: (0.0, 0.0, 0, 0),
             scope_clk: Default::default(),
-            gl: Default::default(),
+            meter: satcomp_ui::meter::MeterReader::new(vec![satcomp_ui::meter::Kind::Peak(0.15)]),
+            meter_t: 0.0,
             scope_t: 0.0,
             asym_drag: (0.0, 0.0),
             app: AppState::new(),
@@ -297,6 +300,9 @@ impl State {
                 let out = handed.min(0.85);
                 d.scope.push3(out, handed, pre);
             }
+        }
+        for _ in 0..16 {
+            d.meter.push([0.3, 0.0, 0.0, 0.0, 0.0, 0.0]);
         }
     }
 }
@@ -900,7 +906,7 @@ impl<'a> Gui<'a> {
             self.draw_curve_edit(x, y, w, h);
             return;
         }
-        let pk = self.gl_step(0, sh.sat_vz.load(Ordering::Relaxed)).min(1.0);
+        let pk = self.mval(0).min(1.0);
         let n = 64;
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
@@ -1629,6 +1635,7 @@ impl<'a> Gui<'a> {
 
     // ------------------------------------------------------------------ main frame
     pub fn frame(&mut self) {
+        self.meter_tick();
         let sh = self.env.shared;
         // Theme editor: every widget draws as a dummy with the input masked; only the editor cells and the picker get it.
         let editing = self.app.editing();
@@ -1823,9 +1830,16 @@ impl<'a> Gui<'a> {
 }
 
 impl<'a> Gui<'a> {
-    /// A value that the audio thread publishes once per host block, as it should be drawn (continuous between blocks).
-    fn gl_step(&mut self, i: usize, raw: f32) -> f32 {
-        let now = self.now;
-        self.gl[i].step(raw, now)
+    /// Replay the audio thread's animation buckets up to the constant-rate clock: call once per frame, before anything reads a value.
+    fn meter_tick(&mut self) {
+        let ring = self.env.shared.meter.clone();
+        let dt = (self.now - self.meter_t).clamp(0.0, 0.25);
+        self.meter_t = self.now;
+        self.meter.update(ring.head(), dt, 1.0 / satcomp_dsp::ScopeRing::BUCKET_S, |i, c| ring.get(i)[c]);
+    }
+
+    /// Animation value `c` (see the plug-in's `meter` channels), continuous in audio time.
+    fn mval(&self, c: usize) -> f32 {
+        self.meter.value(c)
     }
 }

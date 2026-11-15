@@ -117,6 +117,10 @@ impl Rig {
         sh.mn_lv.store(0.05 + 0.5 * (n * 0.02).cos().abs(), Relaxed);
         sh.diff_disp.store(6.0 * (n * 0.04).sin(), Relaxed);
         sh.sat_db.store(3.0 * (n * 0.06).sin(), Relaxed);
+        // the animation buckets: eight per frame (a 16 ms frame is eight 2 ms buckets), the same functions of the frame number
+        for _ in 0..8 {
+            sh.meter.push([0.1 + 0.5 * (n * 0.03).sin().abs(), 0.05 + 0.6 * w, 0.05 + 0.5 * (n * 0.02).cos().abs(), 6.0 * (n * 0.04).sin(), 0.0, 0.0]);
+        }
         sh.sc_bus.store(self.out.len() % 97 < 60, Relaxed);
         for i in 0..crate::TapRing::LEN {
             let t = (i as f32 + n * 37.0) * 0.001;

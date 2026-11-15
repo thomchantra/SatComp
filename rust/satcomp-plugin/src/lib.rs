@@ -14,6 +14,8 @@ use std::time::Instant;
 pub struct Shared {
     pub tap: Arc<TapRing>,
     pub scope: Arc<ScopeRing>,
+    /// animation values per 2 ms bucket (live dots, level dots, gain-difference bar): replayed in audio time by the editor
+    pub meter: Arc<satcomp_dsp::MeterRing>,
     pub epoch: Instant,
     pub sample_rate: AtomicF32,
     // audio -> UI. Peaks accumulate with fetch_max and are consumed with swap(0).
@@ -53,6 +55,7 @@ impl Shared {
         Self {
             tap: Arc::new(TapRing::new()),
             scope: Arc::new(ScopeRing::new()),
+            meter: Arc::new(satcomp_dsp::MeterRing::new()),
             epoch: Instant::now(),
             sample_rate: AtomicF32::new(48000.0),
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
@@ -102,6 +105,7 @@ impl Default for SatComp {
         let mut engine = Engine::new(48000.0);
         engine.tap = shared.tap.clone();
         engine.scope = shared.scope.clone();
+        engine.meter = shared.meter.clone();
         Self { params: Arc::new(SatCompParams::default()), shared, engine, last_latency: u32::MAX, last_curve: satcomp_dsp::shapers::Curve::linear(), last_asym: [100.0; satcomp_dsp::shapers::SHAPER_COUNT] }
     }
 }
@@ -151,6 +155,7 @@ impl Plugin for SatComp {
         let mut engine = Engine::new(sr);
         engine.tap = self.shared.tap.clone();
         engine.scope = self.shared.scope.clone();
+        engine.meter = self.shared.meter.clone();
         engine.match_trim = self.params.match_trim.load(Ordering::Relaxed) as f64;
         engine.set_params(&self.params.to_dsp());
         self.engine = engine;
@@ -164,6 +169,7 @@ impl Plugin for SatComp {
         let mut engine = Engine::new(sr);
         engine.tap = self.shared.tap.clone();
         engine.scope = self.shared.scope.clone();
+        engine.meter = self.shared.meter.clone();
         engine.match_trim = self.params.match_trim.load(Ordering::Relaxed) as f64;
         engine.set_params(&self.params.to_dsp_rt(&mut self.last_curve, &mut self.last_asym));
         self.engine = engine;

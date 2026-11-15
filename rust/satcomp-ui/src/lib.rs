@@ -3,8 +3,8 @@
 pub mod appearance;
 pub mod canvas;
 pub mod fft;
-pub mod glide;
 pub mod kit;
+pub mod meter;
 pub mod scroll;
 pub mod spectrum;
 

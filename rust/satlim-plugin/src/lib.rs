@@ -20,6 +20,8 @@ use std::time::Instant;
 pub struct Shared {
     /// per 2 ms bucket: output peak and the same with what the clipper + limiter removed added back
     pub scope: Arc<ScopeRing>,
+    /// animation values per 2 ms bucket (live dots, level dots, gain-difference bar): replayed in audio time by the editor
+    pub meter: Arc<satcomp_dsp::MeterRing>,
     pub epoch: Instant,
     pub sample_rate: AtomicF32,
     // audio -> UI. Peaks accumulate with fetch_max and are consumed with swap(0).
@@ -53,6 +55,7 @@ impl Shared {
     pub fn new() -> Self {
         Self {
             scope: Arc::new(ScopeRing::new()),
+            meter: Arc::new(satcomp_dsp::MeterRing::new()),
             epoch: Instant::now(),
             sample_rate: AtomicF32::new(48000.0),
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
@@ -93,6 +96,7 @@ impl SatLim {
     fn new_engine(&self, sr: f64) -> LimEngine {
         let mut e = LimEngine::new(sr);
         e.scope = self.shared.scope.clone();
+        e.meter = self.shared.meter.clone();
         e
     }
 }
@@ -102,6 +106,7 @@ impl Default for SatLim {
         let shared = Arc::new(Shared::new());
         let mut engine = LimEngine::new(48000.0);
         engine.scope = shared.scope.clone();
+        engine.meter = shared.meter.clone();
         Self {
             params: Arc::new(SatLimParams::default()),
             shared,

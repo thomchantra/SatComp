@@ -20,6 +20,8 @@ use std::time::Instant;
 pub struct Shared {
     /// per 2 ms bucket: output peak and the peak ahead of the limiter
     pub scope: Arc<ScopeRing>,
+    /// animation values per 2 ms bucket (live dots, level dots, gain-difference bar): replayed in audio time by the editor
+    pub meter: Arc<satcomp_dsp::MeterRing>,
     /// mono output samples (spectrum / oscilloscope)
     pub tap: Arc<TapRing>,
     /// colour-fx output as mid / side (the fx viewport's stereo-field underlay)
@@ -58,6 +60,7 @@ impl Shared {
     pub fn new() -> Self {
         Self {
             scope: Arc::new(ScopeRing::new()),
+            meter: Arc::new(satcomp_dsp::MeterRing::new()),
             tap: Arc::new(TapRing::new()),
             fx_mid: Arc::new(TapRing::new()),
             fx_side: Arc::new(TapRing::new()),
@@ -101,6 +104,7 @@ impl SatDiff {
     fn new_engine(&self, sr: f64) -> DiffEngine {
         let mut e = DiffEngine::new(sr);
         e.scope = self.shared.scope.clone();
+        e.meter = self.shared.meter.clone();
         e.tap = self.shared.tap.clone();
         e.fx_mid = self.shared.fx_mid.clone();
         e.fx_side = self.shared.fx_side.clone();
@@ -113,6 +117,7 @@ impl Default for SatDiff {
         let shared = Arc::new(Shared::new());
         let mut engine = DiffEngine::new(48000.0);
         engine.scope = shared.scope.clone();
+        engine.meter = shared.meter.clone();
         engine.tap = shared.tap.clone();
         engine.fx_mid = shared.fx_mid.clone();
         engine.fx_side = shared.fx_side.clone();

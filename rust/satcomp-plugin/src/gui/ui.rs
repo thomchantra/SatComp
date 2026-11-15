@@ -66,8 +66,9 @@ pub struct State {
     scope_cfg: i32,
     /// steady scope scrolling: eased read position (bucket index) and the time of the last frame
     scope_clk: satcomp_ui::scroll::ScrollClock,
-    /// block-published telemetry shown through a glide (see satcomp-ui/src/glide.rs)
-    gl: [satcomp_ui::glide::Glide; 4],
+    /// animation values from the audio thread, replayed in audio time (see satcomp-ui/src/meter.rs)
+    meter: satcomp_ui::meter::MeterReader,
+    meter_t: f64,
     scope_t: f64,
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
     scope_drag: (f32, f32, usize, usize),
@@ -175,6 +176,7 @@ impl State {
         if self.kit.set_input(mx, my, down, rdown, scroll, shift, now) {
             self.rd_last = now;
             self.scope_t = now;
+            self.meter_t = now;
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = now;
@@ -242,7 +244,8 @@ impl State {
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_clk: Default::default(),
-            gl: Default::default(),
+            meter: satcomp_ui::meter::MeterReader::new(vec![satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::State]),
+            meter_t: 0.0,
             scope_t: 0.0,
             scope_drag: (0.0, 0.0, 0, 0),
             asym_drag: (0.0, 0.0),
@@ -362,6 +365,9 @@ impl State {
         d.sat_vz.store(0.3, Ordering::Relaxed);
         d.sat_pk.store(0.4, Ordering::Relaxed);
         d.lim_gr_pk.store(1.5, Ordering::Relaxed);
+        for _ in 0..16 {
+            d.meter.push([0.3, 0.3, 0.5, 2.0, 0.0, 0.0]);
+        }
     }
 }
 
@@ -780,8 +786,7 @@ impl<'a> Gui<'a> {
         let s = format!("{:+.1}dB", self.rd_diff);
         self.cv.textc(x, y + (h * 0.4 + 1.0).floor(), w, &s);
         let cx = x + (w * 0.5).floor();
-        let raw = self.env.shared.diff_disp.load(Ordering::Relaxed);
-        let d = self.gl_step(0, raw).clamp(-12.0, 12.0) / 12.0;
+        let d = self.mval(3).clamp(-12.0, 12.0) / 12.0;
         let bw = (d.abs() * (w * 0.5 - 3.0)).floor();
         if d >= 0.0 {
             self.cv.fill(cx, y + h - 4.0, bw, 2.0);
@@ -1043,7 +1048,7 @@ impl<'a> Gui<'a> {
             self.draw_curve_edit(x, y, w, h);
             return;
         }
-        let pk = self.gl_step(1, sh.sat_vz.load(Ordering::Relaxed)).min(1.0);
+        let pk = self.mval(0).min(1.0);
         let n = 64;
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
@@ -1340,7 +1345,7 @@ impl<'a> Gui<'a> {
         }
         self.setc(false);
         self.cv.boxr(x, y, w, h);
-        let vz = self.gl_step(2, self.env.shared.vz_lv.load(Ordering::Relaxed));
+        let vz = self.mval(1);
         let lvl = (8.6858896 * vz.max(0.000001).ln()).clamp(-48.0, 0.0);
         self.setc(true);
         for i in 0..(w - 2.0) as i32 {
@@ -1377,7 +1382,7 @@ impl<'a> Gui<'a> {
         // sidechain: the plot's x axis is the KEY level. Markers on the side edges show the main signal: left = level
         // entering the compressor, right = level after the gain reduction (the gap between them is the GR).
         let sc_mode = self.sget(63) > 0.5;
-        let mn = self.gl_step(3, self.env.shared.mn_lv.load(Ordering::Relaxed));
+        let mn = self.mval(2);
         let mn_db = (8.6858896 * mn.max(0.000001).ln()).clamp(-48.0, 0.0);
         if sc_mode && mn_db > -47.9 {
             let gr_now = if lvl > -47.9 { gc.gr(lvl as f64) as f32 } else { 0.0 };
@@ -2305,6 +2310,7 @@ impl<'a> Gui<'a> {
 
     // ------------------------------------------------------------------ main frame
     pub fn frame(&mut self) {
+        self.meter_tick();
         let sh = self.env.shared;
         // Theme editor: every widget draws as a dummy with the input masked; only the editor cells and the picker get it.
         let editing = self.app.editing();
@@ -2565,9 +2571,16 @@ impl<'a> Gui<'a> {
 }
 
 impl<'a> Gui<'a> {
-    /// A value that the audio thread publishes once per host block, as it should be drawn (continuous between blocks).
-    fn gl_step(&mut self, i: usize, raw: f32) -> f32 {
-        let now = self.now;
-        self.gl[i].step(raw, now)
+    /// Replay the audio thread's animation buckets up to the constant-rate clock: call once per frame, before anything reads a value.
+    fn meter_tick(&mut self) {
+        let ring = self.env.shared.meter.clone();
+        let dt = (self.now - self.meter_t).clamp(0.0, 0.25);
+        self.meter_t = self.now;
+        self.meter.update(ring.head(), dt, 1.0 / satcomp_dsp::ScopeRing::BUCKET_S, |i, c| ring.get(i)[c]);
+    }
+
+    /// Animation value `c` (see the plug-in's `meter` channels), continuous in audio time.
+    fn mval(&self, c: usize) -> f32 {
+        self.meter.value(c)
     }
 }
