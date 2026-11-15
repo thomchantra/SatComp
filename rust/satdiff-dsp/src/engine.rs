@@ -192,7 +192,12 @@ impl DiffEngine {
             self.byp_c = one_pole(sr, 0.01);
             self.rms_c = one_pole(sr, 0.3);
         }
-        let sp: SatParams = p.sat();
+        let mut sp: SatParams = p.sat();
+        // TILE acts on the drawn curve only, and its fold / wrap edges alias: it forces x4 oversampling at least
+        if p.tile != 0 && p.shape == satcomp_dsp::shapers::CUSTOM {
+            sp.curve.tile = p.tile.clamp(0, 2) as u8;
+            sp.os = sp.os.max(2);
+        }
         self.sat.derive(&sp, sr, self.snap, self.smoothing);
         self.rot.set(p.phase, self.snap);
         // only the diffusor exists so far: the other fx types behave as off
@@ -567,5 +572,36 @@ mod tests {
         let (_, e) = run(&DiffParams { drive: 30.0, shape: 1, lim_on: true, ..DiffParams::default() }, &x);
         assert!(e.sat_out > 0.2 && e.opk[0] > 0.2, "{} {:?}", e.sat_out, e.opk);
         assert!(e.scope.head() > 100);
+    }
+
+    #[test]
+    fn tile_forces_x4_oversampling_on_the_drawn_curve_only() {
+        let base = DiffEngine::new(SR).latency();
+        let lat = |p: DiffParams| {
+            let mut e = DiffEngine::new(SR);
+            e.set_params(&p);
+            e.latency()
+        };
+        let custom = satcomp_dsp::shapers::CUSTOM;
+        assert_eq!(lat(DiffParams { tile: 1, shape: 0, ..DiffParams::default() }), base);
+        assert_eq!(lat(DiffParams { tile: 0, shape: custom, ..DiffParams::default() }), base);
+        let forced = lat(DiffParams { tile: 1, shape: custom, ..DiffParams::default() });
+        assert!(forced > base);
+        assert_eq!(forced, lat(DiffParams { os: 2, ..DiffParams::default() }));
+        // already at x8: stays there
+        assert_eq!(lat(DiffParams { tile: 2, shape: custom, os: 3, ..DiffParams::default() }), lat(DiffParams { os: 3, ..DiffParams::default() }));
+    }
+
+    #[test]
+    fn tile_changes_what_a_hot_drawn_curve_does() {
+        // S-ish curve driven past +-1: flat clip vs mirror vs repeat give different outputs
+        let custom = satcomp_dsp::shapers::CUSTOM;
+        let curve = satcomp_dsp::shapers::Curve::from_points(&[(-1.0, -1.0), (-0.5, -0.8), (0.5, 0.8), (1.0, 1.0)]);
+        let x: Vec<f32> = (0..20000).map(|i| (0.45 * (2.0 * PI * 220.0 * i as f64 / SR).sin()) as f32).collect();
+        let out = |tile: i32| run(&DiffParams { shape: custom, curve, drive: 60.0, tile, ..DiffParams::default() }, &x).0;
+        let (off, mir, rep) = (out(0), out(1), out(2));
+        let d = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(p, q)| (p - q).abs() as f64).sum::<f64>() / a.len() as f64;
+        assert!(d(&off, &mir) > 0.02 && d(&off, &rep) > 0.02 && d(&mir, &rep) > 0.02, "{} {} {}", d(&off, &mir), d(&off, &rep), d(&mir, &rep));
+        assert!(mir.iter().chain(&rep).all(|v| v.is_finite() && v.abs() < 4.0));
     }
 }

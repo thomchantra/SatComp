@@ -33,6 +33,9 @@ pub const MIN_GAP: f32 = 0.02;
 pub struct Curve {
     pub n: usize,
     pub p: [(f32, f32); MAX_PTS],
+    /// What happens beyond x = +-1: 0 = flat (a hard clip), 1 = mirror (ping-pong, always continuous), 2 = repeat (the curve
+    /// restarts, seams like Wrap). Set by the plug-in that has a TILE control; every constructor leaves it 0.
+    pub tile: u8,
 }
 
 impl Default for Curve {
@@ -46,7 +49,7 @@ impl Curve {
         let mut p = [(0.0, 0.0); MAX_PTS];
         p[0] = (-1.0, -1.0);
         p[1] = (1.0, 1.0);
-        Self { n: 2, p }
+        Self { n: 2, p, tile: 0 }
     }
 
     pub fn pts(&self) -> &[(f32, f32)] {
@@ -132,6 +135,18 @@ impl Curve {
         let mut v: Vec<(f32, f32)> = h.iter().rev().map(|&(x, y)| (-x, y)).collect();
         v.extend_from_slice(h);
         Self::from_points(&v)
+    }
+
+    /// `eval` with the tile mode applied: the input is folded (mirror) or wrapped (repeat) back into [-1, 1] first.
+    pub fn eval_tiled(&self, x: f64) -> f64 {
+        match self.tile {
+            1 => {
+                let u = (x + 1.0).rem_euclid(4.0);
+                self.eval(if u < 2.0 { u - 1.0 } else { 3.0 - u })
+            }
+            2 => self.eval((x + 1.0).rem_euclid(2.0) - 1.0),
+            _ => self.eval(x),
+        }
     }
 
     /// Value of the monotone cubic (Fritsch-Carlson) through the points; flat beyond the ends.
@@ -300,9 +315,10 @@ impl ShaperLut {
     /// Bake the custom curve into the table (flat outside +-1, like a hard clip).
     pub fn build_custom(&mut self, curve: &Curve) {
         for (i, v) in self.tgt.iter_mut().enumerate() {
-            *v = curve.eval(i as f64 / 256.0 - 8.0);
+            *v = curve.eval_tiled(i as f64 / 256.0 - 8.0);
         }
-        self.periodic = false;
+        // a tiled curve is periodic (4 is a multiple of both tile periods), so inputs past the table are range-reduced
+        self.periodic = curve.tile != 0;
         self.curve = *curve;
         self.commit(CUSTOM);
     }
@@ -447,5 +463,30 @@ mod tests {
         assert!((odd.eval(1.0) - 0.8).abs() < 1e-6 && (odd.eval(-1.0) + 0.8).abs() < 1e-6);
         assert!(Curve::linear().is_odd());
         assert_eq!(Curve::from_odd_half(&Curve::linear().odd_half()).pts(), Curve::linear().pts());
+    }
+
+    #[test]
+    fn tile_mirrors_or_repeats_a_drawn_curve_beyond_plus_minus_one() {
+        // identity curve: mirror folds like a triangle wave, repeat wraps like a sawtooth, none clips flat
+        let mut c = Curve::from_points(&[(-1.0, -1.0), (0.0, 0.0), (1.0, 1.0)]);
+        let at = |c: &Curve, x: f64| {
+            let mut l = ShaperLut::new(0);
+            l.build_custom(c);
+            l.eval(x)
+        };
+        assert!((at(&c, 1.5) - 1.0).abs() < 1e-3);
+        c.tile = 1;
+        for (x, want) in [(0.5, 0.5), (1.5, 0.5), (2.0, 0.0), (2.5, -0.5), (3.0, -1.0), (-1.5, -0.5), (-2.5, 0.5), (5.5, 0.5), (9.0, 1.0)] {
+            assert!((at(&c, x) - want).abs() < 2e-3, "mirror at {x}: {}", at(&c, x));
+        }
+        c.tile = 2;
+        for (x, want) in [(0.5, 0.5), (1.5, -0.5), (2.5, 0.5), (-1.5, 0.5), (-2.5, -0.5), (7.5, -0.5), (9.5, -0.5)] {
+            assert!((at(&c, x) - want).abs() < 2e-3, "repeat at {x}: {}", at(&c, x));
+        }
+        // a mirrored curve is continuous across the seam, a repeated one jumps
+        c.tile = 1;
+        assert!((at(&c, 1.01) - at(&c, 0.99)).abs() < 0.05);
+        c.tile = 2;
+        assert!((at(&c, 1.01) - at(&c, 0.99)).abs() > 1.5);
     }
 }

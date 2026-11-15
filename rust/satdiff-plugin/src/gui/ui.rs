@@ -2158,7 +2158,9 @@ impl<'a> Gui<'a> {
             self.cv.boxr(x, y, w, h);
         }
         self.cv.set_font(2);
-        self.cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, &format!("{}x", 1 << os));
+        // TILE on the drawn curve runs at x4 at least: show what is actually running
+        let forced = self.sget(38) > 0.5 && (self.sget(1) + 0.5).floor() as i32 == satcomp_dsp::shapers::CUSTOM;
+        self.cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, &format!("{}x", 1 << if forced { os.max(2) } else { os }));
         self.setc(false);
     }
 
