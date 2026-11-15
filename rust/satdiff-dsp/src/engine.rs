@@ -72,6 +72,7 @@ pub struct DiffEngine {
     /// output peak per channel, linear
     pub opk: [f64; 2],
     /// input peak per channel, linear (the left meter)
+    /// peak at the saturator's input (after PHASE and a PRE fx, before DRIVE), since the owner last cleared it
     pub ipk: [f64; 2],
     /// post-saturator (after SAT GAIN) peak, linear
     pub sat_out: f64,
@@ -198,12 +199,7 @@ impl DiffEngine {
             self.byp_c = one_pole(sr, 0.01);
             self.rms_c = one_pole(sr, 0.3);
         }
-        let mut sp: SatParams = p.sat();
-        // TILE acts on the drawn curve only, and its fold / wrap edges alias: it forces x4 oversampling at least
-        if p.tile != 0 && p.shape == satcomp_dsp::shapers::CUSTOM {
-            sp.curve.tile = p.tile.clamp(0, 2) as u8;
-            sp.os = sp.os.max(2);
-        }
+        let sp: SatParams = p.sat();
         self.sat.set_dc_comp(self.dc_comp);
         self.sat.set_morph_steps(((self.morph_ms * 0.001 * sr / crate::MORPH_EVERY as f64).round() as u32).max(1));
         self.sat.derive(&sp, sr, self.snap, self.smoothing);
@@ -320,8 +316,6 @@ impl DiffEngine {
     #[inline]
     pub fn tick(&mut self, in_l: f64, in_r: f64) -> (f64, f64) {
         let inp = [in_l, in_r];
-        self.ipk[0] = self.ipk[0].max(in_l.abs());
-        self.ipk[1] = self.ipk[1].max(in_r.abs());
         ms_step(&mut self.ims, in_l, in_r, self.rms_c);
         self.dry.advance();
         self.dry.put(inp);
@@ -330,6 +324,10 @@ impl DiffEngine {
         // PHASE, then the diffusor when it runs before the saturator
         let r = self.rot.tick(inp);
         let pre = if self.fx_pos == 0 { self.fx.tick(r) } else { r };
+        // the input meter reads here, at the saturator's input (before DRIVE): the dry input while PHASE and a PRE fx do nothing,
+        // so it checks the input level and what reaches the shaper in one
+        self.ipk[0] = self.ipk[0].max(pre[0].abs());
+        self.ipk[1] = self.ipk[1].max(pre[1].abs());
 
         // SAT (+ SAT GAIN), then the diffusor when it runs after
         let mut s = self.sat.tick(pre, self.smoothing);
@@ -583,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn tile_forces_x4_oversampling_on_the_drawn_curve_only() {
+    fn tile_forces_x4_oversampling_except_where_the_shaper_already_tiles() {
         let base = DiffEngine::new(SR).latency();
         let lat = |p: DiffParams| {
             let mut e = DiffEngine::new(SR);
@@ -591,13 +589,32 @@ mod tests {
             e.latency()
         };
         let custom = satcomp_dsp::shapers::CUSTOM;
-        assert_eq!(lat(DiffParams { tile: 1, shape: 0, ..DiffParams::default() }), base);
+        let x4 = lat(DiffParams { os: 2, ..DiffParams::default() });
+        assert!(x4 > base);
         assert_eq!(lat(DiffParams { tile: 0, shape: custom, ..DiffParams::default() }), base);
-        let forced = lat(DiffParams { tile: 1, shape: custom, ..DiffParams::default() });
-        assert!(forced > base);
-        assert_eq!(forced, lat(DiffParams { os: 2, ..DiffParams::default() }));
+        for shape in [0, 1, 4, 7, 10, 13, custom] {
+            assert_eq!(lat(DiffParams { tile: 1, shape, ..DiffParams::default() }), x4, "shape {shape}");
+        }
+        // Tri Fold, Sine Fold, Wrap, Asym Fold range-reduce themselves: TILE does not apply and costs nothing
+        for shape in [5, 6, 9, 12] {
+            assert_eq!(lat(DiffParams { tile: 2, shape, ..DiffParams::default() }), base, "shape {shape}");
+            assert_eq!(DiffParams { tile: 2, shape, ..DiffParams::default() }.effective_tile(), 0);
+        }
         // already at x8: stays there
         assert_eq!(lat(DiffParams { tile: 2, shape: custom, os: 3, ..DiffParams::default() }), lat(DiffParams { os: 3, ..DiffParams::default() }));
+    }
+
+    #[test]
+    fn tile_works_on_factory_shapers_too() {
+        // Soft (tanh) driven past full scale: off = clipped flat, mirror = folds back, repeat = jumps back to the bottom
+        let x: Vec<f32> = (0..20000).map(|i| (0.45 * (2.0 * PI * 220.0 * i as f64 / SR).sin()) as f32).collect();
+        let out = |tile: i32| run(&DiffParams { shape: 1, drive: 60.0, tile, ..DiffParams::default() }, &x).0;
+        let (off, mir, rep) = (out(0), out(1), out(2));
+        let d = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(p, q)| (p - q).abs() as f64).sum::<f64>() / a.len() as f64;
+        assert!(d(&off, &mir) > 0.02 && d(&off, &rep) > 0.02 && d(&mir, &rep) > 0.02);
+        // and a periodic shaper ignores the switch entirely
+        let wrap = |tile: i32| run(&DiffParams { shape: 9, drive: 60.0, tile, ..DiffParams::default() }, &x).0;
+        assert_eq!(wrap(0), wrap(1));
     }
 
     #[test]
@@ -672,5 +689,35 @@ mod tests {
     fn on_off(on_sum: &mut f64, off_sum: &mut f64, on: f64, off: f64) {
         *on_sum += on;
         *off_sum += off;
+    }
+
+    #[test]
+    fn the_input_meter_reads_the_saturator_input_not_the_dry_input() {
+        let x: Vec<f32> = (0..24000).map(|i| (0.3 * (2.0 * PI * 90.0 * i as f64 / SR).sin()) as f32).collect();
+        let peak = |p: DiffParams| {
+            let (_, e) = run_peak(&p, &x);
+            e
+        };
+        let dry = peak(DiffParams::default());
+        assert!((dry - 0.3).abs() < 0.01, "{dry}");
+        // drive does not change it: the meter is before DRIVE
+        assert!((peak(DiffParams { drive: 60.0, ..DiffParams::default() }) - dry).abs() < 0.01);
+        // a PRE diffusor reshapes the peaks before the shaper, POST does not
+        let fx = |pos: i32| DiffParams { fx_on: true, fx_pos: pos, fx_freq: 300.0, fx_q: 6.0, fx_stages: 12, ..DiffParams::default() };
+        assert!((peak(fx(0)) - dry).abs() > 0.005, "pre {} dry {dry}", peak(fx(0)));
+        assert!((peak(fx(1)) - dry).abs() < 0.01);
+    }
+
+    fn run_peak(p: &DiffParams, x: &[f32]) -> (Vec<f32>, f64) {
+        let mut e = DiffEngine::new(SR);
+        e.set_params(p);
+        let (mut l, mut r) = (x.to_vec(), x.to_vec());
+        let mut pk = 0.0f64;
+        for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            e.process(cl, cr);
+            pk = pk.max(e.ipk[0]);
+            e.ipk = [0.0; 2];
+        }
+        (l, pk)
     }
 }

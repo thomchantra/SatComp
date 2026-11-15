@@ -92,16 +92,31 @@ impl Default for DiffParams {
 }
 
 impl DiffParams {
+    /// TILE as it acts: 0 for the periodic shapers (they tile themselves) and when off, else 1 mirror / 2 repeat.
+    pub fn effective_tile(&self) -> u8 {
+        if self.tile != 0 && satcomp_dsp::shapers::tile_applies(self.shape) {
+            self.tile.clamp(0, 2) as u8
+        } else {
+            0
+        }
+    }
+
+    /// The drawn curve with the effective tile mode set (the shaper table takes the mode from it for factory shapers too).
+    pub fn tiled_curve(&self) -> Curve {
+        Curve { tile: self.effective_tile(), ..self.curve }
+    }
+
     pub fn sat(&self) -> SatParams {
         SatParams {
             shape: self.shape,
-            curve: self.curve,
+            curve: self.tiled_curve(),
             drive: self.drive,
             bias: self.bias,
             hp: self.sat_hp,
             lp: self.sat_lp,
             tone: self.tone,
-            os: self.os,
+            // TILE's folded / wrapped edges alias: x4 oversampling at least
+            os: if self.effective_tile() != 0 { self.os.max(2) } else { self.os },
             mix: self.sat_mix,
             out_db: self.sat_gain,
             asym: Some(self.asym[(self.shape.max(0) as usize).min(SHAPER_COUNT - 1)]),

@@ -139,14 +139,7 @@ impl Curve {
 
     /// `eval` with the tile mode applied: the input is folded (mirror) or wrapped (repeat) back into [-1, 1] first.
     pub fn eval_tiled(&self, x: f64) -> f64 {
-        match self.tile {
-            1 => {
-                let u = (x + 1.0).rem_euclid(4.0);
-                self.eval(if u < 2.0 { u - 1.0 } else { 3.0 - u })
-            }
-            2 => self.eval((x + 1.0).rem_euclid(2.0) - 1.0),
-            _ => self.eval(x),
-        }
+        self.eval(tile_x(self.tile, x))
     }
 
     /// Value of the monotone cubic (Fritsch-Carlson) through the points; flat beyond the ends.
@@ -191,6 +184,27 @@ impl Curve {
             + (-2.0 * t3 + 3.0 * t2) * ys(k + 1)
             + (t3 - t2) * h * tangent(k + 1)
     }
+}
+
+/// The input folded (tile 1, mirror / ping-pong) or wrapped (tile 2, repeat) back into [-1, 1]; unchanged for tile 0.
+pub fn tile_x(tile: u8, x: f64) -> f64 {
+    match tile {
+        1 => {
+            let u = (x + 1.0).rem_euclid(4.0);
+            if u < 2.0 {
+                u - 1.0
+            } else {
+                3.0 - u
+            }
+        }
+        2 => (x + 1.0).rem_euclid(2.0) - 1.0,
+        _ => x,
+    }
+}
+
+/// Whether TILE means anything for this shaper: the periodic ones (Tri Fold, Sine Fold, Wrap, Asym Fold) already tile themselves.
+pub fn tile_applies(sel: i32) -> bool {
+    !is_periodic(sel)
 }
 
 fn th(x: f64) -> f64 {
@@ -261,6 +275,8 @@ pub struct ShaperLut {
     pub table: Vec<f64>,
     pub periodic: bool,
     pub sel: i32,
+    /// Tile mode the table was baked with (factory shapers; a custom curve carries its own in `curve.tile`).
+    pub tile: u8,
     /// Curve the table was last baked from (only meaningful while `sel == CUSTOM`).
     pub curve: Curve,
     /// Audio use: morph to a newly built table over `FADE_STEPS` x `FADE_EVERY` samples instead of
@@ -278,16 +294,24 @@ pub const FADE_EVERY: u32 = 32;
 
 impl ShaperLut {
     pub fn new(sel: i32) -> Self {
-        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, curve: Curve::linear(), fade: false, fade_steps: FADE_STEPS, tgt: vec![0.0; LUT_LEN], steps: 0 };
+        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, tile: 0, curve: Curve::linear(), fade: false, fade_steps: FADE_STEPS, tgt: vec![0.0; LUT_LEN], steps: 0 };
         l.build(sel);
         l
     }
 
     pub fn build(&mut self, sel: i32) {
+        self.build_tiled(sel, 0);
+    }
+
+    /// A factory shaper with its [-1, 1] stretch tiled (see `tile_x`); tile 0 is the plain shaper.
+    pub fn build_tiled(&mut self, sel: i32, tile: u8) {
+        let tile = if tile_applies(sel) { tile } else { 0 };
         for (i, v) in self.tgt.iter_mut().enumerate() {
-            *v = shaper(sel, i as f64 / 256.0 - 8.0);
+            *v = shaper(sel, tile_x(tile, i as f64 / 256.0 - 8.0));
         }
-        self.periodic = is_periodic(sel);
+        // a tiled table is periodic (4 is a multiple of both tile periods), so inputs past the table are range-reduced
+        self.periodic = is_periodic(sel) || tile != 0;
+        self.tile = tile;
         self.commit(sel);
     }
 
@@ -322,6 +346,7 @@ impl ShaperLut {
         // a tiled curve is periodic (4 is a multiple of both tile periods), so inputs past the table are range-reduced
         self.periodic = curve.tile != 0;
         self.curve = *curve;
+        self.tile = curve.tile;
         self.commit(CUSTOM);
     }
 
@@ -332,9 +357,12 @@ impl ShaperLut {
                 self.build_custom(curve);
                 return true;
             }
-        } else if self.sel != sel {
-            self.build(sel);
-            return true;
+        } else {
+            let tile = if tile_applies(sel) { curve.tile } else { 0 };
+            if self.sel != sel || self.tile != tile {
+                self.build_tiled(sel, tile);
+                return true;
+            }
         }
         false
     }
