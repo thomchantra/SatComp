@@ -519,14 +519,17 @@ fn the_ab_switch_sends_shape_and_tile_edits_to_the_scene_being_edited() {
         }
         r.click(226.0, 63.0); // selector right arrow
         r.click(135.0, 378.0); // tile REPEAT
+        r.drag(46.0, 336.0, 46.0, 311.0); // DRIVE
         r.log()
     };
     let a = on_scene(0);
     assert!(a.iter().any(|l| l.starts_with("Shape 0")) && a.iter().any(|l| l.starts_with("Tile 1")), "{a:?}");
     assert!(!a.iter().any(|l| l.contains(" B ")), "{a:?}");
+    assert!(a.iter().any(|l| l.starts_with("Drive 0")), "{a:?}");
     let b = on_scene(1);
     assert!(b.iter().any(|l| l.starts_with("Shape B")) && b.iter().any(|l| l.starts_with("Tile B")), "{b:?}");
     assert!(!b.iter().any(|l| l.starts_with("Shape 0") || l.starts_with("Tile 1")), "{b:?}");
+    assert!(b.iter().any(|l| l.starts_with("Drive B")) && !b.iter().any(|l| l.starts_with("Drive 0")), "{b:?}");
 }
 
 #[test]

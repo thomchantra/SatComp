@@ -226,6 +226,11 @@ impl State {
         sp(4, 1, 1, 1.0);
         sp(5, 1, 2, 10.0);
         sp(6, 1, 2, 10.0);
+        sp(51, 0, 0, 0.5);
+        sp(52, 0, 0, 1.0);
+        sp(53, 1, 1, 1.0);
+        sp(54, 1, 2, 10.0);
+        sp(55, 1, 2, 10.0);
         sp(8, 0, 0, 0.1);
         sp(9, 0, 0, 0.1);
         sp(10, 0, 0, 1.0);
@@ -584,6 +589,15 @@ impl<'a> Gui<'a> {
         }
     }
 
+    /// Slot of a waveshaper-module parameter (drive 2, bias 3, HPF 4, LPF 5, tone 6) for the scene being edited: scene B has its own.
+    fn sc(&self, n: usize) -> usize {
+        if self.ab() == 1 && (2..=6).contains(&n) {
+            n + 49
+        } else {
+            n
+        }
+    }
+
     fn sc_tile(&self) -> usize {
         if self.ab() == 1 {
             45
@@ -594,6 +608,8 @@ impl<'a> Gui<'a> {
 
     // ------------------------------------------------------------------ formatting
     fn fmt_slot(&self, n: usize, v: f32) -> String {
+        // scene B's module settings read like scene A's
+        let n = if (51..=55).contains(&n) { n - 49 } else { n };
         match n {
             2 | 25 | 11 | 36 | 37 | 40 | 41 | 43 | 47 => format!("{:.0}%", v),
             30 => format!("{:+.0}\u{b0}", v),
@@ -886,7 +902,7 @@ impl<'a> Gui<'a> {
     /// shaper, stored in the project / presets (not a host parameter). Drag, wheel, double-click = 100 %.
     fn asym_cell(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let shape = ((self.sget(self.sc_shape()) + 0.5).floor() as i32).clamp(0, CUSTOM) as usize;
-        let cell = self.env.params.asym.clone();
+        let cell = self.env.params.asym_cell(self.ab()).clone();
         let get = || cell.lock().get(shape).copied().unwrap_or(100.0);
         let set = |v: f32| {
             let mut g = cell.lock();
@@ -929,24 +945,25 @@ impl<'a> Gui<'a> {
     /// BIAS slider (top half) with the three tile icons under it (bottom half): OFF (diagonal), MIRROR (triangle), REPEAT
     /// (saw). Tile is stored per scene later; for now it is one host parameter and has no sound yet.
     fn bias_tile(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let bs = self.sc(3);
         let hh = (h * 0.5).floor();
         let ha = self.hit(x, y, w, hh);
         if ha && self.press && self.act == 0 {
-            self.begin_drag(3);
+            self.begin_drag(bs);
         }
         if ha && self.wheel != 0 {
-            self.wheel_adj(3);
+            self.wheel_adj(bs);
         }
         let act = self.act;
-        self.setc(act == 3);
+        self.setc(act == bs as i32);
         self.cv.boxr(x, y, w, h);
         self.setc(false);
         self.cv.fill(x, y + hh, w, 1.0);
         self.cv.set_font(1);
-        self.setc(act == 3);
-        let vb = self.sget(3);
-        let sb = self.fmt(3, vb);
-        let tb = self.n2t(3, vb);
+        self.setc(act == bs as i32);
+        let vb = self.sget(bs);
+        let sb = self.fmt(bs, vb);
+        let tb = self.n2t(bs, vb);
         self.cv.text(x + 3.0, y + 3.0, "BIAS");
         self.cv.textr(x, y + 3.0, w - 3.0, &sb);
         self.cv.fill(x + 2.0, y + hh - 3.0, ((tb * (w - 4.0)).floor()).max(1.0), 1.0);
@@ -1117,10 +1134,10 @@ impl<'a> Gui<'a> {
         }
         self.cv.text(x + w * 0.5 + 8.0, cy - 4.0, r);
         // where the blend leans right now: a thin line along the bottom edge growing from the centre, left = scene A, right = B
-        // (nothing but the centre notch while the morph is off)
         let pos = self.env.shared.morph_pos.load(Ordering::Relaxed).clamp(0.0, 1.0);
         let (cx, half) = (x + 2.0 + ((w - 4.0) * 0.5).floor(), (w - 4.0) * 0.5);
-        let len = if depth_on { ((pos - 0.5).abs() * 2.0 * half).floor() } else { 0.0 };
+        // (a static XFADE at 0 leans fully to A; the detector modes show nothing while the morph is off)
+        let len = if depth_on || mix { ((pos - 0.5).abs() * 2.0 * half).floor() } else { 0.0 };
         if len >= 1.0 {
             self.cv.fill(if pos < 0.5 { cx - len } else { cx }, y + th - 4.0, len, 2.0);
         }
@@ -1506,26 +1523,23 @@ impl<'a> Gui<'a> {
         self.setc(false);
     }
 
-    /// Secondary grid: the domain split 10 x 10, drawn as sparse, faint, dim dashes (the centre cross is drawn separately).
+    /// Secondary grid: the domain split 10 x 10, dotted like the centre cross but dimmer (the cross is drawn separately).
     fn grid10(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let prev = self.dk;
-        self.set_dk(prev * 0.3);
+        self.set_dk(prev * 0.2);
         self.setc(false);
         for i in 1..10 {
             if i == 5 {
                 continue;
             }
+            // the same 1 px dots every 2 px as the centre cross, only dimmer
             let gx = (x + w * i as f32 / 10.0).floor();
             let gy = (y + h * i as f32 / 10.0).floor();
-            let mut t = 0.0;
-            while t < h {
-                self.cv.fill(gx, y + t, 1.0, 2.0f32.min(h - t));
-                t += 8.0;
+            for k in 0..(h / 2.0).floor() as i32 {
+                self.cv.fill(gx, y + k as f32 * 2.0, 1.0, 1.0);
             }
-            let mut t = 0.0;
-            while t < w {
-                self.cv.fill(x + t, gy, 2.0f32.min(w - t), 1.0);
-                t += 8.0;
+            for k in 0..(w / 2.0).floor() as i32 {
+                self.cv.fill(x + k as f32 * 2.0, gy, 1.0, 1.0);
             }
         }
         self.set_dk(prev);
@@ -1534,15 +1548,19 @@ impl<'a> Gui<'a> {
     fn draw_plot(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let sh = self.env.shared;
         let dsp = self.env.dsp;
-        let sat_on = dsp.drive > 0.0 || dsp.bias != 0.0;
-        let pre = (dsp.drive * 0.01 * 36.0 * 0.11512925).exp() as f32;
-        let bias = (dsp.bias * 0.01) as f32;
+        // each scene has its own drive, bias and ASYM: the plot draws the edited one, the underlay the other
+        let (ab, ab2) = (self.ab(), 1 - self.ab());
+        let tuning = |a: i32| if a == 1 { (dsp.drive_b, dsp.bias_b, dsp.asym_b) } else { (dsp.drive, dsp.bias, dsp.asym) };
+        let (drive, bias_pc, asym_arr) = tuning(ab);
+        let sat_on = drive > 0.0 || bias_pc != 0.0;
+        let pre = (drive * 0.01 * 36.0 * 0.11512925).exp() as f32;
+        let bias = (bias_pc * 0.01) as f32;
         let (shape, curve) = dsp.scene_view(self.ab());
         self.lut.sync(shape, &curve);
         let (shape2, curve2) = dsp.scene_view(1 - self.ab());
         self.lut2.sync(shape2, &curve2);
         // static curve as heard: the shaper minus the part of its even half that ASYM removes
-        let ak = dsp.asym[(shape.max(0) as usize).min(dsp.asym.len() - 1)] * 0.01;
+        let ak = asym_arr[(shape.max(0) as usize).min(asym_arr.len() - 1)] * 0.01;
         let eff = move |l: &ShaperLut, v: f64| {
             let r = 0.5 * (1.0 - ak);
             l.eval(v) * (1.0 - r) - r * l.eval(-v)
@@ -1603,8 +1621,10 @@ impl<'a> Gui<'a> {
             return;
         }
         // the other scene as a faint underlay (same drive and bias), under the scene being edited
-        if sat_on {
-            let ak2 = dsp.asym[(shape2.max(0) as usize).min(dsp.asym.len() - 1)] * 0.01;
+        let (drive2, bias_pc2, asym2) = tuning(ab2);
+        let (pre2, bias2) = ((drive2 * 0.01 * 36.0 * 0.11512925).exp() as f32, (bias_pc2 * 0.01) as f32);
+        if drive2 > 0.0 || bias_pc2 != 0.0 {
+            let ak2 = asym2[(shape2.max(0) as usize).min(asym2.len() - 1)] * 0.01;
             let r2 = 0.5 * (1.0 - ak2);
             let prev = self.dk;
             self.set_dk(prev * 0.35);
@@ -1613,7 +1633,7 @@ impl<'a> Gui<'a> {
             let un = (w as usize).max(64);
             for i in 0..=un {
                 let vx = -1.0 + 2.0 * i as f32 / un as f32;
-                let v = (vx * pre + bias) as f64;
+                let v = (vx * pre2 + bias2) as f64;
                 let vy = ((self.lut2.eval(v) * (1.0 - r2) - r2 * self.lut2.eval(-v)) as f32).clamp(-1.0, 1.0);
                 let (qx, qy) = (x + (vx + 1.0) * 0.5 * (w - 1.0), y + (1.0 - (vy + 1.0) * 0.5) * (h - 1.0));
                 if i > 0 {
@@ -2228,6 +2248,7 @@ impl<'a> Gui<'a> {
         self.env.params.store_curve(0, &Curve::from_parts(&p.curve, &p.curve_ext));
         self.env.params.store_curve(1, &Curve::from_parts(&p.curve_b, &p.curve_ext_b));
         *self.env.params.asym.lock() = satcomp_dsp::shapers::asym_from(&p.asym).iter().map(|&v| v as f32).collect();
+        *self.env.params.asym_b.lock() = satcomp_dsp::shapers::asym_from(&p.asym_b).iter().map(|&v| v as f32).collect();
         self.set_preset_name(&p.name);
         self.base = None;
         self.hold_until = self.now + 0.6;
@@ -2259,7 +2280,7 @@ impl<'a> Gui<'a> {
                 return true;
             }
         }
-        Curve::from_parts(&b.curve, &b.curve_ext) != self.env.params.curve_snapshot() || Curve::from_parts(&b.curve_b, &b.curve_ext_b) != self.env.params.curve_snapshot_b() || satcomp_dsp::shapers::asym_from(&b.asym) != self.env.params.asym_snapshot()
+        Curve::from_parts(&b.curve, &b.curve_ext) != self.env.params.curve_snapshot() || Curve::from_parts(&b.curve_b, &b.curve_ext_b) != self.env.params.curve_snapshot_b() || satcomp_dsp::shapers::asym_from(&b.asym) != self.env.params.asym_snapshot() || satcomp_dsp::shapers::asym_from(&b.asym_b) != self.env.params.asym_snapshot_b()
     }
 
     fn capture(&self, name: &str) -> Preset {
@@ -2282,6 +2303,10 @@ impl<'a> Gui<'a> {
         let a = self.env.params.asym_snapshot();
         if a.iter().any(|&v| v != 100.0) {
             p.asym = a.iter().map(|&v| v as f32).collect();
+        }
+        let ab_ = self.env.params.asym_snapshot_b();
+        if ab_.iter().any(|&v| v != 100.0) {
+            p.asym_b = ab_.iter().map(|&v| v as f32).collect();
         }
         p
     }
@@ -2709,11 +2734,12 @@ impl<'a> Gui<'a> {
             if editing {
                 self.theme_cells(CellGrid { x0: 10.0, y0: 308.0, cw: 72.0, ch: 38.0, px: 77.0, py: 42.0 });
             } else {
-                self.cell(2, 10.0, 308.0, 72.0, 38.0, "DRIVE");
+                let (s2, s4, s5, s6) = (self.sc(2), self.sc(4), self.sc(5), self.sc(6));
+                self.cell(s2, 10.0, 308.0, 72.0, 38.0, "DRIVE");
                 self.asym_cell(87.0, 308.0, 72.0, 38.0);
-                self.cell2(4, 5, 164.0, 308.0, 72.0, 38.0, "HPF", "LPF");
+                self.cell2(s4, s5, 164.0, 308.0, 72.0, 38.0, "HPF", "LPF");
                 self.bias_tile(10.0, 350.0, 149.0, 38.0);
-                self.cell(6, 164.0, 350.0, 72.0, 38.0, "TONE");
+                self.cell(s6, 164.0, 350.0, 72.0, 38.0, "TONE");
             }
 
             // ---------- colour section: fx row (enable + type) with PHASE beside it, viewport + PRE-SAT / POST-SAT + IN GAIN, then a
