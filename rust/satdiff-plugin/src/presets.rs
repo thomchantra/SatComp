@@ -23,6 +23,12 @@ pub struct Preset {
     /// Custom waveshaper curve points (absent in older presets = linear). Backward compatible: version stays 1.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curve: Vec<(f32, f32)>,
+    /// Curve handles / LINEAR | CURVE of the custom curve (`Curve::ext`; absent = plain).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curve_ext: Vec<f32>,
+    /// Same for scene B.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curve_ext_b: Vec<f32>,
     /// Scene B's custom curve (absent = linear).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curve_b: Vec<(f32, f32)>,
@@ -33,7 +39,7 @@ pub struct Preset {
 
 impl Preset {
     pub fn new(name: &str, params: BTreeMap<String, f32>) -> Self {
-        Self { format: "satdiff-preset".into(), version: 1, name: name.into(), params, curve: Vec::new(), curve_b: Vec::new(), asym: Vec::new() }
+        Self { format: "satdiff-preset".into(), version: 1, name: name.into(), params, curve: Vec::new(), curve_ext: Vec::new(), curve_ext_b: Vec::new(), curve_b: Vec::new(), asym: Vec::new() }
     }
 
     /// All defaults.

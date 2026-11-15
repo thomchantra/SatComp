@@ -528,3 +528,26 @@ fn the_ab_switch_sends_shape_and_tile_edits_to_the_scene_being_edited() {
     assert!(b.iter().any(|l| l.starts_with("Shape B")) && b.iter().any(|l| l.starts_with("Tile B")), "{b:?}");
     assert!(!b.iter().any(|l| l.starts_with("Shape 0") || l.starts_with("Tile 1")), "{b:?}");
 }
+
+#[test]
+fn the_curve_handle_bends_a_segment_and_linear_straightens_the_rest() {
+    let mut r = Rig::new();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(225.0, 87.0); // pencil: opens the draw view (odd tool)
+    r.click(171.0, 87.0); // free draw tool
+    // the linear start curve has one segment: its handle is on the curve at the middle of the inset domain
+    r.drag(122.0, 188.0, 122.0, 160.0);
+    let c = r.params.curve_snapshot();
+    assert!(c.bend[0] > 0.2 && c.bend[0] < 0.45, "bend {:?}", &c.bend[..2]);
+    assert!(c.eval(0.0) > 0.2, "the curve passes through the handle: {}", c.eval(0.0));
+    assert!(r.params.custom_curve_ext.lock().len() == 2, "handles are persisted: {:?}", r.params.custom_curve_ext.lock());
+    // double click on the handle straightens it again
+    r.click(122.0, 160.0);
+    r.click(122.0, 160.0);
+    assert_eq!(r.params.curve_snapshot().bend[0], 0.0);
+    // LINEAR | CURVE writes the curve's own flag
+    r.click(30.0, 87.0);
+    assert!(r.params.curve_snapshot().linear);
+}

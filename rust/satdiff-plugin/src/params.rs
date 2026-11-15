@@ -71,6 +71,12 @@ pub struct SatDiffParams {
     /// User-drawn waveshaper curve (points on [-1,1]^2, shaper 14 "Custom"); saved with the project and presets.
     #[persist = "custom-curve"]
     pub custom_curve: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,
+    /// Curve handles and the LINEAR | CURVE choice of scene A's drawn curve: `[linear, bend of segment 0, ...]`, empty = plain (`Curve::ext`).
+    #[persist = "custom-curve-ext"]
+    pub custom_curve_ext: Arc<parking_lot::Mutex<Vec<f32>>>,
+    /// Same for scene B.
+    #[persist = "custom-curve-ext-b"]
+    pub custom_curve_ext_b: Arc<parking_lot::Mutex<Vec<f32>>>,
     /// Scene B's drawn curve (same format as `custom_curve`).
     #[persist = "custom-curve-b"]
     pub custom_curve_b: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,
@@ -159,6 +165,8 @@ impl SatDiffParams {
             custom_theme: Arc::new(parking_lot::Mutex::new(d.as_ref().map(|d| d.theme.clone()).unwrap_or_default())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
+            custom_curve_ext: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            custom_curve_ext_b: Arc::new(parking_lot::Mutex::new(Vec::new())),
             custom_curve_b: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             asym: Arc::new(parking_lot::Mutex::new(Vec::new())),
             shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 14 }),
@@ -197,12 +205,28 @@ impl SatDiffParams {
 impl SatDiffParams {
     /// Sanitised copy of the persisted custom curve (the UI holds this lock only for a point edit).
     pub fn curve_snapshot(&self) -> Curve {
-        Curve::from_points(&self.custom_curve.lock())
+        Curve::from_parts(&self.custom_curve.lock(), &self.custom_curve_ext.lock())
     }
 
     /// Scene B's drawn curve.
     pub fn curve_snapshot_b(&self) -> Curve {
-        Curve::from_points(&self.custom_curve_b.lock())
+        Curve::from_parts(&self.custom_curve_b.lock(), &self.custom_curve_ext_b.lock())
+    }
+
+    /// The drawn curve of scene `ab`.
+    pub fn curve_of(&self, ab: i32) -> Curve {
+        if ab == 1 {
+            self.curve_snapshot_b()
+        } else {
+            self.curve_snapshot()
+        }
+    }
+
+    /// Store the drawn curve of scene `ab` (points and handles).
+    pub fn store_curve(&self, ab: i32, c: &Curve) {
+        let (pts, ext) = if ab == 1 { (&self.custom_curve_b, &self.custom_curve_ext_b) } else { (&self.custom_curve, &self.custom_curve_ext) };
+        *pts.lock() = c.pts().to_vec();
+        *ext.lock() = c.ext();
     }
 
     /// The drawn curve of scene `ab` (0 = A, 1 = B).
@@ -226,11 +250,11 @@ impl SatDiffParams {
 
     /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.
     pub fn to_dsp_rt(&self, last: &mut [Curve; 2], last_asym: &mut [f64; SHAPER_COUNT]) -> DiffParams {
-        if let Some(g) = self.custom_curve.try_lock() {
-            last[0] = Curve::from_points(&g);
+        if let (Some(g), Some(e)) = (self.custom_curve.try_lock(), self.custom_curve_ext.try_lock()) {
+            last[0] = Curve::from_parts(&g, &e);
         }
-        if let Some(g) = self.custom_curve_b.try_lock() {
-            last[1] = Curve::from_points(&g);
+        if let (Some(g), Some(e)) = (self.custom_curve_b.try_lock(), self.custom_curve_ext_b.try_lock()) {
+            last[1] = Curve::from_parts(&g, &e);
         }
         if let Some(g) = self.asym.try_lock() {
             *last_asym = asym_from(&g);

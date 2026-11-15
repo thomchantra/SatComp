@@ -11,7 +11,10 @@ use crate::Shared;
 use super::{H, W};
 use satcomp_ui::spectrum::Spectrum;
 use nih_plug::prelude::*;
-use satcomp_dsp::shapers::{Curve, ShaperLut, CUSTOM, MAX_PTS, MIN_GAP, SHAPER_NAMES};
+use satcomp_dsp::shapers::{Curve, ShaperLut, CUSTOM, MAX_BEND, MIN_GAP, PT_CAP, SHAPER_NAMES};
+
+/// Points the drawn curve may have (15 per half in the odd / even views).
+const DRAW_PTS: usize = PT_CAP;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -153,7 +156,9 @@ pub struct State {
     sc_wait_n: f64,
     sc_env: f32,
     /// draw view: LINEAR / CURVE segment toggle (UI only for now) and the even-mirror tool (with `sym_mode`)
-    seg_linear: bool,
+    /// curve handle being dragged (segment index in the working list) and whether it was grabbed on the mirrored ghost
+    chd: usize,
+    chg: bool,
     even: bool,
     // sat plot
     lut: ShaperLut,
@@ -291,7 +296,8 @@ impl State {
             sc_acc: 0.0,
             sc_cur: (0.0, 0.0),
             sc_head: 0,
-            seg_linear: false,
+            chd: 0,
+            chg: false,
             even: false,
             lut: ShaperLut::new(0),
             curve_edit: false,
@@ -1418,7 +1424,7 @@ impl<'a> Gui<'a> {
                 let sl = self.sc_shape();
                 self.click_set(sl, CUSTOM as f32);
                 // symmetry is the default tool, unless the stored curve is lopsided: opening must not alter it
-                self.sym_mode = Curve::from_points(&self.env.params.curve_cell(self.ab()).lock()).is_odd();
+                self.sym_mode = self.env.params.curve_of(self.ab()).is_odd();
                 self.even = false;
             }
             self.press = false;
@@ -1557,11 +1563,14 @@ impl<'a> Gui<'a> {
     /// Left click empty space = add a point (and drag it), drag = move, double click = remove.
     /// The two end points are fixed in x and cannot be removed.
     fn draw_curve_edit(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let mut c = Curve::from_points(&self.env.params.curve_cell(self.ab()).lock());
+        let ab = self.ab();
+        let mut c = self.env.params.curve_of(ab);
         let before = c;
-        // LINEAR | CURVE (top left; UI only for now)
-        if let Some(i) = self.seg(x + 3.0, y + 3.0, 104.0, 16.0, &["LINEAR", "CURVE"], if self.seg_linear { 0 } else { 1 }) {
-            self.seg_linear = i == 0;
+        let mut lin = c.linear;
+        // LINEAR | CURVE: straight segments, or the smooth monotone cubic
+        if let Some(i) = self.seg(x + 3.0, y + 3.0, 104.0, 16.0, &["LINEAR", "CURVE"], if lin { 0 } else { 1 }) {
+            lin = i == 0;
+            c.linear = lin;
             self.press = false;
         }
         // tool icons left of the close cross: free draw (pencil), odd (point mirror), even (Y mirror)
@@ -1569,21 +1578,21 @@ impl<'a> Gui<'a> {
         let (hp, hs, he) = (self.hit(pen_x, y + 3.0, 16.0, 16.0), self.hit(sym_x, y + 3.0, 16.0, 16.0), self.hit(ev_x, y + 3.0, 16.0, 16.0));
         if self.press && self.act == 0 {
             // the right half of the curve as drawn (x > 0): switching between the two mirrors reinterprets it
-            let half: Vec<(f32, f32)> = {
-                let h: Vec<(f32, f32)> = c.pts().iter().cloned().filter(|p| p.0 > 0.0).collect();
-                if h.is_empty() { vec![(1.0, 1.0)] } else { h }
+            let (half, half_b) = {
+                let (h, b) = c.right_half();
+                if h.is_empty() { (vec![(1.0, 1.0)], vec![0.0]) } else { (h, b) }
             };
             if hp && self.sym_mode {
                 self.sym_mode = false;
                 self.press = false;
             } else if hs && (!self.sym_mode || self.even) {
                 // free -> odd keeps the odd part of the curve (what an odd curve can hold); even -> odd keeps the drawn half
-                c = if self.sym_mode { Curve::from_odd_half(&half) } else { Curve::from_odd_half(&c.odd_half()) };
+                c = if self.sym_mode { Curve::from_half(&half, &half_b, false, lin) } else { Curve::from_half(&c.odd_half_n(DRAW_PTS), &[], false, lin) };
                 self.sym_mode = true;
                 self.even = false;
                 self.press = false;
             } else if he && (!self.sym_mode || !self.even) {
-                c = if self.sym_mode { Curve::from_even_half(&half) } else { Curve::from_even_half(&c.even_half()) };
+                c = if self.sym_mode { Curve::from_half(&half, &half_b, true, lin) } else { Curve::from_half(&c.even_half_n(DRAW_PTS), &[], true, lin) };
                 self.sym_mode = true;
                 self.even = true;
                 self.press = false;
@@ -1596,14 +1605,47 @@ impl<'a> Gui<'a> {
         let (ex, ey, ew, eh) = (x + 22.0, y + 22.0, w - 44.0, h - 44.0);
         let (px, py) = (|vx: f32| ex + (vx + 1.0) * 0.5 * (ew - 1.0), |vy: f32| ey + (1.0 - (vy + 1.0) * 0.5) * (eh - 1.0));
         let to_v = |mx: f32, my: f32| (((mx - ex) / (ew - 1.0)) * 2.0 - 1.0, 1.0 - ((my - ey) / (eh - 1.0)) * 2.0);
-        // working list: the whole curve, or in symmetry mode its right half (x > 0, ending at x = 1); the left is derived
-        let mut hv: Vec<(f32, f32)> = if sym { c.pts().iter().cloned().filter(|p| p.0 > 0.0).collect() } else { c.pts().to_vec() };
-        if sym && hv.is_empty() {
-            hv.push((1.0, 1.0));
-        }
-        let cap = if sym { MAX_PTS / 2 } else { MAX_PTS };
+        // working lists: the whole curve, or in symmetry mode its right half (x > 0, ending at x = 1); the left is derived.
+        // `hb[i]`: free = the bend of the segment that starts at point i, symmetry = of the one that ends at it (0 = across the centre)
+        let (mut hv, mut hb): (Vec<(f32, f32)>, Vec<f32>) = if sym {
+            let (h, b) = c.right_half();
+            if h.is_empty() { (vec![(1.0, 1.0)], vec![0.0]) } else { (h, b) }
+        } else {
+            (c.pts().to_vec(), c.bend[..c.n - 1].to_vec())
+        };
+        let cap = if sym { DRAW_PTS / 2 } else { DRAW_PTS };
         let interior = |i: usize, n: usize| if sym { i + 1 < n } else { i > 0 && i + 1 < n };
         let xlo = |hv: &Vec<(f32, f32)>, i: usize| if i == 0 { if sym { 0.0 } else { -1.0 } } else { hv[i - 1].0 };
+        // curve handles: (index into hb, spot, y of the unbent curve there, the mirrored ghost's (spot, base y))
+        type Hand = (usize, (f32, f32), f32, Option<((f32, f32), f32)>);
+        let mut hands: Vec<Hand> = Vec::new();
+        if sym {
+            let nh = hv.len();
+            let first = c.n.saturating_sub(nh);
+            for j in 0..nh {
+                if j == 0 && !self.even {
+                    continue; // an odd curve passes through the origin: its middle segment cannot bend
+                }
+                let kf = if j == 0 { first.wrapping_sub(1) } else { first + j - 1 };
+                if kf >= c.n - 1 {
+                    continue;
+                }
+                let (xm, by) = c.handle_base(kf);
+                let ghost = if j >= 1 && first >= j + 1 {
+                    let kl = first - 1 - j;
+                    let (gx, gb) = c.handle_base(kl);
+                    Some(((gx, gb + c.bend[kl]), gb))
+                } else {
+                    None
+                };
+                hands.push((j, (xm, by + c.bend[kf]), by, ghost));
+            }
+        } else {
+            for k in 0..c.n - 1 {
+                let (xm, by) = c.handle_base(k);
+                hands.push((k, (xm, by + c.bend[k]), by, None));
+            }
+        }
         // a point is picked on its own spot, or in symmetry mode on its mirror image
         let pick = |s: &Self, hv: &Vec<(f32, f32)>| -> Option<usize> {
             let mut best: Option<(usize, f32)> = None;
@@ -1618,16 +1660,51 @@ impl<'a> Gui<'a> {
             }
             best.map(|b| b.0)
         };
+        // a handle is picked on its own spot or on its ghost: (position in `hands`, grabbed on the ghost)
+        let pick_hand = |s: &Self, hands: &Vec<Hand>| -> Option<(usize, bool)> {
+            let mut best: Option<((usize, bool), f32)> = None;
+            for (i, hd) in hands.iter().enumerate() {
+                let d = ((s.kit.mx - px((hd.1).0)).powi(2) + (s.kit.my - py((hd.1).1)).powi(2)).sqrt();
+                if d <= 5.0 && best.map_or(true, |b| d < b.1) {
+                    best = Some(((i, false), d));
+                }
+                if let Some(((gx, gy), _)) = hd.3 {
+                    let d = ((s.kit.mx - px(gx)).powi(2) + (s.kit.my - py(gy)).powi(2)).sqrt();
+                    if d <= 5.0 && best.map_or(true, |b| d < b.1) {
+                        best = Some(((i, true), d));
+                    }
+                }
+            }
+            best.map(|b| b.0)
+        };
         let in_box = self.hit(x, y, w, h) && !self.hit(pen_x - 2.0, y, w - (pen_x - x) + 2.0, 22.0) && !self.hit(x, y, 110.0, 22.0);
         if in_box && self.press && self.act == 0 {
             let n = hv.len();
             if let Some(i) = pick(self, &hv) {
                 if self.dbl(200 + i as i32) && interior(i, n) {
+                    // removing a point merges its two segments (the merged one is straight again)
                     hv.remove(i);
+                    if sym {
+                        hb[i + 1] = 0.0;
+                        hb.remove(i);
+                    } else {
+                        hb[i - 1] = 0.0;
+                        hb.remove(i);
+                    }
                     self.last_clk_n = 0;
                 } else {
                     self.act = 160;
                     self.cpt = i;
+                }
+            } else if let Some((hi, ghost)) = pick_hand(self, &hands) {
+                let idx = hands[hi].0;
+                if self.dbl(300 + idx as i32) {
+                    hb[idx] = 0.0; // double click = straighten the segment
+                    self.last_clk_n = 0;
+                } else {
+                    self.act = 161;
+                    self.chd = hi;
+                    self.chg = ghost;
                 }
             } else if n < cap {
                 let (mut vx, mut vy) = to_v(self.mx, self.my);
@@ -1639,6 +1716,14 @@ impl<'a> Gui<'a> {
                 let room = vx - xlo(&hv, at) >= MIN_GAP && hv[at].0 - vx >= MIN_GAP;
                 if room {
                     hv.insert(at, (vx, vy.clamp(-1.0, 1.0)));
+                    // the new point splits a segment: both halves start straight
+                    if sym {
+                        hb[at] = 0.0;
+                        hb.insert(at + 1, 0.0);
+                    } else {
+                        hb[at - 1] = 0.0;
+                        hb.insert(at, 0.0);
+                    }
                     self.act = 160;
                     self.cpt = at;
                     self.last_clk_n = 0; // a creating click never counts towards a double click
@@ -1664,9 +1749,19 @@ impl<'a> Gui<'a> {
             }
             hv[i].1 = vy.clamp(-1.0, 1.0);
         }
-        c = if sym && self.even { Curve::from_even_half(&hv) } else if sym { Curve::from_odd_half(&hv) } else { Curve::from_points(&hv) };
+        if self.act == 161 && self.down && self.chd < hands.len() {
+            // the handle follows the pointer vertically: its bend is the distance from the unbent curve
+            let (_, vy) = to_v(self.mx, self.my);
+            let hd = &hands[self.chd];
+            let b = match (self.chg, hd.3) {
+                (true, Some((_, gbase))) => m * (vy.clamp(-1.0, 1.0) - gbase),
+                _ => vy.clamp(-1.0, 1.0) - hd.2,
+            };
+            hb[hd.0] = b.clamp(-MAX_BEND, MAX_BEND);
+        }
+        c = if sym { Curve::from_half(&hv, &hb, self.even, lin) } else { Curve::from_points_bends(&hv, &hb, lin) };
         if c != before {
-            *self.env.params.curve_cell(self.ab()).lock() = c.pts().to_vec();
+            self.env.params.store_curve(ab, &c);
         }
         // identity reference (dotted), the curve, then the points
         let prev = self.dk;
@@ -1720,6 +1815,49 @@ impl<'a> Gui<'a> {
                 self.set_dk(pd);
             }
         }
+        // curve handles: hollow circles on the curve, in the middle of each segment (the hovered / dragged one in the accent)
+        let hot_h = if self.act == 161 { Some(self.chd) } else if hot.is_none() { pick_hand(self, &hands).map(|p| p.0) } else { None };
+        // the handles come from the curve as it was before this frame's edit: redraw from the new one so they never lag the line
+        let mut now: Vec<(usize, (f32, f32))> = Vec::new();
+        if sym {
+            let nh = hv.len();
+            let first = c.n.saturating_sub(nh);
+            for j in 0..nh {
+                if (j == 0 && !self.even) || (if j == 0 { first.wrapping_sub(1) } else { first + j - 1 }) >= c.n - 1 {
+                    continue;
+                }
+                let kf = if j == 0 { first - 1 } else { first + j - 1 };
+                let (xm, by) = c.handle_base(kf);
+                now.push((j, (xm, by + c.bend[kf])));
+            }
+        } else {
+            for k in 0..c.n - 1 {
+                let (xm, by) = c.handle_base(k);
+                now.push((k, (xm, by + c.bend[k])));
+            }
+        }
+        for (ni, (idx, (hx, hy))) in now.iter().enumerate() {
+            let on = hot_h.map_or(false, |hh| hands.get(hh).map_or(false, |hd| hd.0 == *idx)) && ni < now.len();
+            let (qx, qy) = (px(*hx).round(), py(*hy).round());
+            self.setc(on);
+            self.cv.disc(qx, qy, 3.0);
+            self.cv.setbg();
+            self.cv.disc(qx, qy, 1.6);
+            if sym {
+                if let Some(Some(((gx, gy), _))) = hands.iter().find(|hd| hd.0 == *idx).map(|hd| hd.3) {
+                    // keep the ghost in step with the (possibly just edited) bend: it sits on the mirrored curve
+                    let _ = (gx, gy);
+                    let (gx, gy) = (px(-*hx).round(), py(c.eval(-(*hx) as f64) as f32).round());
+                    let pd = self.dk;
+                    self.set_dk(pd * 0.6);
+                    self.setc(false);
+                    self.cv.disc(gx, gy, 3.0);
+                    self.cv.setbg();
+                    self.cv.disc(gx, gy, 1.6);
+                    self.set_dk(pd);
+                }
+            }
+        }
         self.setc(false);
         // tools: pencil (free draw), odd, even
         self.tool_btn(pen_x, y + 3.0, 0, !sym);
@@ -1729,23 +1867,9 @@ impl<'a> Gui<'a> {
         let _ = (hp, hs, he);
         let tool = if !sym { "FREE" } else if self.even { "EVEN" } else { "ODD" };
         self.cv.text(x + 3.0, y + h - 11.0, &format!("DRAW {tool}"));
-        self.cv.textr(x, y + h - 11.0, w - 3.0, &format!("{}/{} PTS", c.n, MAX_PTS));
+        self.cv.textr(x, y + h - 11.0, w - 3.0, &format!("{}/{} PTS", c.n, DRAW_PTS));
     }
 
-    // ------------------------------------------------------------------ comp plot
-
-
-    // ------------------------------------------------------------------ EQ page
-
-
-
-
-
-
-
-
-
-    // ------------------------------------------------------------------ window size
     fn cur_scale(&self) -> f32 {
         self.env.params.editor_state.size().0 as f32 / W
     }
@@ -1942,9 +2066,8 @@ impl<'a> Gui<'a> {
             self.click_set(n, v);
         }
         // absent curve = linear (deterministic: loading a preset never keeps the previous preset's curve)
-        let c = Curve::from_points(&p.curve);
-        *self.env.params.custom_curve.lock() = c.pts().to_vec();
-        *self.env.params.custom_curve_b.lock() = Curve::from_points(&p.curve_b).pts().to_vec();
+        self.env.params.store_curve(0, &Curve::from_parts(&p.curve, &p.curve_ext));
+        self.env.params.store_curve(1, &Curve::from_parts(&p.curve_b, &p.curve_ext_b));
         *self.env.params.asym.lock() = satcomp_dsp::shapers::asym_from(&p.asym).iter().map(|&v| v as f32).collect();
         self.set_preset_name(&p.name);
         self.base = None;
@@ -1977,7 +2100,7 @@ impl<'a> Gui<'a> {
                 return true;
             }
         }
-        Curve::from_points(&b.curve) != self.env.params.curve_snapshot() || Curve::from_points(&b.curve_b) != self.env.params.curve_snapshot_b() || satcomp_dsp::shapers::asym_from(&b.asym) != self.env.params.asym_snapshot()
+        Curve::from_parts(&b.curve, &b.curve_ext) != self.env.params.curve_snapshot() || Curve::from_parts(&b.curve_b, &b.curve_ext_b) != self.env.params.curve_snapshot_b() || satcomp_dsp::shapers::asym_from(&b.asym) != self.env.params.asym_snapshot()
     }
 
     fn capture(&self, name: &str) -> Preset {
@@ -1990,10 +2113,12 @@ impl<'a> Gui<'a> {
         let c = self.env.params.curve_snapshot();
         if c != Curve::linear() {
             p.curve = c.pts().to_vec();
+            p.curve_ext = c.ext();
         }
         let cb = self.env.params.curve_snapshot_b();
         if cb != Curve::linear() {
             p.curve_b = cb.pts().to_vec();
+            p.curve_ext_b = cb.ext();
         }
         let a = self.env.params.asym_snapshot();
         if a.iter().any(|&v| v != 100.0) {
