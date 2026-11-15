@@ -274,3 +274,25 @@ mod tests {
         assert_ne!(&<SatDiff as Vst3Plugin>::VST3_CLASS_ID, b"thomchantraSatXC");
     }
 }
+
+#[cfg(test)]
+mod shadow_tests {
+    use super::*;
+    use crate::params::SatDiffParams;
+
+    #[test]
+    fn the_viewport_snapshot_takes_pending_writes_and_otherwise_equals_the_plain_one() {
+        let p = SatDiffParams::from_defaults(None);
+        let plain = p.to_dsp();
+        // nothing pending: the same numbers
+        let same = p.to_dsp_over(&|_| None);
+        assert_eq!((same.drive, same.bias, same.shape, same.bypass), (plain.drive, plain.bias, plain.shape, plain.bypass));
+        // a float (DRIVE, slot 2), an int (SHAPE, slot 1) and a bool (BYPASS, slot 26) written but not yet applied by the host
+        let d = p.to_dsp_over(&|n| match n { 2 => Some(37.0), 1 => Some(5.0), 26 => Some(1.0), _ => None });
+        assert_eq!(d.drive, 37.0);
+        assert_eq!(d.shape, 5);
+        assert!(d.bypass);
+        assert_eq!(d.bias, plain.bias, "the rest stays as it is");
+        assert_eq!(p.to_dsp().drive, plain.drive, "the real parameters are untouched");
+    }
+}

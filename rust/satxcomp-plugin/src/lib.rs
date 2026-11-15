@@ -317,3 +317,24 @@ mod tests {
         assert!(<SatXComp as ClapPlugin>::CLAP_ID.starts_with("com.thomchantra."));
     }
 }
+
+#[cfg(test)]
+mod shadow_tests {
+    use crate::params::SatXCompParams;
+
+    #[test]
+    fn the_viewport_snapshot_takes_pending_writes_and_otherwise_equals_the_plain_one() {
+        let p = SatXCompParams::from_defaults(None);
+        let plain = p.to_dsp();
+        let same = p.to_dsp_over(&|_| None);
+        assert_eq!((same.x1, same.bands[0].drive, same.eq.tilt, same.bypass), (plain.x1, plain.bands[0].drive, plain.eq.tilt, plain.bypass));
+        // the first crossover (slot 1), the low band's drive (14), the EQ tilt (145) and BYPASS (8), written but not yet applied
+        let d = p.to_dsp_over(&|n| match n { 1 => Some(321.0), 14 => Some(37.0), 145 => Some(2.5), 8 => Some(1.0), _ => None });
+        assert_eq!(d.x1, 321.0);
+        assert_eq!(d.bands[0].drive, 37.0);
+        assert_eq!(d.eq.tilt, 2.5);
+        assert!(d.bypass);
+        assert_eq!(d.x2, plain.x2, "the rest stays as it is");
+        assert_eq!(p.to_dsp().x1, plain.x1, "the real parameters are untouched");
+    }
+}

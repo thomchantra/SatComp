@@ -258,3 +258,21 @@ mod tests {
         assert_ne!(&<SatLim as Vst3Plugin>::VST3_CLASS_ID, b"thomchantraSatXC");
     }
 }
+
+#[cfg(test)]
+mod shadow_tests {
+    use crate::params::SatLimParams;
+
+    #[test]
+    fn the_viewport_snapshot_takes_pending_writes_and_otherwise_equals_the_plain_one() {
+        let p = SatLimParams::from_defaults(None);
+        let plain = p.to_dsp();
+        let same = p.to_dsp_over(&|_| None);
+        assert_eq!((same.drive, same.shape, same.bypass), (plain.drive, plain.shape, plain.bypass));
+        let d = p.to_dsp_over(&|n| match n { 2 => Some(37.0), 1 => Some(5.0), 26 => Some(1.0), _ => None });
+        assert_eq!(d.drive, 37.0);
+        assert_eq!(d.shape, 5);
+        assert!(d.bypass);
+        assert_eq!(p.to_dsp().drive, plain.drive, "the real parameters are untouched");
+    }
+}
