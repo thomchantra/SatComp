@@ -38,10 +38,14 @@ pub struct DiffParams {
     pub fx_type: i32,
     /// 0 = before the shaper, 1 = after
     pub fx_pos: i32,
-    /// the three colour-fx parameters (diffusor: FREQ Hz, Q, STAGES) and the fx mix, 0..100 %
+    /// the colour-fx parameters (diffusor: FREQ Hz, Q, STAGES, SPREAD) and the colour mix, 0..100 %
     pub fx_freq: f64,
     pub fx_q: f64,
+    /// number of allpass stages, 1..=100 (the plug-in's STAGES percentage goes through `diffuse::stages_from_pct`)
     pub fx_stages: i32,
+    /// how far the stages fan out around FREQ, 0..100 % of 8 octaves
+    pub fx_spread: f64,
+    /// COLOR MIX: wet / dry of the whole colour fx, 0..100 %
     pub fx_mix: f64,
     /// 0 off, 1 mirror, 2 repeat
     pub tile: i32,
@@ -77,6 +81,7 @@ impl Default for DiffParams {
             fx_freq: 1000.0,
             fx_q: 0.7,
             fx_stages: 4,
+            fx_spread: 0.0, // the plug-in starts at 50 %; the bare engine stays a plain stack
             fx_mix: 100.0,
             tile: 0,
             morph_dir: 0,

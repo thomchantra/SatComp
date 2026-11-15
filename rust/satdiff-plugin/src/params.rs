@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 43;
+pub const SLOTS: usize = 44;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -31,13 +31,14 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (33, "fx_pos", 0.0, 1.0, 0.0),
     (34, "fx_freq", 20.0, 20000.0, 1000.0),
     (35, "fx_q", 0.3, 8.0, 0.7),
-    (36, "fx_stages", 1.0, 16.0, 4.0),
+    (36, "fx_stages", 0.0, 100.0, 20.0),
     (37, "fx_mix", 0.0, 100.0, 100.0),
     (38, "tile", 0.0, 2.0, 0.0),
     (39, "morph_dir", 0.0, 1.0, 0.0),
     (40, "morph_depth", 0.0, 100.0, 0.0),
     (41, "morph_speed", 0.0, 100.0, 50.0),
     (42, "ab", 0.0, 1.0, 0.0),
+    (43, "fx_spread", 0.0, 100.0, 50.0),
 ];
 
 #[derive(Params)]
@@ -110,7 +111,7 @@ pub struct SatDiffParams {
     #[id = "fx_q"]
     pub fx_q: FloatParam,
     #[id = "fx_stages"]
-    pub fx_stages: IntParam,
+    pub fx_stages: FloatParam,
     #[id = "fx_mix"]
     pub fx_mix: FloatParam,
     #[id = "tile"]
@@ -123,6 +124,8 @@ pub struct SatDiffParams {
     pub morph_speed: FloatParam,
     #[id = "ab"]
     pub ab: IntParam,
+    #[id = "fx_spread"]
+    pub fx_spread: FloatParam,
 }
 
 impl Default for SatDiffParams {
@@ -136,7 +139,7 @@ impl SatDiffParams {
     pub fn from_defaults(d: Option<satcomp_ui::appearance::Defaults>) -> Self {
         Self {
             editor_state: {
-                let (w, h) = d.as_ref().map(|d| d.size((316.0, 508.0))).unwrap_or((316, 508));
+                let (w, h) = d.as_ref().map(|d| d.size((316.0, 550.0))).unwrap_or((316, 550));
                 EguiState::from_size(w, h)
             },
             palette_v2: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.pal_index()).unwrap_or(-1))),
@@ -167,13 +170,14 @@ impl SatDiffParams {
             fx_pos: IntParam::new("FX Pre/Post", 0, IntRange::Linear { min: 0, max: 1 }),
             fx_freq: FloatParam::new("FX Freq", 1000.0, FloatRange::Linear { min: 20.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             fx_q: FloatParam::new("FX Q", 0.7, FloatRange::Linear { min: 0.3, max: 8.0 }).with_step_size(0.01),
-            fx_stages: IntParam::new("FX Stages", 4, IntRange::Linear { min: 1, max: 16 }),
-            fx_mix: FloatParam::new("FX Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            fx_stages: FloatParam::new("FX Stages", 20.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            fx_mix: FloatParam::new("Color Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             tile: IntParam::new("Tile", 0, IntRange::Linear { min: 0, max: 2 }),
             morph_dir: IntParam::new("Morph Dir", 0, IntRange::Linear { min: 0, max: 1 }),
             morph_depth: FloatParam::new("Morph Depth", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             morph_speed: FloatParam::new("Morph Speed", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             ab: IntParam::new("Scene A/B", 0, IntRange::Linear { min: 0, max: 1 }),
+            fx_spread: FloatParam::new("FX Spread", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
         }
     }
 }
@@ -213,7 +217,7 @@ impl SatDiffParams {
             out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),
             bypass: self.bypass.value(), ab: self.ab.value(), phase: self.phase.value() as f64, fx_on: self.fx_on.value(),
             fx_type: self.fx_type.value(), fx_pos: self.fx_pos.value(), fx_freq: self.fx_freq.value() as f64, fx_q: self.fx_q.value() as f64,
-            fx_stages: self.fx_stages.value(), fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),
+            fx_stages: satdiff_dsp::diffuse::stages_from_pct(self.fx_stages.value() as f64), fx_spread: self.fx_spread.value() as f64, fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),
             morph_depth: self.morph_depth.value() as f64, morph_speed: self.morph_speed.value() as f64,
         }
     }
@@ -247,6 +251,7 @@ impl SatDiffParams {
             40 => self.morph_depth.as_ptr(),
             41 => self.morph_speed.as_ptr(),
             42 => self.ab.as_ptr(),
+            43 => self.fx_spread.as_ptr(),
             _ => return None,
         })
     }

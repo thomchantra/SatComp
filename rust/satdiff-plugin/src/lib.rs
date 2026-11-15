@@ -227,7 +227,8 @@ mod tests {
         let p = SatDiffParams::default();
         // plug-in parameters are f32, the engine's are f64: compare the way the plug-in stores them
         // the plug-in's limiter defaults to on, the bare engine's to off
-        let want = DiffParams { lim_on: true, fx_q: 0.7f32 as f64, ..DiffParams::default() };
+        // the plug-in starts the diffusor at 20 % STAGES (21 stages) and 50 % SPREAD, the bare engine at a plain 4-stage stack
+        let want = DiffParams { lim_on: true, fx_q: 0.7f32 as f64, fx_stages: satdiff_dsp::diffuse::stages_from_pct(20.0), fx_spread: 50.0, ..DiffParams::default() };
         assert_eq!(p.to_dsp(), want);
     }
 

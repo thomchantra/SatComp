@@ -196,7 +196,7 @@ impl DiffEngine {
         self.sat.derive(&sp, sr, self.snap, self.smoothing);
         self.rot.set(p.phase, self.snap);
         // only the diffusor exists so far: the other fx types behave as off
-        self.fx.set(p.fx_on && p.fx_type == 0, p.fx_freq, p.fx_q, p.fx_stages, p.fx_mix, self.snap);
+        self.fx.set(p.fx_on && p.fx_type == 0, p.fx_freq, p.fx_q, p.fx_stages, p.fx_spread, p.fx_mix, self.snap);
         if p.fx_pos != self.fx_pos {
             self.fx_pos = p.fx_pos;
             self.fx.reset(); // the filter state belongs to the other side of the saturator
