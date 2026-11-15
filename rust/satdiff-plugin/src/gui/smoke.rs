@@ -534,7 +534,10 @@ fn the_ab_switch_sends_shape_and_tile_edits_to_the_scene_being_edited() {
 
 #[test]
 fn the_curve_handle_bends_a_segment_and_linear_straightens_the_rest() {
-    let mut r = Rig::new();
+    // the fake host never applies a write; a real one has set the shaper to CUSTOM within a block of the pencil click, and the
+    // draw view closes when the shaper is no longer CUSTOM, so the rig starts with it set
+    use nih_plug::prelude::{IntParam, IntRange};
+    let mut r = Rig::with_params(|p| p.shape = IntParam::new("Shape", 14, IntRange::Linear { min: 0, max: 14 }));
     for _ in 0..3 {
         r.frame(vec![]);
     }
