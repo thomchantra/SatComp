@@ -254,6 +254,9 @@ impl State {
         sp(49, 1, 0, 0.01);
         sp(50, 0, 0, 1.0);
         sp(56, 3, 0, 0.1);
+        sp(57, 1, 1, 1.0);
+        sp(60, 1, 1, 1.0);
+        sp(61, 1, 2, 10.0);
         let mut st = Self {
             kit,
             pal,
@@ -614,7 +617,7 @@ impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ formatting
     fn fmt_slot(&self, n: usize, v: f32) -> String {
         // scene B's module settings read like scene A's
-        let n = if (51..=55).contains(&n) { n - 49 } else { n };
+        let n = if (51..=55).contains(&n) { n - 49 } else if (60..=61).contains(&n) { n - 56 } else if n == 57 { 4 } else { n };
         match n {
             2 | 25 | 11 | 36 | 37 | 40 | 41 | 43 | 47 => format!("{:.0}%", v),
             30 => format!("{:+.0}\u{b0}", v),
@@ -906,6 +909,36 @@ impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ sat plot
     /// ASYM: the current shaper's share of its even part (the part that carries DC and sub-audio pulses): one value per
     /// shaper, stored in the project / presets (not a host parameter). Drag, wheel, double-click = 100 %.
+    fn out_hp_cell(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        // top row: the HPF label and the M / S switches (lit = that part of the signal is cut); bottom row: the cutoff
+        let hh = (h * 0.5).floor();
+        let sw = 24.0;
+        self.setc(false);
+        self.cv.boxr(x, y, w - 2.0 * sw + 2.0, hh);
+        self.cv.set_font(1);
+        self.cv.text(x + 3.0, y + ((hh - 8.0) * 0.5).floor(), "HPF");
+        for (i, (n, lab)) in [(58usize, "M"), (59, "S")].into_iter().enumerate() {
+            let bx = x + w - (2 - i) as f32 * sw + if i == 0 { 1.0 } else { 0.0 };
+            let on = self.sget(n) > 0.5;
+            let hv = self.hit(bx, y, sw, hh);
+            if hv && self.press && self.act == 0 {
+                self.click_set(n, if on { 0.0 } else { 1.0 });
+                self.press = false;
+            }
+            self.setc(false);
+            if on {
+                self.cv.fill(bx, y, sw, hh);
+                self.cv.setbg();
+            } else {
+                self.cv.boxr(bx, y, sw, hh);
+            }
+            self.cv.set_font(1);
+            self.cv.textc(bx, y + ((hh - 8.0) * 0.5).floor(), sw, lab);
+            self.setc(false);
+        }
+        self.cell1(57, x, y + hh - 1.0, w, h - hh + 1.0, "");
+    }
+
     fn asym_cell(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let shape = ((self.sget(self.sc_shape()) + 0.5).floor() as i32).clamp(0, CUSTOM) as usize;
         let cell = self.env.params.asym_cell(self.ab()).clone();
@@ -2792,30 +2825,24 @@ impl<'a> Gui<'a> {
             if !editing {
                 self.cell1(30, 164.0, 392.0, 72.0, 18.0, "PHASE");
                 self.set_dk(if fx_on { bd } else { bd * 0.5 });
-                // four slots (a dual cell or one normal cell each), filled in order; with more parameters than slots the first ones
-                // pair up. Diffusor: FREQ, Q, STAGES, SPREAD. Phaser: FREQ | RATE, DEPTH | STAGES, FDBK, WIDTH. Flanger: DELAY | RATE,
-                // DEPTH, FDBK, WIDTH. Ringmod: FREQ, SHAPE, AMOUNT. Freq shift: SHIFT, DELAY, FDBK, WIDTH
+                // four slots, each a normal cell or a dual one. Diffusor: FREQ, Q, STAGES, SPREAD. Phaser: FREQ | RATE, DEPTH | STAGES,
+                // FDBK, WIDTH. Flanger: DELAY | RATE, DEPTH, FDBK, WIDTH. Ringmod: FREQ, SHAPE, AMOUNT, HPF | LPF. Freq shift: SHIFT,
+                // DELAY | FDBK, WIDTH, HPF | LPF (the last two trim the wide-band wet signal)
                 let slots = [(164.0, 414.0), (10.0, 456.0), (87.0, 456.0), (164.0, 456.0)];
-                let params: &[(usize, &str)] = match (self.sget(32) + 0.5).floor() as i32 {
-                    1 => &[(34, "FREQ"), (46, "RATE"), (47, "DEPTH"), (36, "STAGES"), (48, "FDBK"), (43, "WIDTH")],
-                    2 => &[(49, "DELAY"), (46, "RATE"), (47, "DEPTH"), (48, "FDBK"), (43, "WIDTH")],
-                    3 => &[(34, "FREQ"), (50, "SHAPE"), (47, "AMOUNT")],
-                    4 => &[(56, "SHIFT"), (49, "DELAY"), (48, "FDBK"), (43, "WIDTH")],
-                    _ => &[(34, "FREQ"), (35, "Q"), (36, "STAGES"), (43, "SPREAD")],
+                type C = (usize, &'static str, Option<(usize, &'static str)>);
+                let cells: &[C] = match (self.sget(32) + 0.5).floor() as i32 {
+                    1 => &[(34, "FREQ", Some((46, "RATE"))), (47, "DEPTH", Some((36, "STAGES"))), (48, "FDBK", None), (43, "WIDTH", None)],
+                    2 => &[(49, "DLY", Some((46, "RATE"))), (47, "DEPTH", None), (48, "FDBK", None), (43, "WIDTH", None)],
+                    3 => &[(34, "FREQ", None), (50, "SHAPE", None), (47, "AMOUNT", None), (60, "HPF", Some((61, "LPF")))],
+                    4 => &[(56, "SHIFT", None), (49, "DLY", Some((48, "FDBK"))), (43, "WIDTH", None), (60, "HPF", Some((61, "LPF")))],
+                    _ => &[(34, "FREQ", None), (35, "Q", None), (36, "STAGES", None), (43, "SPREAD", None)],
                 };
-                let mut si = 0;
-                let mut pi = 0;
-                while pi < params.len() && si < slots.len() {
-                    let (x, y) = slots[si];
-                    if params.len() - pi > slots.len() - si {
-                        let (a, b) = (params[pi], params[pi + 1]);
-                        self.cell2(a.0, b.0, x, y, 72.0, 38.0, a.1, b.1);
-                        pi += 2;
-                    } else {
-                        self.cell(params[pi].0, x, y, 72.0, 38.0, params[pi].1);
-                        pi += 1;
+                for (i, c) in cells.iter().enumerate() {
+                    let (x, y) = slots[i];
+                    match c.2 {
+                        Some(b) => self.cell2(c.0, b.0, x, y, 72.0, 38.0, c.1, b.1),
+                        None => self.cell(c.0, x, y, 72.0, 38.0, c.1),
                     }
-                    si += 1;
                 }
                 // divider between the colour section and the mix / gain stage, with a little more air around it
                 self.set_dk(bd);
@@ -2825,6 +2852,7 @@ impl<'a> Gui<'a> {
                 self.cell(37, 10.0, 505.0, 72.0, 38.0, "COLOR MIX");
                 self.set_dk(bd);
                 self.cell(25, 87.0, 505.0, 72.0, 38.0, "SAT MIX");
+                self.out_hp_cell(164.0, 505.0, 72.0, 38.0);
                 self.cell(27, 244.0, 456.0, 62.0, 38.0, "IN GAIN");
                 self.cell_o(22, 244.0, 505.0, 62.0, 38.0, "OUT GAIN");
             }
