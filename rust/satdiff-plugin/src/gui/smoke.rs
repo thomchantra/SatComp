@@ -209,7 +209,7 @@ fn the_about_page_stays_quiet_and_writes_nothing() {
 }
 
 #[test]
-fn clicking_the_sat_readout_requests_the_level_match_and_its_result_writes_sat_gain() {
+fn clicking_the_sat_readout_requests_the_level_match_and_its_result_writes_out_gain() {
     let mut r = Rig::new();
     for _ in 0..3 {
         r.frame(vec![]);
@@ -219,7 +219,7 @@ fn clicking_the_sat_readout_requests_the_level_match_and_its_result_writes_sat_g
     r.shared.sat_result.store(-3.5, std::sync::atomic::Ordering::Relaxed);
     r.shared.sat_result_new.store(true, std::sync::atomic::Ordering::Release);
     r.frame(vec![]);
-    assert!(r.log().iter().any(|l| l.starts_with("Sat Gain")), "{:?}", r.log());
+    assert!(r.log().iter().any(|l| l.starts_with("Out Gain")), "{:?}", r.log());
 }
 
 #[test]

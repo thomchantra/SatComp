@@ -1493,7 +1493,7 @@ impl<'a> Gui<'a> {
         let tb = self.hit(x + w - 84.0, y + h - 14.0, 82.0, 12.0);
         if hv && self.press && self.act == 0 {
             if tb {
-                self.env.shared.sat_req.store(true, Ordering::Relaxed); // measure 3 s, then write SAT GAIN
+                self.env.shared.sat_req.store(true, Ordering::Relaxed); // measure 3 s, then write OUT GAIN
                 self.press = false;
             } else {
                 self.begin_drag(27);
@@ -1570,9 +1570,9 @@ impl<'a> Gui<'a> {
             self.cv.fill(x + (1.0 - pk) * 0.5 * (w - 1.0) - 1.0, y + (1.0 - (vy + 1.0) * 0.5) * (h - 1.0) - 1.0, 3.0, 3.0);
             self.setc(false);
         }
-        // SAT OUT level marker on the left edge (-24..+12 dB)
+        // IN GAIN marker on the left edge (-24..+24 dB, drag the plot to move it)
         let tot = self.sget(27);
-        let ty = y + (1.0 - (tot.clamp(-24.0, 12.0) + 24.0) / 36.0) * (h - 3.0);
+        let ty = y + (1.0 - (tot.clamp(-24.0, 24.0) + 24.0) / 48.0) * (h - 3.0);
         self.setc(self.act == 27);
         self.cv.fill(x + 1.0, ty, 7.0, 2.0);
         if self.act == 27 {
@@ -1582,7 +1582,7 @@ impl<'a> Gui<'a> {
         }
         self.setc(false);
         self.cv.set_font(1);
-        let s = format!("OUT {:+.1}dB", tot);
+        let s = format!("IN {:+.1}dB", tot);
         self.cv.text(x + 3.0, y + 3.0, &s);
         let s = if self.env.shared.sat_meas.load(Ordering::Relaxed) {
             self.setc(appearance::blink(self.now));
@@ -2530,10 +2530,10 @@ impl<'a> Gui<'a> {
             self.rd_rms = sh.fms.load(Ordering::Relaxed);
             self.rd_sat = sh.sat_db.load(Ordering::Relaxed);
         }
-        // a finished sat level match writes SAT GAIN (the audio thread cannot set parameters)
+        // a finished sat level match writes OUT GAIN (the audio thread cannot set parameters)
         if sh.sat_result_new.swap(false, Ordering::Acquire) {
             let v = sh.sat_result.load(Ordering::Relaxed);
-            self.click_set(27, v);
+            self.click_set(22, v);
         }
         self.refresh_dsp();
         self.menu_frame();
@@ -2639,7 +2639,7 @@ impl<'a> Gui<'a> {
                 self.cell(6, 164.0, 350.0, 72.0, 38.0, "TONE");
             }
 
-            // ---------- colour section: fx row (enable + type) with PHASE beside it, viewport + PRE-SAT / POST-SAT + SAT GAIN, then a
+            // ---------- colour section: fx row (enable + type) with PHASE beside it, viewport + PRE-SAT / POST-SAT + IN GAIN, then a
             // grid of three slots (a dual cell or one normal cell each) with COLOR MIX, SAT MIX and OUT GAIN
             self.fx_row(10.0, 392.0, 149.0, 18.0);
             let fx_on = self.sget(31) > 0.5;
@@ -2648,10 +2648,10 @@ impl<'a> Gui<'a> {
             self.fx_pos_btns(87.0, 414.0, 72.0, 38.0);
             self.set_dk(bd);
             if !editing {
-                // PHASE is a small slider row next to the dropdown; the cell it freed holds SAT GAIN (a normal cell: the inverted fill
+                // PHASE is a small slider row next to the dropdown; the cell it freed holds IN GAIN (a normal cell: the inverted fill
                 // belongs to OUT GAIN alone)
                 self.cell1(30, 164.0, 392.0, 72.0, 18.0, "PHASE");
-                self.cell(27, 164.0, 414.0, 72.0, 38.0, "SAT GAIN");
+                self.cell(27, 164.0, 414.0, 72.0, 38.0, "IN GAIN");
                 self.set_dk(if fx_on { bd } else { bd * 0.5 });
                 // three slots (a dual cell or one normal cell each), filled in order; with more than three parameters the first ones
                 // pair up. The diffusor has four: FREQ | Q, STAGES, SPREAD

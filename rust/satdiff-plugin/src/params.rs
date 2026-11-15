@@ -20,7 +20,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (6, "tone", 1000.0, 20000.0, 20000.0),
     (7, "os", 0.0, 3.0, 0.0),
     (25, "sat_mix", 0.0, 100.0, 100.0),
-    (27, "sat_gain", -24.0, 12.0, 0.0),
+    (27, "in_gain", -24.0, 24.0, 0.0),
     (22, "out_gain", -24.0, 12.0, 0.0),
     (23, "gain_match", 0.0, 1.0, 0.0),
     (24, "lim_on", 0.0, 1.0, 1.0),
@@ -99,8 +99,8 @@ pub struct SatDiffParams {
     pub os: IntParam,
     #[id = "sat_mix"]
     pub sat_mix: FloatParam,
-    #[id = "sat_gain"]
-    pub sat_gain: FloatParam,
+    #[id = "in_gain"]
+    pub in_gain: FloatParam,
     #[id = "out_gain"]
     pub out_gain: FloatParam,
     #[id = "gain_match"]
@@ -177,7 +177,7 @@ impl SatDiffParams {
             tone: FloatParam::new("Tone", 20000.0, FloatRange::Linear { min: 1000.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             os: IntParam::new("Oversampling", 0, IntRange::Linear { min: 0, max: 3 }),
             sat_mix: FloatParam::new("Sat Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
-            sat_gain: FloatParam::new("Sat Gain", 0.0, FloatRange::Linear { min: -24.0, max: 12.0 }).with_unit(" dB").with_step_size(0.1),
+            in_gain: FloatParam::new("In Gain", 0.0, FloatRange::Linear { min: -24.0, max: 24.0 }).with_unit(" dB").with_step_size(0.1),
             out_gain: FloatParam::new("Out Gain", 0.0, FloatRange::Linear { min: -24.0, max: 12.0 }).with_unit(" dB").with_step_size(0.1),
             gain_match: BoolParam::new("Gain Match", false),
             lim_on: BoolParam::new("Limiter", true),
@@ -266,7 +266,7 @@ impl SatDiffParams {
         DiffParams {
             shape: self.shape.value(), curve: curves[0], curve_b: curves[1], shape_b: self.shape_b.value(), tile_b: self.tile_b.value(), asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,
             sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64,
-            sat_mix: self.sat_mix.value() as f64, sat_gain: self.sat_gain.value() as f64, os: self.os.value(),
+            sat_mix: self.sat_mix.value() as f64, in_gain: self.in_gain.value() as f64, os: self.os.value(),
             out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),
             bypass: self.bypass.value(), ab: self.ab.value(), phase: self.phase.value() as f64, fx_on: self.fx_on.value(),
             fx_type: self.fx_type.value(), fx_pos: self.fx_pos.value(), fx_freq: self.fx_freq.value() as f64, fx_q: self.fx_q.value() as f64,
@@ -286,7 +286,7 @@ impl SatDiffParams {
             6 => self.tone.as_ptr(),
             7 => self.os.as_ptr(),
             25 => self.sat_mix.as_ptr(),
-            27 => self.sat_gain.as_ptr(),
+            27 => self.in_gain.as_ptr(),
             22 => self.out_gain.as_ptr(),
             23 => self.gain_match.as_ptr(),
             24 => self.lim_on.as_ptr(),

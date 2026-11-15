@@ -59,6 +59,11 @@ pub struct DiffEngine {
     pub match_trim: f64,
     match_req: bool,
     ims: f64,
+    /// smoothed mean square after IN GAIN (what enters the chain)
+    gms: f64,
+    /// IN GAIN as a linear factor, smoothed, and its target
+    ig: f64,
+    ig_t: f64,
     oms: f64,
     diff_db: f64,
     gate_open: bool,
@@ -131,6 +136,9 @@ impl DiffEngine {
             match_trim: 0.0,
             match_req: false,
             ims: 1e-9,
+            gms: 1e-9,
+            ig: 1.0,
+            ig_t: 1.0,
             oms: 1e-9,
             diff_db: 0.0,
             gate_open: false,
@@ -173,7 +181,7 @@ impl DiffEngine {
             // the host rebuilds the engine on every FX enable)
             self.first_set = false;
             self.p = *p;
-            self.sat.set_out_db(p.sat_gain);
+            self.ig = (p.in_gain * LN10_20).exp();
             self.lim.snap_on(p.lim_on);
             self.snap = true;
             let sm = std::mem::replace(&mut self.smoothing, false);
@@ -182,9 +190,6 @@ impl DiffEngine {
             return;
         }
         if *p != self.p {
-            if p.sat_gain != self.p.sat_gain {
-                self.sat.set_out_db(p.sat_gain);
-            }
             self.p = *p;
             self.derive(); // applied at once so latency() is valid before the first block
         }
@@ -230,6 +235,7 @@ impl DiffEngine {
         self.det.set_speed(p.morph_speed * 0.01, sr);
         let m0 = if p.morph_dir == 2 { depth } else { self.morph_m };
         self.sat.set_scene_b(if p.blending() { Some((p.shape_b, p.tiled_curve_b(), m0, self.morph_det)) } else { None });
+        self.ig_t = (p.in_gain * LN10_20).exp();
         self.sat.set_dc_comp(self.dc_comp);
         self.sat.set_morph_steps(((self.morph_ms * 0.001 * sr / crate::MORPH_EVERY as f64).round() as u32).max(1));
         self.sat.derive(&sp, sr, self.snap, self.smoothing);
@@ -298,7 +304,8 @@ impl DiffEngine {
         self.gate_open = self.ims > 0.000001;
         if self.gate_open {
             self.diff_db = DB_POW * (self.oms.max(1e-12) / self.ims.max(1e-12)).ln();
-            self.sat_db = DB_POW * (self.sat.ms.max(1e-12) / self.ims.max(1e-12)).ln();
+            // the saturator's own loudness change: its output against what entered it (after IN GAIN)
+            self.sat_db = DB_POW * (self.sat.ms.max(1e-12) / self.gms.max(1e-12)).ln();
             self.diff_disp = self.diff_db;
         }
         if self.sat_req {
@@ -311,8 +318,8 @@ impl DiffEngine {
         }
         if self.sat_m.active && self.gate_open {
             if let Some(avg) = self.sat_m.step(self.sat_db, dt) {
+                // the gain that cancels it: the editor writes it to OUT GAIN (the audio thread cannot set parameters)
                 let v = (avg.clamp(-24.0, 12.0) * 10.0 + 0.5).floor() * 0.1;
-                self.sat.set_out_db(v);
                 self.sat_result = Some(v);
             }
         }
@@ -354,8 +361,13 @@ impl DiffEngine {
         self.dry.put(inp);
         self.pre.advance();
 
+        // IN GAIN: first in the chain (bypass and delta use the untouched input above)
+        self.ig += (self.ig_t - self.ig) * self.sm_c;
+        let ing = [inp[0] * self.ig, inp[1] * self.ig];
+        ms_step(&mut self.gms, ing[0], ing[1], self.rms_c);
+
         // PHASE, then the diffusor when it runs before the saturator
-        let r = self.rot.tick(inp);
+        let r = self.rot.tick(ing);
         let pre = if self.fx_pos == 0 { self.fx.tick(r) } else { r };
 
         // MORPH detector: follows the level entering the saturator, moves the blend every 32 samples
@@ -371,7 +383,7 @@ impl DiffEngine {
             }
         }
 
-        // SAT (+ SAT GAIN), then the diffusor when it runs after
+        // SAT, then the diffusor when it runs after
         let mut s = self.sat.tick(pre, self.smoothing);
         if self.fx_pos == 1 {
             s = self.fx.tick(s);
@@ -741,7 +753,7 @@ mod tests {
         assert!((dry - 0.3).abs() < 0.01, "{dry}");
         // nothing after the input moves it: drive, gains, a PRE or POST fx, the phase rotator
         for p in [
-            DiffParams { drive: 80.0, sat_gain: 12.0, out_gain: 12.0, ..DiffParams::default() },
+            DiffParams { drive: 80.0, in_gain: 12.0, out_gain: 12.0, ..DiffParams::default() },
             DiffParams { fx_on: true, fx_pos: 0, fx_freq: 300.0, fx_q: 6.0, fx_stages: 12, phase: 90.0, ..DiffParams::default() },
             DiffParams { fx_on: true, fx_pos: 1, ..DiffParams::default() },
         ] {
@@ -933,5 +945,42 @@ mod tests {
         }
         // the tone is 0.05 through a heavily driven shaper: a clean crossfade stays within the shaper's own range
         assert!(pk.is_finite() && pk < 1.5, "{pk}");
+    }
+
+    #[test]
+    fn in_gain_comes_first_and_neither_the_meter_nor_bypass_nor_the_sat_match_see_it() {
+        let x = noise(30000, 41, 0.2);
+        let lat = DiffEngine::new(SR).latency() as usize;
+        // sat off: the output is the input times the gain, delayed
+        let (y, _) = run(&DiffParams { in_gain: 6.0, ..DiffParams::default() }, &x);
+        let g = 10f32.powf(6.0 / 20.0);
+        assert!((lat..x.len()).all(|i| (y[i] - x[i - lat] * g).abs() < 1e-5));
+        // the dry input meter reads before it
+        let (_, pk) = run_peak(&DiffParams { in_gain: 12.0, ..DiffParams::default() }, &x);
+        let (_, pk0) = run_peak(&DiffParams::default(), &x);
+        assert!((pk - pk0).abs() < 1e-9);
+        // bypass is the untouched input
+        let (yb, _) = run(&DiffParams { in_gain: 12.0, bypass: true, ..DiffParams::default() }, &x);
+        assert!((lat..x.len()).all(|i| (yb[i] - x[i - lat]).abs() < 1e-6));
+        // it drives the saturator harder, and the sat match reads the saturator's own change, not the gain
+        let hot = |ig: f64| {
+            let mut e = DiffEngine::new(SR);
+            e.set_params(&DiffParams { drive: 30.0, shape: 1, in_gain: ig, ..DiffParams::default() });
+            e.request_sat_match();
+            let big = noise(48000 * 4, 5, 0.15);
+            let (mut l, mut r) = (big.clone(), big.clone());
+            let mut got = None;
+            for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                e.process(cl, cr);
+                if let Some(v) = e.take_sat_result() {
+                    got = Some(v);
+                }
+            }
+            got.expect("match finishes")
+        };
+        // 0 dB vs +6 dB in: the harder-hit saturator adds a little less loudness, so the cancelling gain is a little smaller. Had the
+        // match compared with the ungained input it would have moved by the 6 dB of IN GAIN itself.
+        let (a, b) = (hot(0.0), hot(6.0));
+        assert!(b > a && b < a + 3.0, "match at 0 dB in {a}, at +6 dB in {b}");
     }
 }

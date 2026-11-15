@@ -16,8 +16,8 @@ pub struct DiffParams {
     pub sat_lp: f64,
     pub tone: f64,
     pub sat_mix: f64,
-    /// dB after the saturator (SAT GAIN)
-    pub sat_gain: f64,
+    /// IN GAIN, dB: first in the chain (before PHASE and a PRE fx); the dry input meter reads before it
+    pub in_gain: f64,
     /// oversampling of the saturator: 0 x1, 1 x2, 2 x4, 3 x8
     pub os: i32,
     // OUT
@@ -73,7 +73,7 @@ impl Default for DiffParams {
             sat_lp: 20000.0,
             tone: 20000.0,
             sat_mix: 100.0,
-            sat_gain: 0.0,
+            in_gain: 0.0,
             os: 0,
             out_gain: 0.0,
             gain_match: false,
@@ -162,7 +162,7 @@ impl DiffParams {
             // TILE's folded / wrapped edges alias: x4 oversampling at least
             os: if self.tile_active() { self.os.max(2) } else { self.os },
             mix: self.sat_mix,
-            out_db: self.sat_gain,
+            out_db: 0.0,
             asym: Some(self.asym[(shape.max(0) as usize).min(SHAPER_COUNT - 1)]),
             steep: false,
         }

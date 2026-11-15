@@ -16,7 +16,7 @@ add(5, "sat_lp", "Sat LP", "f", 200, 20000, 20000, 1, " Hz")
 add(6, "tone", "Tone", "f", 1000, 20000, 20000, 1, " Hz")
 add(7, "os", "Oversampling", "int", 0, 3, 0)          # x1 x2 x4 x8: saturator and clipper
 add(25, "sat_mix", "Sat Mix", "f", 0, 100, 100, 1, " %")
-add(27, "sat_gain", "Sat Gain", "f", -24, 12, 0, 0.1, " dB")
+add(27, "in_gain", "In Gain", "f", -24, 24, 0, 0.1, " dB")        # first in the chain (the dry IN meter reads before it)
 # OUT
 add(22, "out_gain", "Out Gain", "f", -24, 12, 0, 0.1, " dB")  # after the sat section, before the limiter
 add(23, "gain_match", "Gain Match", "bool", 0, 1, 0)
@@ -104,7 +104,7 @@ o.append("    fn to_dsp_with(&self, curves: [Curve; 2], asym: [f64; SHAPER_COUNT
 o.append("        DiffParams {")
 o.append("            shape: self.shape.value(), curve: curves[0], curve_b: curves[1], shape_b: self.shape_b.value(), tile_b: self.tile_b.value(), asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,")
 o.append("            sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64,")
-o.append("            sat_mix: self.sat_mix.value() as f64, sat_gain: self.sat_gain.value() as f64, os: self.os.value(),")
+o.append("            sat_mix: self.sat_mix.value() as f64, in_gain: self.in_gain.value() as f64, os: self.os.value(),")
 o.append("            out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),")
 o.append("            bypass: self.bypass.value(), ab: self.ab.value(), phase: self.phase.value() as f64, fx_on: self.fx_on.value(),")
 o.append("            fx_type: self.fx_type.value(), fx_pos: self.fx_pos.value(), fx_freq: self.fx_freq.value() as f64, fx_q: self.fx_q.value() as f64,")
