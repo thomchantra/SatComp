@@ -4,6 +4,7 @@ pub mod appearance;
 pub mod canvas;
 pub mod fft;
 pub mod kit;
+pub mod scroll;
 pub mod spectrum;
 
 use canvas::font_family;
