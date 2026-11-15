@@ -1319,13 +1319,23 @@ impl<'a> Gui<'a> {
         }
         if hv {
             // mode / window label on hover
+            // two lines for the scope (the one-line label did not fit the 62 px viewport)
+            let ms = VIZ_WIN_MS[self.viz_win];
+            let (l1, l2) = if self.viz_mode == 0 {
+                ("SPECTRUM".to_string(), None)
+            } else if ms >= 1000 {
+                ("SCOPE".to_string(), Some(format!("{}s", ms / 1000)))
+            } else {
+                ("SCOPE".to_string(), Some(format!("{}ms", ms)))
+            };
             self.cv.setbg();
-            self.cv.fill(x + 1.0, y + 1.0, w - 2.0, 11.0);
+            self.cv.fill(x + 1.0, y + 1.0, w - 2.0, if l2.is_some() { 21.0 } else { 11.0 });
             self.setc(false);
             self.cv.set_font(1);
-            let ms = VIZ_WIN_MS[self.viz_win];
-            let lab = if self.viz_mode == 0 { "SPECTRUM".to_string() } else if ms >= 1000 { format!("SCOPE {}s", ms / 1000) } else { format!("SCOPE {}ms", ms) };
-            self.cv.textc(x, y + 2.0, w, &lab);
+            self.cv.textc(x, y + 2.0, w, &l1);
+            if let Some(l2) = l2 {
+                self.cv.textc(x, y + 12.0, w, &l2);
+            }
         }
         self.setc(false);
     }
@@ -2364,9 +2374,24 @@ impl<'a> Gui<'a> {
             if !editing {
                 self.cell(30, 164.0, 414.0, 72.0, 38.0, "PHASE");
                 self.set_dk(if fx_on { bd } else { bd * 0.5 });
-                // diffusor slots: FREQ | Q, STAGES | SPREAD; the third slot is free for the next fx
-                self.cell2(34, 35, 10.0, 456.0, 72.0, 38.0, "FREQ", "Q");
-                self.cell2(36, 43, 87.0, 456.0, 72.0, 38.0, "STAGES", "SPREAD");
+                // three slots (a dual cell or one normal cell each), filled in order; with more than three parameters the first ones
+                // pair up. The diffusor has four: FREQ | Q, STAGES, SPREAD
+                let slots = [(10.0, 456.0), (87.0, 456.0), (10.0, 498.0)];
+                let params: [(usize, &str); 4] = [(34, "FREQ"), (35, "Q"), (36, "STAGES"), (43, "SPREAD")];
+                let mut si = 0;
+                let mut pi = 0;
+                while pi < params.len() && si < slots.len() {
+                    let (x, y) = slots[si];
+                    if params.len() - pi > slots.len() - si {
+                        let (a, b) = (params[pi], params[pi + 1]);
+                        self.cell2(a.0, b.0, x, y, 72.0, 38.0, a.1, b.1);
+                        pi += 2;
+                    } else {
+                        self.cell(params[pi].0, x, y, 72.0, 38.0, params[pi].1);
+                        pi += 1;
+                    }
+                    si += 1;
+                }
                 self.cell(37, 87.0, 498.0, 72.0, 38.0, "COLOR MIX");
                 self.set_dk(bd);
                 self.cell(25, 164.0, 456.0, 72.0, 38.0, "SAT MIX");
