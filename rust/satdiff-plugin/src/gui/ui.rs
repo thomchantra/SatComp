@@ -2432,16 +2432,19 @@ impl<'a> Gui<'a> {
                 self.cell(6, 164.0, 350.0, 72.0, 38.0, "TONE");
             }
 
-            // ---------- colour section: fx row (enable + type), viewport + PRE-SAT / POST-SAT + PHASE, then a grid of three
-            // slots (a dual cell or one normal cell each) with COLOR MIX, SAT MIX and OUT GAIN
-            self.fx_row(10.0, 392.0, 226.0, 18.0);
+            // ---------- colour section: fx row (enable + type) with PHASE beside it, viewport + PRE-SAT / POST-SAT + SAT GAIN, then a
+            // grid of three slots (a dual cell or one normal cell each) with COLOR MIX, SAT MIX and OUT GAIN
+            self.fx_row(10.0, 392.0, 149.0, 18.0);
             let fx_on = self.sget(31) > 0.5;
             self.set_dk(if fx_on { bd } else { bd * 0.5 });
             self.fx_viz(10.0, 414.0, 72.0, 38.0);
             self.fx_pos_btns(87.0, 414.0, 72.0, 38.0);
             self.set_dk(bd);
             if !editing {
-                self.cell(30, 164.0, 414.0, 72.0, 38.0, "PHASE");
+                // PHASE is a small slider row next to the dropdown; the cell it freed holds SAT GAIN (a normal cell: the inverted fill
+                // belongs to OUT GAIN alone)
+                self.cell1(30, 164.0, 392.0, 72.0, 18.0, "PHASE");
+                self.cell(27, 164.0, 414.0, 72.0, 38.0, "SAT GAIN");
                 self.set_dk(if fx_on { bd } else { bd * 0.5 });
                 // three slots (a dual cell or one normal cell each), filled in order; with more than three parameters the first ones
                 // pair up. The diffusor has four: FREQ | Q, STAGES, SPREAD
