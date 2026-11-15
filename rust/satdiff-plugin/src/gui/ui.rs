@@ -84,6 +84,8 @@ pub struct State {
     scope_drag: (f32, f32, usize, usize),
     /// eased read position in the scope ring (buckets) and the time of the last scope frame
     scope_clk: satcomp_ui::scroll::ScrollClock,
+    /// block-published telemetry shown through a glide (see satcomp-ui/src/glide.rs)
+    gl: [satcomp_ui::glide::Glide; 2],
     scope_t: f64,
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
     asym_drag: (f32, f32),
@@ -153,6 +155,9 @@ pub struct State {
     sc_acc: f64,
     sc_cur: (f32, f32),
     sc_head: usize,
+    /// constant-rate read position into the tap ring for the scope wipe (the ring is filled one host block at a time)
+    viz_clk: satcomp_ui::scroll::ScrollClock,
+    viz_t: f64,
     /// retrigger: waiting for a transient, samples waited, slow level follower
     sc_wait: bool,
     sc_scroll: bool,
@@ -210,6 +215,7 @@ impl State {
             self.sat_clip_t = -10.0;
             self.hold_until = now;
             self.scope_t = now;
+            self.viz_t = now;
         }
     }
 
@@ -265,6 +271,7 @@ impl State {
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_drag: (0.0, 0.0, 0, 0),
             scope_clk: Default::default(),
+            gl: Default::default(),
             scope_t: 0.0,
             asym_drag: (0.0, 0.0),
             app: AppState::new(),
@@ -318,6 +325,8 @@ impl State {
             sc_acc: 0.0,
             sc_cur: (0.0, 0.0),
             sc_head: 0,
+            viz_clk: Default::default(),
+            viz_t: 0.0,
             chd: 0,
             chg: false,
             even: false,
@@ -1173,7 +1182,8 @@ impl<'a> Gui<'a> {
         }
         self.cv.text(x + w * 0.5 + 8.0, cy - 4.0, r);
         // where the blend leans right now: a thin line along the bottom edge growing from the centre, left = scene A, right = B
-        let pos = self.env.shared.morph_pos.load(Ordering::Relaxed).clamp(0.0, 1.0);
+        let raw = self.env.shared.morph_pos.load(Ordering::Relaxed);
+        let pos = self.gl_step(1, raw).clamp(0.0, 1.0);
         let (cx, half) = (x + 2.0 + ((w - 4.0) * 0.5).floor(), (w - 4.0) * 0.5);
         // (a static XFADE at 0 leans fully to A; the detector modes show nothing while the morph is off)
         let len = if depth_on || mix { ((pos - 0.5).abs() * 2.0 * half).floor() } else { 0.0 };
@@ -1488,7 +1498,12 @@ impl<'a> Gui<'a> {
                 }
             }
         } else {
-            // gather the samples that arrived since the last frame into the wipe, one row per `win / rows` of time
+            // The samples are gathered up to a constant-rate read position, not up to the newest one: the audio thread delivers
+            // them a host block at a time, and gathering whatever arrived made the rows advance in bursts
+            let dt = (self.now - self.viz_t).clamp(0.0, 0.25);
+            self.viz_t = self.now;
+            let head = self.viz_clk.update(head, dt, sr as f64) as usize;
+            // gather the samples up to there into the wipe, one row per `win / rows` of time
             if self.sc_rows.len() != rows {
                 self.sc_rows = vec![(0.0, 0.0); rows];
                 self.sc_row = 0;
@@ -1716,7 +1731,7 @@ impl<'a> Gui<'a> {
             }
             self.set_dk(prev);
         }
-        let pk = sh.sat_vz.load(Ordering::Relaxed).min(1.0);
+        let pk = self.gl_step(0, sh.sat_vz.load(Ordering::Relaxed)).min(1.0);
         // one point per pixel column: a tiled curve under drive folds / wraps many times across the plot
         let n = if curve.tile != 0 { (w as usize).max(64) } else { 64 };
         let (mut lx, mut ly) = (0.0, 0.0);
@@ -2879,5 +2894,13 @@ impl<'a> Gui<'a> {
                 self.theme_osk(Rect::new(10.0, 76.0, 296.0, 226.0));
             }
         }
+    }
+}
+
+impl<'a> Gui<'a> {
+    /// A value that the audio thread publishes once per host block, as it should be drawn (continuous between blocks).
+    fn gl_step(&mut self, i: usize, raw: f32) -> f32 {
+        let now = self.now;
+        self.gl[i].step(raw, now)
     }
 }

@@ -68,6 +68,8 @@ pub struct State {
     scope_drag: (f32, f32, usize, usize),
     /// eased read position in the scope ring (buckets) and the time of the last scope frame
     scope_clk: satcomp_ui::scroll::ScrollClock,
+    /// block-published telemetry shown through a glide (see satcomp-ui/src/glide.rs)
+    gl: [satcomp_ui::glide::Glide; 1],
     scope_t: f64,
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
     asym_drag: (f32, f32),
@@ -190,6 +192,7 @@ impl State {
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_drag: (0.0, 0.0, 0, 0),
             scope_clk: Default::default(),
+            gl: Default::default(),
             scope_t: 0.0,
             asym_drag: (0.0, 0.0),
             app: AppState::new(),
@@ -897,7 +900,7 @@ impl<'a> Gui<'a> {
             self.draw_curve_edit(x, y, w, h);
             return;
         }
-        let pk = sh.sat_vz.load(Ordering::Relaxed).min(1.0);
+        let pk = self.gl_step(0, sh.sat_vz.load(Ordering::Relaxed)).min(1.0);
         let n = 64;
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
@@ -1816,5 +1819,13 @@ impl<'a> Gui<'a> {
                 self.theme_osk(Rect::new(10.0, 52.0, 320.0, 129.0));
             }
         }
+    }
+}
+
+impl<'a> Gui<'a> {
+    /// A value that the audio thread publishes once per host block, as it should be drawn (continuous between blocks).
+    fn gl_step(&mut self, i: usize, raw: f32) -> f32 {
+        let now = self.now;
+        self.gl[i].step(raw, now)
     }
 }

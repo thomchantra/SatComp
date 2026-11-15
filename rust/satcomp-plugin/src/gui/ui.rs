@@ -66,6 +66,8 @@ pub struct State {
     scope_cfg: i32,
     /// steady scope scrolling: eased read position (bucket index) and the time of the last frame
     scope_clk: satcomp_ui::scroll::ScrollClock,
+    /// block-published telemetry shown through a glide (see satcomp-ui/src/glide.rs)
+    gl: [satcomp_ui::glide::Glide; 4],
     scope_t: f64,
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
     scope_drag: (f32, f32, usize, usize),
@@ -240,6 +242,7 @@ impl State {
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_clk: Default::default(),
+            gl: Default::default(),
             scope_t: 0.0,
             scope_drag: (0.0, 0.0, 0, 0),
             asym_drag: (0.0, 0.0),
@@ -777,7 +780,8 @@ impl<'a> Gui<'a> {
         let s = format!("{:+.1}dB", self.rd_diff);
         self.cv.textc(x, y + (h * 0.4 + 1.0).floor(), w, &s);
         let cx = x + (w * 0.5).floor();
-        let d = self.env.shared.diff_disp.load(Ordering::Relaxed).clamp(-12.0, 12.0) / 12.0;
+        let raw = self.env.shared.diff_disp.load(Ordering::Relaxed);
+        let d = self.gl_step(0, raw).clamp(-12.0, 12.0) / 12.0;
         let bw = (d.abs() * (w * 0.5 - 3.0)).floor();
         if d >= 0.0 {
             self.cv.fill(cx, y + h - 4.0, bw, 2.0);
@@ -1039,7 +1043,7 @@ impl<'a> Gui<'a> {
             self.draw_curve_edit(x, y, w, h);
             return;
         }
-        let pk = sh.sat_vz.load(Ordering::Relaxed).min(1.0);
+        let pk = self.gl_step(1, sh.sat_vz.load(Ordering::Relaxed)).min(1.0);
         let n = 64;
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
@@ -1336,7 +1340,8 @@ impl<'a> Gui<'a> {
         }
         self.setc(false);
         self.cv.boxr(x, y, w, h);
-        let lvl = (8.6858896 * (self.env.shared.vz_lv.load(Ordering::Relaxed).max(0.000001)).ln()).clamp(-48.0, 0.0);
+        let vz = self.gl_step(2, self.env.shared.vz_lv.load(Ordering::Relaxed));
+        let lvl = (8.6858896 * vz.max(0.000001).ln()).clamp(-48.0, 0.0);
         self.setc(true);
         for i in 0..(w - 2.0) as i32 {
             let xin = -48.0 + 48.0 * i as f32 / (w - 3.0);
@@ -1372,7 +1377,8 @@ impl<'a> Gui<'a> {
         // sidechain: the plot's x axis is the KEY level. Markers on the side edges show the main signal: left = level
         // entering the compressor, right = level after the gain reduction (the gap between them is the GR).
         let sc_mode = self.sget(63) > 0.5;
-        let mn_db = (8.6858896 * self.env.shared.mn_lv.load(Ordering::Relaxed).max(0.000001).ln()).clamp(-48.0, 0.0);
+        let mn = self.gl_step(3, self.env.shared.mn_lv.load(Ordering::Relaxed));
+        let mn_db = (8.6858896 * mn.max(0.000001).ln()).clamp(-48.0, 0.0);
         if sc_mode && mn_db > -47.9 {
             let gr_now = if lvl > -47.9 { gc.gr(lvl as f64) as f32 } else { 0.0 };
             let yin = y + (1.0 - (mn_db + 48.0) / 48.0) * (h - 1.0);
@@ -2555,5 +2561,13 @@ impl<'a> Gui<'a> {
                 self.theme_osk(Rect::new(152.0, 56.0, 266.0, 128.0));
             }
         }
+    }
+}
+
+impl<'a> Gui<'a> {
+    /// A value that the audio thread publishes once per host block, as it should be drawn (continuous between blocks).
+    fn gl_step(&mut self, i: usize, raw: f32) -> f32 {
+        let now = self.now;
+        self.gl[i].step(raw, now)
     }
 }
