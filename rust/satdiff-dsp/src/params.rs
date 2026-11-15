@@ -48,8 +48,19 @@ pub struct DiffParams {
     pub fx_q: f64,
     /// number of allpass stages, 1..=100 (the plug-in's STAGES percentage goes through `diffuse::stages_from_pct`)
     pub fx_stages: i32,
-    /// how far the stages fan out around FREQ, 0..100 % of 8 octaves
+    /// how far the stages fan out around FREQ, 0..100 % of 8 octaves (diffusor); the stereo offset of the LFOs, 0..100 % of 180 degrees
+    /// (phaser, flanger)
     pub fx_spread: f64,
+    /// LFO rate, Hz (phaser, flanger)
+    pub fx_rate: f64,
+    /// sweep depth 0..100 % (phaser: of 4 octaves; flanger: of the centre delay) / ring modulator amount
+    pub fx_depth: f64,
+    /// feedback, -95..95 % (phaser, flanger)
+    pub fx_fb: f64,
+    /// flanger centre delay, ms
+    pub fx_delay: f64,
+    /// ring modulator carrier: 0 sine, 1 triangle, 2 square, 3 saw
+    pub fx_shape: i32,
     /// COLOR MIX: wet / dry of the whole colour fx, 0..100 %
     pub fx_mix: f64,
     /// 0 off, 1 mirror, 2 repeat
@@ -91,6 +102,11 @@ impl Default for DiffParams {
             fx_q: 0.7,
             fx_stages: 4,
             fx_spread: 0.0, // the plug-in starts at 50 %; the bare engine stays a plain stack
+            fx_rate: 0.5,
+            fx_depth: 50.0,
+            fx_fb: 0.0,
+            fx_delay: 2.0,
+            fx_shape: 0,
             fx_mix: 100.0,
             tile: 0,
             morph_dir: 2,

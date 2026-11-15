@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 46;
+pub const SLOTS: usize = 51;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -40,6 +40,11 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (42, "ab", 0.0, 1.0, 0.0),
     (44, "shape_b", 0.0, 14.0, 0.0),
     (45, "tile_b", 0.0, 2.0, 0.0),
+    (46, "fx_rate", 0.02, 20.0, 0.5),
+    (47, "fx_depth", 0.0, 100.0, 50.0),
+    (48, "fx_fb", -95.0, 95.0, 0.0),
+    (49, "fx_delay", 0.1, 10.0, 2.0),
+    (50, "fx_shape", 0.0, 3.0, 0.0),
     (43, "fx_spread", 0.0, 100.0, 50.0),
 ];
 
@@ -139,6 +144,16 @@ pub struct SatDiffParams {
     pub shape_b: IntParam,
     #[id = "tile_b"]
     pub tile_b: IntParam,
+    #[id = "fx_rate"]
+    pub fx_rate: FloatParam,
+    #[id = "fx_depth"]
+    pub fx_depth: FloatParam,
+    #[id = "fx_fb"]
+    pub fx_fb: FloatParam,
+    #[id = "fx_delay"]
+    pub fx_delay: FloatParam,
+    #[id = "fx_shape"]
+    pub fx_shape: IntParam,
     #[id = "fx_spread"]
     pub fx_spread: FloatParam,
 }
@@ -197,6 +212,11 @@ impl SatDiffParams {
             ab: IntParam::new("Scene A/B", 0, IntRange::Linear { min: 0, max: 1 }),
             shape_b: IntParam::new("Shape B", 0, IntRange::Linear { min: 0, max: 14 }),
             tile_b: IntParam::new("Tile B", 0, IntRange::Linear { min: 0, max: 2 }),
+            fx_rate: FloatParam::new("FX Rate", 0.5, FloatRange::Linear { min: 0.02, max: 20.0 }).with_unit(" Hz").with_step_size(0.01),
+            fx_depth: FloatParam::new("FX Depth", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
+            fx_fb: FloatParam::new("FX Feedback", 0.0, FloatRange::Linear { min: -95.0, max: 95.0 }).with_unit(" %").with_step_size(1.0),
+            fx_delay: FloatParam::new("FX Delay", 2.0, FloatRange::Linear { min: 0.1, max: 10.0 }).with_unit(" ms").with_step_size(0.01),
+            fx_shape: IntParam::new("FX Shape", 0, IntRange::Linear { min: 0, max: 3 }),
             fx_spread: FloatParam::new("FX Spread", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
         }
     }
@@ -270,7 +290,7 @@ impl SatDiffParams {
             out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),
             bypass: self.bypass.value(), ab: self.ab.value(), phase: self.phase.value() as f64, fx_on: self.fx_on.value(),
             fx_type: self.fx_type.value(), fx_pos: self.fx_pos.value(), fx_freq: self.fx_freq.value() as f64, fx_q: self.fx_q.value() as f64,
-            fx_stages: satdiff_dsp::diffuse::stages_from_pct(self.fx_stages.value() as f64), fx_spread: self.fx_spread.value() as f64, fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),
+            fx_stages: satdiff_dsp::diffuse::stages_from_pct(self.fx_stages.value() as f64), fx_spread: self.fx_spread.value() as f64, fx_rate: self.fx_rate.value() as f64, fx_depth: self.fx_depth.value() as f64, fx_fb: self.fx_fb.value() as f64, fx_delay: self.fx_delay.value() as f64, fx_shape: self.fx_shape.value(), fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),
             morph_depth: self.morph_depth.value() as f64, morph_speed: self.morph_speed.value() as f64,
         }
     }
@@ -306,6 +326,11 @@ impl SatDiffParams {
             42 => self.ab.as_ptr(),
             44 => self.shape_b.as_ptr(),
             45 => self.tile_b.as_ptr(),
+            46 => self.fx_rate.as_ptr(),
+            47 => self.fx_depth.as_ptr(),
+            48 => self.fx_fb.as_ptr(),
+            49 => self.fx_delay.as_ptr(),
+            50 => self.fx_shape.as_ptr(),
             43 => self.fx_spread.as_ptr(),
             _ => return None,
         })

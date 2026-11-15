@@ -6,7 +6,7 @@
 //! The limiter's delay is always reported (so toggling LIMIT never changes the latency); bypass returns the input at that
 //! same latency. DELTA monitors what the processed path changed (processed minus the aligned input, before the limiter).
 
-use crate::diffuse::Diffusor;
+use crate::color::ColorFx;
 use crate::follower::Follower;
 use crate::params::DiffParams;
 use crate::phase::Rotator;
@@ -32,7 +32,7 @@ pub struct DiffEngine {
     /// take the DC a shaper change adds off the DC blocker in step with the crossfade (see `Saturator::set_dc_comp`)
     pub dc_comp: bool,
     rot: Rotator,
-    fx: Diffusor,
+    fx: ColorFx,
     /// MORPH detector (a level follower on the saturator's input): position 0..1 of the blend towards scene B, detector mode only
     det: Follower,
     morph_det: bool,
@@ -113,7 +113,7 @@ impl DiffEngine {
             morph_ms: 30.0,
             dc_comp: true,
             rot: Rotator::new(sr),
-            fx: Diffusor::new(sr),
+            fx: ColorFx::new(sr),
             det: Follower::default(),
             morph_det: false,
             morph_m: 0.0,
@@ -240,8 +240,7 @@ impl DiffEngine {
         self.sat.set_morph_steps(((self.morph_ms * 0.001 * sr / crate::MORPH_EVERY as f64).round() as u32).max(1));
         self.sat.derive(&sp, sr, self.snap, self.smoothing);
         self.rot.set(p.phase, self.snap);
-        // only the diffusor exists so far: the other fx types behave as off
-        self.fx.set(p.fx_on && p.fx_type == 0, p.fx_freq, p.fx_q, p.fx_stages, p.fx_spread, p.fx_mix, self.snap);
+        self.fx.set(&p, self.snap);
         if p.fx_pos != self.fx_pos {
             self.fx_pos = p.fx_pos;
             self.fx.reset(); // the filter state belongs to the other side of the saturator
@@ -619,11 +618,19 @@ mod tests {
     }
 
     #[test]
-    fn other_fx_types_do_nothing_yet() {
-        let x = noise(8000, 47, 0.4);
+    fn every_colour_fx_type_does_something_and_stays_in_the_chain() {
+        let x = noise(24000, 47, 0.4);
         let (a, _) = run(&DiffParams::default(), &x);
-        let (b, _) = run(&DiffParams { fx_on: true, fx_type: 2, fx_stages: 16, fx_q: 8.0, ..DiffParams::default() }, &x);
-        assert_eq!(a, b);
+        for ty in 1..4 {
+            let p = DiffParams { fx_on: true, fx_type: ty, fx_depth: 80.0, fx_freq: 700.0, fx_fb: 30.0, ..DiffParams::default() };
+            let (b, e) = run(&p, &x);
+            assert_ne!(a, b, "type {ty}");
+            assert!(b.iter().all(|v| v.is_finite()));
+            assert_eq!(e.latency(), DiffEngine::new(SR).latency(), "colour fx add no latency (type {ty})");
+            // off again = the plain chain
+            let (c, _) = run(&DiffParams { fx_on: false, ..p }, &x);
+            assert_eq!(a, c);
+        }
     }
 
     #[test]

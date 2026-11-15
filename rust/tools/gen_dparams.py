@@ -38,6 +38,13 @@ add(41, "morph_speed", "Morph Speed", "f", 0, 100, 50, 1, " %")
 add(42, "ab", "Scene A/B", "int", 0, 1, 0)
 add(44, "shape_b", "Shape B", "int", 0, 14, 0)     # scene B (scene A: shape, custom curve, tile)
 add(45, "tile_b", "Tile B", "int", 0, 2, 0)
+# colour fx beyond the diffusor (phaser / flanger / ring modulator share these; the editor relabels them per fx type)
+add(46, "fx_rate", "FX Rate", "f", 0.02, 20, 0.5, 0.01, " Hz")      # LFO rate
+add(47, "fx_depth", "FX Depth", "f", 0, 100, 50, 1, " %")            # sweep depth / ringmod amount
+add(48, "fx_fb", "FX Feedback", "f", -95, 95, 0, 1, " %")            # phaser / flanger feedback
+add(49, "fx_delay", "FX Delay", "f", 0.1, 10, 2, 0.01, " ms")        # flanger centre delay
+add(50, "fx_shape", "FX Shape", "int", 0, 3, 0)                      # ring modulator carrier: sine / triangle / square / saw
+SKEW = {}  # host ranges stay linear: the editor tapers RATE and DELAY (log) itself, like FREQ
 add(43, "fx_spread", "FX Spread", "f", 0, 100, 50, 1, " %")  # fans the diffusor stages out over up to 8 octaves around FREQ
 
 def f(x):
@@ -90,7 +97,8 @@ for n, i, name, k, mn, mx, df, st, u in P:
     elif k == "bool":
         o.append(f'            {i}: BoolParam::new("{name}", {"true" if df else "false"}),')
     else:
-        s = f'            {i}: FloatParam::new("{name}", {f(df)}, FloatRange::Linear {{ min: {f(mn)}, max: {f(mx)} }})'
+        rng = f"FloatRange::Skewed {{ min: {f(mn)}, max: {f(mx)}, factor: FloatRange::skew_factor({f(SKEW[i])}) }}" if i in SKEW else f"FloatRange::Linear {{ min: {f(mn)}, max: {f(mx)} }}"
+        s = f'            {i}: FloatParam::new("{name}", {f(df)}, {rng})'
         if u: s += f'.with_unit("{u}")'
         if st: s += f'.with_step_size({f(st)})'
         o.append(s + ",")
@@ -108,7 +116,7 @@ o.append("            sat_mix: self.sat_mix.value() as f64, in_gain: self.in_gai
 o.append("            out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),")
 o.append("            bypass: self.bypass.value(), ab: self.ab.value(), phase: self.phase.value() as f64, fx_on: self.fx_on.value(),")
 o.append("            fx_type: self.fx_type.value(), fx_pos: self.fx_pos.value(), fx_freq: self.fx_freq.value() as f64, fx_q: self.fx_q.value() as f64,")
-o.append("            fx_stages: satdiff_dsp::diffuse::stages_from_pct(self.fx_stages.value() as f64), fx_spread: self.fx_spread.value() as f64, fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),")
+o.append("            fx_stages: satdiff_dsp::diffuse::stages_from_pct(self.fx_stages.value() as f64), fx_spread: self.fx_spread.value() as f64, fx_rate: self.fx_rate.value() as f64, fx_depth: self.fx_depth.value() as f64, fx_fb: self.fx_fb.value() as f64, fx_delay: self.fx_delay.value() as f64, fx_shape: self.fx_shape.value(), fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),")
 o.append("            morph_depth: self.morph_depth.value() as f64, morph_speed: self.morph_speed.value() as f64,")
 o.append("        }\n    }\n")
 o.append("    /// Parameter by slot number (UI addressing).\n    pub fn ptr(&self, n: usize) -> Option<ParamPtr> {\n        Some(match n {")
