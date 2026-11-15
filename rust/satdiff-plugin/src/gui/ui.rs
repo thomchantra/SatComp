@@ -40,7 +40,7 @@ struct MItem {
 /// Output VU ranges: (dB span, dB values labelled), cycled by clicking the bars.
 const VU_RANGES: [(f32, &[i32]); 4] = [(48.0, &[-6, -12, -24, -36]), (24.0, &[-3, -6, -12, -18]), (12.0, &[-2, -4, -6, -9]), (6.0, &[-1, -2, -3, -4, -5])];
 
-/// colour-fx types in the dropdown (only the diffusor exists so far)
+/// colour-fx types in the dropdown
 const FX_NAMES: [&str; 4] = ["DIFFUSOR", "PHASER", "FLANGER", "RINGMOD"];
 /// oscilloscope windows (ms). Under 500 ms the trace scrolls like a normal scope (newest at the top); from 500 ms it is a hard
 /// wipe that waits for the next transient after each sweep (retrigger) so peaks land on the same row, and free-runs after one
@@ -239,6 +239,12 @@ impl State {
         sp(37, 0, 0, 1.0);
         sp(40, 0, 0, 1.0);
         sp(41, 0, 0, 1.0);
+        sp(43, 0, 0, 1.0);
+        sp(46, 1, 0, 0.01);
+        sp(47, 0, 0, 1.0);
+        sp(48, 0, 0, 1.0);
+        sp(49, 1, 0, 0.01);
+        sp(50, 0, 0, 1.0);
         let mut st = Self {
             kit,
             pal,
@@ -589,7 +595,7 @@ impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ formatting
     fn fmt_slot(&self, n: usize, v: f32) -> String {
         match n {
-            2 | 25 | 11 | 36 | 37 | 40 | 41 | 43 => format!("{:.0}%", v),
+            2 | 25 | 11 | 36 | 37 | 40 | 41 | 43 | 47 => format!("{:.0}%", v),
             30 => format!("{:+.0}\u{b0}", v),
             34 => {
                 if v >= 10000.0 {
@@ -601,6 +607,10 @@ impl<'a> Gui<'a> {
                 }
             }
             35 => format!("{:.2}", v),
+            46 => if v < 10.0 { format!("{:.2}Hz", v) } else { format!("{:.1}Hz", v) },
+            48 => format!("{:+.0}%", v),
+            49 => format!("{:.1}ms", v),
+            50 => ["SIN", "TRI", "SQR", "SAW"][(v + 0.5).floor().clamp(0.0, 3.0) as usize].to_string(),
             3 => format!("{:+.0}%", v),
             4 => {
                 if v <= 20.5 {
@@ -1145,7 +1155,7 @@ impl<'a> Gui<'a> {
         let ty = (self.sget(32) + 0.5).floor() as usize;
         let hv = self.hit(dx, y, dw, h);
         if hv && (self.press || self.rpress) && self.act == 0 {
-            let items = FX_NAMES.iter().enumerate().map(|(i, n)| format!("{}{}", n, if i == 0 { "" } else { " (SOON)" })).collect();
+            let items = FX_NAMES.iter().map(|n| n.to_string()).collect();
             self.open_menu(MenuKind::Fx, dx, y + h, items, ty.min(FX_NAMES.len() - 1));
             self.press = false;
             self.rpress = false;
@@ -1185,11 +1195,6 @@ impl<'a> Gui<'a> {
         self.setc(false);
         self.cv.boxr(x, y, w, h);
         let ty = (self.sget(32) + 0.5).floor();
-        if ty > 0.0 {
-            self.cv.set_font(1);
-            self.cv.textc(x, y + (h * 0.5 - 4.0).floor(), w, "SOON");
-            return;
-        }
         let sh = self.env.shared;
         let sr = sh.sample_rate.load(Ordering::Relaxed).max(8000.0);
         let cols = (w - 2.0) as usize;
@@ -1208,6 +1213,10 @@ impl<'a> Gui<'a> {
                     self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - bar, 1.0, bar);
                 }
             }
+        }
+        if ty > 0.0 {
+            self.fx_viz_other(ty as i32, x, y, w, h, cols, prev, on);
+            return;
         }
         let (f0, q) = (self.sget(34) as f64, (self.sget(35) as f64).clamp(0.3, 8.0));
         let (pct, spread) = (self.sget(36) as f64, self.sget(43) as f64);
@@ -1273,6 +1282,76 @@ impl<'a> Gui<'a> {
         let my = y + h - 4.0 - (amp * (gd[fi] / top) as f32).floor();
         self.setc(on);
         self.cv.fill(x + 1.0 + fi as f32 - 1.0, my - 1.0, 3.0, 3.0);
+        self.set_dk(prev);
+        self.setc(false);
+    }
+
+    /// The viewport of the phaser (magnitude of dry + wet at the centre of the sweep, with the sweep range as a bar along the
+    /// bottom), the flanger (the comb at the centre delay) and the ring modulator (the carrier as it modulates, one cycle and a half).
+    fn fx_viz_other(&mut self, ty: i32, x: f32, y: f32, w: f32, h: f32, cols: usize, prev: f32, on: bool) {
+        self.set_dk(prev * if on { 1.0 } else { 0.5 });
+        self.setc(false);
+        let sr = self.env.shared.sample_rate.load(Ordering::Relaxed).max(8000.0) as f64;
+        let mix = (self.sget(37) as f64 * 0.01).clamp(0.0, 1.0);
+        let amp = h - 9.0;
+        let mut last: Option<(f32, f32)> = None;
+        let mut put = |s: &mut Self, i: usize, v: f64| {
+            let (px, py) = (x + 1.0 + i as f32, y + h - 4.0 - (amp * v.clamp(0.0, 1.0) as f32).floor());
+            if let Some((lx, ly)) = last {
+                s.cv.line(lx, ly, px, py);
+            }
+            last = Some((px, py));
+        };
+        match ty {
+            1 => {
+                let n = satdiff_dsp::color::phaser_stages(satdiff_dsp::diffuse::stages_from_pct(self.sget(36) as f64));
+                let (fc, depth) = (self.sget(34) as f64, self.sget(47) as f64 * 0.01 * 4.0);
+                for i in 0..cols {
+                    let f = 20.0 * (i as f64 / cols as f64 * 6.9077553).exp();
+                    // n first-order allpass stages: phase -2 atan(f / fc) each
+                    let ph = -(n as f64) * 2.0 * (f / fc).atan();
+                    let (re, im) = ((1.0 - mix) + mix * ph.cos(), mix * ph.sin());
+                    put(self, i, (re * re + im * im).sqrt());
+                }
+                // the sweep range
+                let xi = |f: f64| (((f.max(20.0) / 20.0).ln() / 6.9077553 * cols as f64) as f32).clamp(0.0, cols as f32 - 1.0);
+                let (lo, hi) = (xi(fc / 2f64.powf(depth)), xi(fc * 2f64.powf(depth)));
+                self.cv.fill(x + 1.0 + lo, y + h - 3.0, (hi - lo).max(1.0), 2.0);
+            }
+            2 => {
+                let tau = self.sget(49) as f64 * 0.001;
+                let fb = (self.sget(48) as f64 * 0.01).clamp(-0.95, 0.95);
+                let mut vals = Vec::with_capacity(cols);
+                for i in 0..cols {
+                    let f = 20.0 * (i as f64 / cols as f64 * 6.9077553).exp();
+                    let w = std::f64::consts::TAU * f * tau;
+                    // wet = z^-d / (1 - fb z^-d)
+                    let (dr, di) = (1.0 - fb * w.cos(), fb * w.sin());
+                    let den = dr * dr + di * di;
+                    let (wr, wi) = ((w.cos() * dr + (-w.sin()) * di) / den, ((-w.sin()) * dr - w.cos() * di) / den);
+                    let (re, im) = ((1.0 - mix) + mix * wr, mix * wi);
+                    vals.push((re * re + im * im).sqrt());
+                }
+                let top = vals.iter().cloned().fold(1.0, f64::max);
+                for (i, v) in vals.iter().enumerate() {
+                    put(self, i, v / top);
+                }
+                let _ = sr;
+            }
+            _ => {
+                let (shape, a) = ((self.sget(50) + 0.5).floor() as i32, (self.sget(47) as f64 * 0.01).clamp(0.0, 1.0));
+                for i in 0..cols {
+                    let p = (i as f64 / cols as f64 * 1.5).rem_euclid(1.0);
+                    let c = match shape {
+                        1 => 4.0 * (p - 0.5).abs() - 1.0,
+                        2 => if p < 0.5 { 1.0 } else { -1.0 },
+                        3 => 2.0 * p - 1.0,
+                        _ => (std::f64::consts::TAU * p).sin(),
+                    };
+                    put(self, i, 0.5 + 0.5 * ((1.0 - a) + a * c).clamp(-1.0, 1.0));
+                }
+            }
+        }
         self.set_dk(prev);
         self.setc(false);
     }
@@ -2061,9 +2140,7 @@ impl<'a> Gui<'a> {
                     1 => self.set_pal(id as usize),
                     2 => self.request_scale(SIZES[(id as usize).min(SIZES.len() - 1)]),
                     4 => {
-                        if id == 0 {
-                            self.click_set(32, 0.0); // only the diffusor exists so far
-                        }
+                        self.click_set(32, id as f32);
                     }
                     6 => self.click_set(7, id as f32),
                     7 => self.click_set(39, [2.0, 0.0, 1.0][(id as usize).min(2)]),
@@ -2656,7 +2733,12 @@ impl<'a> Gui<'a> {
                 // three slots (a dual cell or one normal cell each), filled in order; with more than three parameters the first ones
                 // pair up. The diffusor has four: FREQ | Q, STAGES, SPREAD
                 let slots = [(10.0, 456.0), (87.0, 456.0), (10.0, 498.0)];
-                let params: [(usize, &str); 4] = [(34, "FREQ"), (35, "Q"), (36, "STAGES"), (43, "SPREAD")];
+                let params: &[(usize, &str)] = match (self.sget(32) + 0.5).floor() as i32 {
+                    1 => &[(34, "FREQ"), (46, "RATE"), (47, "DEPTH"), (36, "STAGES"), (48, "FDBK"), (43, "WIDTH")],
+                    2 => &[(49, "DELAY"), (46, "RATE"), (47, "DEPTH"), (48, "FDBK"), (43, "WIDTH")],
+                    3 => &[(34, "FREQ"), (50, "SHAPE"), (47, "AMOUNT")],
+                    _ => &[(34, "FREQ"), (35, "Q"), (36, "STAGES"), (43, "SPREAD")],
+                };
                 let mut si = 0;
                 let mut pi = 0;
                 while pi < params.len() && si < slots.len() {
