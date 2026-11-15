@@ -45,6 +45,50 @@ impl Default for TapRing {
     }
 }
 
+/// Lock-free ring of animation values per 2 ms bucket (the same cadence as `ScopeRing`), for the editor's moving elements: the
+/// saturator's live dot, the compressor's level dots, the gain-difference bar, the morph position. Each bucket holds `CH` values:
+/// peak channels carry the bucket's maximum (the editor applies the decay), state channels the value at the end of the bucket.
+/// Played back by the editor on a constant-rate clock, so the animation follows audio time instead of the moments at which host
+/// blocks happened to arrive (bursty with PulseAudio / big buffers). f32 bits in atomics.
+pub struct MeterRing {
+    buf: Vec<AtomicU32>,
+    w: AtomicUsize,
+}
+
+impl MeterRing {
+    pub const CH: usize = 6;
+    pub const LEN: usize = 4096;
+    pub fn new() -> Self {
+        Self { buf: (0..Self::LEN * Self::CH).map(|_| AtomicU32::new(0)).collect(), w: AtomicUsize::new(0) }
+    }
+    pub fn push(&self, v: [f32; Self::CH]) {
+        let w = self.w.load(Ordering::Relaxed);
+        let k = (w & (Self::LEN - 1)) * Self::CH;
+        for (c, x) in v.iter().enumerate() {
+            self.buf[k + c].store(x.to_bits(), Ordering::Relaxed);
+        }
+        self.w.store(w.wrapping_add(1), Ordering::Release);
+    }
+    /// number of buckets written so far (bucket `head - 1` is the newest)
+    pub fn head(&self) -> usize {
+        self.w.load(Ordering::Acquire)
+    }
+    pub fn get(&self, i: usize) -> [f32; Self::CH] {
+        let k = (i & (Self::LEN - 1)) * Self::CH;
+        let mut o = [0.0; Self::CH];
+        for (c, x) in o.iter_mut().enumerate() {
+            *x = f32::from_bits(self.buf[k + c].load(Ordering::Relaxed));
+        }
+        o
+    }
+}
+
+impl Default for MeterRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Lock-free ring of scope buckets for the UI's waveform view: per 2 ms bucket the output peak and the same peak with the
 /// compressor's gain reduction added back (so `pre - out` is what the compressor removed). f32 bits in atomics.
 pub struct ScopeRing {
@@ -182,6 +226,11 @@ pub struct Engine {
     pub tap: Arc<TapRing>,
     /// output / pre-compression peaks per 2 ms for the UI scope
     pub scope: Arc<ScopeRing>,
+    /// animation values per 2 ms bucket for the editor (see `MeterRing`): 0 saturator input peak, 1 compressor level, 2 compressor
+    /// input level, 3 gain difference in dB (output stage vs input, smoothed)
+    pub meter: Arc<MeterRing>,
+    vz_bk: f64,
+    mn_bk: f64,
     sc_o: f64,
     sc_p: f64,
     sc_n: u32,
@@ -266,6 +315,9 @@ impl Engine {
             eq_vs: 0,
             tap: Arc::new(TapRing::new()),
             scope: Arc::new(ScopeRing::new()),
+            meter: Arc::new(MeterRing::new()),
+            vz_bk: 0.0,
+            mn_bk: 0.0,
             sc_o: 0.0,
             sc_p: 0.0,
             sc_n: 0,
@@ -526,10 +578,12 @@ impl Engine {
         let sc_act = self.p.sc_on && self.sc_avail;
         let scv = self.key.tick(if sc_act { Some([sc_l, sc_r]) } else { None }, lat);
         self.mn_blk = self.mn_blk.max(cc[0].abs().max(cc[1].abs()));
+        self.mn_bk = self.mn_bk.max(cc[0].abs().max(cc[1].abs()));
 
         // ------------------------------------------------ COMP
         let co = self.comp.tick(cc, cd, if sc_act { Some(scv) } else { None });
         self.vz_blk = self.vz_blk.max(co.level);
+        self.vz_bk = self.vz_bk.max(co.level);
         let (y, g) = (co.y, co.g);
 
         // ------------------------------------------------ OUT
@@ -588,6 +642,12 @@ impl Engine {
         self.sc_n += 1;
         if self.sc_n >= self.sc_len {
             self.scope.push(self.sc_o as f32, self.sc_p as f32);
+            // the animation values of this bucket (audio time): peaks are maxima, the difference is the state at the end
+            let diff = DB_POW * (self.pms.max(1e-12) / self.ims.max(1e-12)).ln();
+            self.meter.push([self.sat.bk as f32, self.vz_bk as f32, self.mn_bk as f32, diff as f32, 0.0, 0.0]);
+            self.sat.bk = 0.0;
+            self.vz_bk = 0.0;
+            self.mn_bk = 0.0;
             self.sc_o = 0.0;
             self.sc_p = 0.0;
             self.sc_n = 0;
@@ -1015,5 +1075,30 @@ mod tests {
         let (m0, m50, m100) = (rms_for(0.0), rms_for(50.0), rms_for(100.0));
         assert!((m0 - rms(&x[12000..])).abs() < 1e-4, "mix 0 = main detector only (main is below threshold)");
         assert!(m100 < m50 && m50 < m0, "{m0} {m50} {m100}");
+    }
+
+    #[test]
+    fn meter_buckets_carry_the_animation_values_in_audio_time() {
+        let mut e = Engine::new(SR);
+        let mut p = neutral();
+        p.drive = 30.0;
+        p.ratio = 4.0;
+        p.thresh = -20.0;
+        e.set_params(&p);
+        // a tone, then silence: the buckets must follow the signal at 2 ms resolution whatever the host block size
+        let mut x = sine(24000, 220.0, 0.5);
+        x.extend(vec![0.0; 24000]);
+        run(&mut e, &x, 1024);
+        let n = e.meter.head();
+        assert!((n as i64 - (48000.0 / 96.0) as i64).abs() <= 2, "one bucket per 96 samples, got {n}");
+        let ch = |i: usize, c: usize| e.meter.get(i)[c];
+        let tone_peak = (100..240).map(|i| ch(i, 2)).fold(0.0f32, f32::max);
+        // (the saturator sits ahead of the compressor and drive 30 lifts the tone)
+        assert!(tone_peak > 0.4 && tone_peak < 2.0, "compressor input level channel {tone_peak}");
+        assert!((100..240).map(|i| ch(i, 0)).fold(0.0f32, f32::max) > 0.2, "saturator input peak channel");
+        assert!((100..240).map(|i| ch(i, 1)).fold(0.0f32, f32::max) > 0.2, "compressor level channel");
+        // after the tone the peak channels are back to 0 within a few buckets, not held for a host block (1024 samples = 10 buckets)
+        assert!(ch(n - 2, 2) < 1e-6 && ch(n - 2, 0) < 1e-6, "silence reads as silence at the end");
+        assert!(ch(n - 1, 3).is_finite());
     }
 }

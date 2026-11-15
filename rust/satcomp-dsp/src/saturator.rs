@@ -118,6 +118,8 @@ pub struct Saturator {
     pub ms: f64,
     /// Peak of the shaped band since the owner last cleared it (UI meter).
     pub blk: f64,
+    /// as `blk`, but reset by the engine once per meter bucket (2 ms) instead of once per host block
+    pub bk: f64,
 }
 
 /// samples of recent shaper input kept to estimate a shaper's DC on the live signal
@@ -191,6 +193,7 @@ impl Saturator {
             ms_c: 0.0,
             ms: 1e-9,
             blk: 0.0,
+            bk: 0.0,
         }
     }
 
@@ -425,7 +428,9 @@ impl Saturator {
             }
             self.res.put([inp[0] - bp[0], inp[1] - bp[1]]);
             self.band.put(bp);
-            self.blk = self.blk.max(bp[0].abs().max(bp[1].abs()));
+            let m = bp[0].abs().max(bp[1].abs());
+            self.blk = self.blk.max(m);
+            self.bk = self.bk.max(m);
             if self.dc_comp {
                 self.hist[0][self.hist_i] = bp[0];
                 self.hist[1][self.hist_i] = bp[1];

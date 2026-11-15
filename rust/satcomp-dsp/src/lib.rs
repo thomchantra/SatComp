@@ -16,7 +16,7 @@ pub mod saturator;
 pub mod shapers;
 
 pub use compressor::{CompParams, Compressor, GainComputer};
-pub use engine::{Engine, ScopeRing, TapRing};
+pub use engine::{Engine, MeterRing, ScopeRing, TapRing};
 pub use limiter::{Limiter, TruePeak};
 pub use saturator::{SatParams, Saturator};
 pub use params::{EqBandParams, EqStageParams, Params};

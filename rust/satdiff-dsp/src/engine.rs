@@ -84,6 +84,8 @@ pub struct DiffEngine {
     /// monitor what the chain changed (UI -> audio)
     pub delta_on: bool,
     pub scope: Arc<ScopeRing>,
+    /// animation values per 2 ms bucket for the editor (see `MeterRing`): 0 saturator input peak (either scene), 1 morph position
+    pub meter: Arc<satcomp_dsp::MeterRing>,
     /// mono output samples for the editor's spectrum / oscilloscope
     pub tap: Arc<TapRing>,
     /// the colour fx's output as (L+R)/2 and (L-R)/2, for the fx viewport's stereo-field underlay
@@ -168,6 +170,7 @@ impl DiffEngine {
             sat_result: None,
             delta_on: false,
             scope: Arc::new(ScopeRing::new()),
+            meter: Arc::new(satcomp_dsp::MeterRing::new()),
             tap: Arc::new(TapRing::new()),
             fx_mid: Arc::new(TapRing::new()),
             fx_side: Arc::new(TapRing::new()),
@@ -496,6 +499,10 @@ impl DiffEngine {
         self.sc_n += 1;
         if self.sc_n >= self.sc_len {
             self.scope.push3(self.sc_o as f32, self.sc_p as f32, self.sc_p as f32);
+            let sat_pk = if self.b_on { self.sat.bk.max(self.sat_b.bk) } else { self.sat.bk };
+            self.meter.push([sat_pk as f32, self.morph_pos().clamp(0.0, 1.0) as f32, 0.0, 0.0, 0.0, 0.0]);
+            self.sat.bk = 0.0;
+            self.sat_b.bk = 0.0;
             self.sc_o = 0.0;
             self.sc_p = 0.0;
             self.sc_n = 0;
@@ -1101,5 +1108,20 @@ mod tests {
         let b_tile = DiffParams { shape_b: 1, tile_b: 1, ..DiffParams::default() };
         assert_eq!(lat(b_tile), lat(DiffParams { morph_depth: 60.0, ..b_tile }));
         assert!(lat(b_tile) > lat(DiffParams::default()));
+    }
+
+    #[test]
+    fn meter_buckets_carry_the_saturator_peak_and_the_morph_position() {
+        let mut p = DiffParams::default();
+        p.drive = 30.0;
+        p.morph_dir = 2; // MIX: a static crossfade by DEPTH
+        p.morph_depth = 50.0;
+        let x: Vec<f32> = (0..24000).map(|i| 0.5 * (2.0 * std::f64::consts::PI * 300.0 * i as f64 / SR).sin() as f32).collect();
+        let (_, e) = run(&p, &x);
+        let n = e.meter.head();
+        assert!(n > 200);
+        let peak = (n - 100..n).map(|i| e.meter.get(i)[0]).fold(0.0f32, f32::max);
+        assert!(peak > 0.2 && peak < 0.8, "{peak}");
+        assert!((e.meter.get(n - 1)[1] - 0.5).abs() < 0.01, "morph position {}", e.meter.get(n - 1)[1]);
     }
 }
