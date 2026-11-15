@@ -65,7 +65,7 @@ pub struct State {
     /// packed scope settings (see scope.rs)
     scope_cfg: i32,
     /// steady scope scrolling: eased read position (bucket index) and the time of the last frame
-    scope_pos: f64,
+    scope_clk: satcomp_ui::scroll::ScrollClock,
     scope_t: f64,
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
     scope_drag: (f32, f32, usize, usize),
@@ -239,7 +239,7 @@ impl State {
             light,
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
-            scope_pos: 0.0,
+            scope_clk: Default::default(),
             scope_t: 0.0,
             scope_drag: (0.0, 0.0, 0, 0),
             asym_drag: (0.0, 0.0),

@@ -83,7 +83,7 @@ pub struct State {
     /// scope viewport drag start: (mouse x, mouse y, window step, ceiling step)
     scope_drag: (f32, f32, usize, usize),
     /// eased read position in the scope ring (buckets) and the time of the last scope frame
-    scope_pos: f64,
+    scope_clk: satcomp_ui::scroll::ScrollClock,
     scope_t: f64,
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
     asym_drag: (f32, f32),
@@ -264,7 +264,7 @@ impl State {
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
             scope_drag: (0.0, 0.0, 0, 0),
-            scope_pos: 0.0,
+            scope_clk: Default::default(),
             scope_t: 0.0,
             asym_drag: (0.0, 0.0),
             app: AppState::new(),
