@@ -49,7 +49,7 @@ pub(crate) fn run_frame(ctx: &egui::Context, setter: &nih_plug::prelude::ParamSe
         st.fill_dummy();
     }
     let (pr, sr): (&SatDiffParams, &Shared) = if editing { (&*dp, &*ds) } else { (params, shared) };
-    let env = Env { params: pr, setter, shared: sr, dsp: pr.to_dsp() };
+    let env = Env { params: pr, setter, shared: sr, dsp: if editing { pr.to_dsp() } else { st.live_dsp(pr) } };
     let mut g = Gui { s: st, cv, env };
     g.frame();
     ctx.request_repaint_after(Duration::from_millis(16));

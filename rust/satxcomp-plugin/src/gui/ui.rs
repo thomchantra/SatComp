@@ -2840,7 +2840,7 @@ impl<'a> Gui<'a> {
             self.curve_edit = false;
             self.menu = None;
         }
-        self.env.dsp = self.env.params.to_dsp();
+        self.env.dsp = self.s.live_dsp(self.env.params);
         self.update_gr();
         self.menu_frame();
 
@@ -3053,5 +3053,18 @@ impl<'a> Gui<'a> {
     /// Animation value `c` (see the plug-in's `meter` channels), continuous in audio time.
     fn mval(&self, c: usize) -> f32 {
         self.meter.value(c)
+    }
+}
+
+impl State {
+    /// The parameter snapshot the viewports are drawn from. The host applies a write of the editor only inside a later audio
+    /// callback, so while the editor has a fresh write pending (see the kit) the snapshot is taken from a parameter set that
+    /// already includes it: the waveshaper plot, EQ and crossover follow the mouse instead of trailing it.
+    pub fn live_dsp(&self, pr: &SatXCompParams) -> satxcomp_dsp::XParams {
+        if self.any_pending() {
+            pr.to_dsp_over(&|n| self.pending(n))
+        } else {
+            pr.to_dsp()
+        }
     }
 }

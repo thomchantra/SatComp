@@ -79,6 +79,11 @@ impl Kit {
         }
     }
 
+    /// Whether any slot has a fresh written value (the viewports then take their snapshot from a parameter set that includes it).
+    pub fn any_pending(&self) -> bool {
+        (0..self.pend.len()).any(|n| self.pending(n).is_some())
+    }
+
     pub fn new(slots: usize) -> Self {
         Self {
             meta: vec![Meta::default(); slots],
