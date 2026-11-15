@@ -7,6 +7,7 @@
 //! same latency. DELTA monitors what the processed path changed (processed minus the aligned input, before the limiter).
 
 use crate::diffuse::Diffusor;
+use crate::follower::Follower;
 use crate::params::DiffParams;
 use crate::phase::Rotator;
 use satcomp_dsp::delay::StereoDelay;
@@ -32,6 +33,11 @@ pub struct DiffEngine {
     pub dc_comp: bool,
     rot: Rotator,
     fx: Diffusor,
+    /// MORPH detector (a level follower on the saturator's input): position 0..1 of the blend towards scene B, detector mode only
+    det: Follower,
+    morph_det: bool,
+    morph_m: f64,
+    det_cnt: u32,
     /// where the fx currently runs (0 before the saturator, 1 after)
     fx_pos: i32,
     sat: Saturator,
@@ -103,6 +109,10 @@ impl DiffEngine {
             dc_comp: true,
             rot: Rotator::new(sr),
             fx: Diffusor::new(sr),
+            det: Follower::default(),
+            morph_det: false,
+            morph_m: 0.0,
+            det_cnt: 0,
             fx_pos: 0,
             sat: Saturator::new(),
             lim: Limiter::new(sr),
@@ -180,6 +190,17 @@ impl DiffEngine {
         }
     }
 
+    /// Where the MORPH blend sits right now, 0 (scene A) .. 1 (scene B): the detector's position, or DEPTH in MIX, 0 when off.
+    pub fn morph_pos(&self) -> f64 {
+        if !self.p.blending() {
+            0.0
+        } else if self.p.morph_dir == 2 {
+            self.p.morph_depth * 0.01
+        } else {
+            self.morph_m
+        }
+    }
+
     /// PDC latency to report: saturator oversampler + limiter lookahead (the limiter's always).
     pub fn latency(&self) -> u32 {
         (self.sat.latency() + self.lim.latency()) as u32
@@ -200,6 +221,15 @@ impl DiffEngine {
             self.rms_c = one_pole(sr, 0.3);
         }
         let sp: SatParams = p.sat();
+        // MORPH: DEPTH 0 = one scene (the edited one); MIX = a static blend at DEPTH; A>B / B>A = the detector moves it
+        let depth = p.morph_depth * 0.01;
+        self.morph_det = p.blending() && p.morph_dir != 2;
+        if !p.blending() {
+            self.morph_m = 0.0;
+        }
+        self.det.set_speed(p.morph_speed * 0.01, sr);
+        let m0 = if p.morph_dir == 2 { depth } else { self.morph_m };
+        self.sat.set_scene_b(if p.blending() { Some((p.shape_b, p.tiled_curve_b(), m0, self.morph_det)) } else { None });
         self.sat.set_dc_comp(self.dc_comp);
         self.sat.set_morph_steps(((self.morph_ms * 0.001 * sr / crate::MORPH_EVERY as f64).round() as u32).max(1));
         self.sat.derive(&sp, sr, self.snap, self.smoothing);
@@ -324,6 +354,19 @@ impl DiffEngine {
         // PHASE, then the diffusor when it runs before the saturator
         let r = self.rot.tick(inp);
         let pre = if self.fx_pos == 0 { self.fx.tick(r) } else { r };
+
+        // MORPH detector: follows the level entering the saturator, moves the blend every 32 samples
+        if self.morph_det {
+            let lv = self.det.step(pre[0].abs().max(pre[1].abs()));
+            self.det_cnt += 1;
+            if self.det_cnt >= 32 {
+                self.det_cnt = 0;
+                let depth = self.p.morph_depth * 0.01;
+                let l = Follower::to_unit(lv);
+                self.morph_m = if self.p.morph_dir == 0 { depth * l } else { depth * (1.0 - l) };
+                self.sat.blend_now(self.morph_m);
+            }
+        }
 
         // SAT (+ SAT GAIN), then the diffusor when it runs after
         let mut s = self.sat.tick(pre, self.smoothing);
@@ -757,5 +800,135 @@ mod tests {
         let on = bias_drag_peak(&tone, 40.0, 20.0, 1, true);
         let base = bias_drag_peak(&tone, 0.0, 20.0, 1, true);
         assert!(on < base * 1.5 + 0.02, "tone: {on} vs {base}");
+    }
+
+    fn tone(n: usize, amp: f64) -> Vec<f32> {
+        (0..n).map(|i| (amp * (2.0 * PI * 180.0 * i as f64 / SR).sin()) as f32).collect()
+    }
+
+    fn scenes(depth: f64, dir: i32) -> DiffParams {
+        // scene A = Soft, scene B = Hard clip, both driven
+        DiffParams { shape: 1, shape_b: 4, drive: 45.0, morph_depth: depth, morph_dir: dir, ..DiffParams::default() }
+    }
+
+    #[test]
+    fn the_scene_being_edited_is_heard_while_morph_depth_is_zero() {
+        let x = tone(20000, 0.4);
+        let (a, _) = run(&scenes(0.0, 2), &x);
+        let (a_ref, _) = run(&DiffParams { shape: 1, drive: 45.0, ..DiffParams::default() }, &x);
+        assert_eq!(a, a_ref, "A with no morph must be exactly the plain shaper");
+        let (b, _) = run(&DiffParams { ab: 1, ..scenes(0.0, 2) }, &x);
+        let (b_ref, _) = run(&DiffParams { shape: 4, drive: 45.0, ..DiffParams::default() }, &x);
+        assert_eq!(b, b_ref, "B with no morph must be exactly scene B's shaper");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn mix_crossfades_the_two_scenes_statically() {
+        let x = tone(20000, 0.4);
+        let (a, _) = run(&scenes(0.0, 2), &x);
+        let (b, _) = run(&DiffParams { ab: 1, ..scenes(0.0, 2) }, &x);
+        let (full, _) = run(&scenes(100.0, 2), &x);
+        let maxd = |p: &[f32], q: &[f32]| p.iter().zip(q).map(|(u, v)| (u - v).abs()).fold(0.0f32, f32::max);
+        assert!(maxd(&full, &b) < 1e-5, "MIX 100 % is scene B: {}", maxd(&full, &b));
+        let (half, _) = run(&scenes(50.0, 2), &x);
+        let avg: Vec<f32> = a.iter().zip(&b).map(|(u, v)| 0.5 * (u + v)).collect();
+        assert!(maxd(&half, &avg) < 2e-3, "MIX 50 % is the average: {}", maxd(&half, &avg));
+        assert!(maxd(&half, &a) > 0.01 && maxd(&half, &b) > 0.01);
+        // scene A is still what the saturator is edited against when ab says B: MIX does not depend on ab
+        let (half_b, _) = run(&DiffParams { ab: 1, ..scenes(50.0, 2) }, &x);
+        assert!(maxd(&half, &half_b) < 1e-5);
+    }
+
+    #[test]
+    fn the_detector_moves_the_blend_with_the_level_in_both_directions() {
+        // quiet 0.5 s, loud 0.5 s, quiet again
+        let mut x = tone(72000, 0.02);
+        for (i, v) in x.iter_mut().enumerate().skip(24000).take(24000) {
+            *v = (0.6 * (2.0 * PI * 180.0 * i as f64 / SR).sin()) as f32;
+        }
+        let pos = |dir: i32, speed: f64| {
+            let mut e = DiffEngine::new(SR);
+            e.set_params(&DiffParams { morph_speed: speed, ..scenes(100.0, dir) });
+            let (mut l, mut r) = (x.clone(), x.clone());
+            let mut at = vec![];
+            for (k, (cl, cr)) in l.chunks_mut(256).zip(r.chunks_mut(256)).enumerate() {
+                e.process(cl, cr);
+                if k % 94 == 90 {
+                    at.push(e.morph_pos());
+                }
+            }
+            at
+        };
+        let up = pos(0, 100.0);
+        // end of the quiet part, end of the loud part, end of the second quiet part
+        let (q1, loud, q2) = (up[0], up[1], up[2]);
+        assert!(q1 < 0.2 && loud > 0.8 && q2 < 0.4, "A>B: {up:?}");
+        let down = pos(1, 100.0);
+        assert!(down[0] > 0.8 && down[1] < 0.2 && down[2] > 0.6, "B>A: {down:?}");
+        // MIX ignores the detector entirely
+        let mix = pos(2, 100.0);
+        assert!(mix.iter().all(|&m| (m - 1.0).abs() < 1e-9), "{mix:?}");
+        // depth scales the excursion and 0 switches the morph off
+        let mut e = DiffEngine::new(SR);
+        e.set_params(&scenes(0.0, 0));
+        assert_eq!(e.morph_pos(), 0.0);
+    }
+
+    #[test]
+    fn speed_sets_how_fast_the_detector_follows() {
+        let x: Vec<f32> = (0..24000).map(|i| if i < 4800 { 0.0 } else { (0.6 * (2.0 * PI * 180.0 * i as f64 / SR).sin()) as f32 }).collect();
+        let reach = |speed: f64| {
+            let mut e = DiffEngine::new(SR);
+            e.set_params(&DiffParams { morph_speed: speed, ..scenes(100.0, 0) });
+            let (mut l, mut r) = (x.clone(), x.clone());
+            for (cl, cr) in l.chunks_mut(32).zip(r.chunks_mut(32)) {
+                e.process(cl, cr);
+                if e.morph_pos() > 0.7 {
+                    return 1;
+                }
+            }
+            0
+        };
+        assert_eq!(reach(100.0), 1, "fast speed gets there");
+        assert_eq!(reach(0.0), 1, "slow gets there too");
+        // time to reach 90 % of the way: slow takes clearly longer than fast
+        let t50 = |speed: f64| {
+            let mut e = DiffEngine::new(SR);
+            e.set_params(&DiffParams { morph_speed: speed, ..scenes(100.0, 0) });
+            let (mut l, mut r) = (x.clone(), x.clone());
+            for (k, (cl, cr)) in l.chunks_mut(32).zip(r.chunks_mut(32)).enumerate() {
+                e.process(cl, cr);
+                if e.morph_pos() > 0.9 {
+                    return k;
+                }
+            }
+            usize::MAX
+        };
+        let (fast, slow) = (t50(100.0), t50(0.0));
+        // (the level steps up at block 150)
+        let (fast, slow) = (fast.saturating_sub(150).max(1), slow.saturating_sub(150));
+        assert!(slow > fast * 10, "fast {fast} blocks, slow {slow} blocks after the step");
+    }
+
+    #[test]
+    fn a_morph_blend_does_not_thump_when_it_moves() {
+        // drag DEPTH of a MIX between two scenes with very different DC (Rectify vs Soft) in silence plus a quiet tone
+        let x = tone(48000, 0.05);
+        let mut e = DiffEngine::new(SR);
+        let base = DiffParams { shape: 1, shape_b: 10, drive: 40.0, bias: 20.0, morph_dir: 2, ..DiffParams::default() };
+        e.set_params(&base);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        let mut pk = 0.0f64;
+        for (k, (cl, cr)) in l.chunks_mut(64).zip(r.chunks_mut(64)).enumerate() {
+            let t = (k as f64 * 64.0 / (0.2 * SR)).min(1.0);
+            e.set_params(&DiffParams { morph_depth: 100.0 * t, ..base });
+            e.process(cl, cr);
+            if k > 20 {
+                pk = cl.iter().fold(pk, |m, v| m.max(v.abs() as f64));
+            }
+        }
+        // the tone is 0.05 through a heavily driven shaper: a clean crossfade stays within the shaper's own range
+        assert!(pk.is_finite() && pk < 1.5, "{pk}");
     }
 }

@@ -3,6 +3,7 @@
 
 pub mod diffuse;
 pub mod engine;
+pub mod follower;
 pub mod params;
 pub mod phase;
 

@@ -29,8 +29,12 @@ pub struct DiffParams {
     pub lim_on: bool,
     pub bypass: bool,
     // PHASE SECTION (built: rotator + diffusor) and tile / morph / scenes (stored and shown by the editor, no DSP behind them yet, spec steps 3 to 5)
-    /// A (0) or B (1) waveshaper scene
+    /// A (0) or B (1) waveshaper scene: the one the editor shows and, with MORPH DEPTH at 0, the one that is heard
     pub ab: i32,
+    /// scene B's shaper (scene A's are `shape` / `curve` / `tile`)
+    pub shape_b: i32,
+    pub curve_b: Curve,
+    pub tile_b: i32,
     /// phase rotator, degrees
     pub phase: f64,
     pub fx_on: bool,
@@ -49,7 +53,8 @@ pub struct DiffParams {
     pub fx_mix: f64,
     /// 0 off, 1 mirror, 2 repeat
     pub tile: i32,
-    /// 0 = A>B, 1 = B>A
+    /// 0 = A>B (the detector moves the blend towards B as the level rises), 1 = B>A (towards B as it falls), 2 = MIX (a static
+    /// crossfade by DEPTH, no detector, SPEED unused)
     pub morph_dir: i32,
     pub morph_depth: f64,
     pub morph_speed: f64,
@@ -74,6 +79,9 @@ impl Default for DiffParams {
             lim_on: false, // the plug-in's own default is on; the engine default stays off so bare-engine renders are untouched
             bypass: false,
             ab: 0,
+            shape_b: 0,
+            curve_b: Curve::linear(),
+            tile_b: 0,
             phase: 0.0,
             fx_on: false,
             fx_type: 0,
@@ -84,7 +92,7 @@ impl Default for DiffParams {
             fx_spread: 0.0, // the plug-in starts at 50 %; the bare engine stays a plain stack
             fx_mix: 100.0,
             tile: 0,
-            morph_dir: 0,
+            morph_dir: 2,
             morph_depth: 0.0,
             morph_speed: 50.0,
         }
@@ -92,34 +100,75 @@ impl Default for DiffParams {
 }
 
 impl DiffParams {
-    /// TILE as it acts: 0 for the periodic shapers (they tile themselves) and when off, else 1 mirror / 2 repeat.
-    pub fn effective_tile(&self) -> u8 {
-        if self.tile != 0 && satcomp_dsp::shapers::tile_applies(self.shape) {
-            self.tile.clamp(0, 2) as u8
+    /// TILE as it acts for a scene: 0 for the periodic shapers (they tile themselves) and when off, else 1 mirror / 2 repeat.
+    fn tile_of(shape: i32, tile: i32) -> u8 {
+        if tile != 0 && satcomp_dsp::shapers::tile_applies(shape) {
+            tile.clamp(0, 2) as u8
         } else {
             0
         }
     }
 
-    /// The drawn curve with the effective tile mode set (the shaper table takes the mode from it for factory shapers too).
+    /// Scene A's effective tile.
+    pub fn effective_tile(&self) -> u8 {
+        Self::tile_of(self.shape, self.tile)
+    }
+
+    /// Scene A's drawn curve with the effective tile mode set (the shaper table takes the mode from it for factory shapers too).
     pub fn tiled_curve(&self) -> Curve {
         Curve { tile: self.effective_tile(), ..self.curve }
     }
 
+    /// Scene B's effective tile and tiled curve.
+    pub fn effective_tile_b(&self) -> u8 {
+        Self::tile_of(self.shape_b, self.tile_b)
+    }
+
+    pub fn tiled_curve_b(&self) -> Curve {
+        Curve { tile: self.effective_tile_b(), ..self.curve_b }
+    }
+
+    /// The scene `ab` (0 = A, 1 = B): shape and tiled curve, as the editor draws it.
+    pub fn scene_view(&self, ab: i32) -> (i32, Curve) {
+        if ab == 1 {
+            (self.shape_b, self.tiled_curve_b())
+        } else {
+            (self.shape, self.tiled_curve())
+        }
+    }
+
+    /// MORPH is on (DEPTH above 0): both scenes sound, blended.
+    pub fn blending(&self) -> bool {
+        self.morph_depth > 0.0
+    }
+
+    /// Whether any scene that is heard has an effective tile (its folded / wrapped edges alias).
+    pub fn tile_active(&self) -> bool {
+        if self.blending() {
+            self.effective_tile() != 0 || self.effective_tile_b() != 0
+        } else if self.ab == 1 {
+            self.effective_tile_b() != 0
+        } else {
+            self.effective_tile() != 0
+        }
+    }
+
     pub fn sat(&self) -> SatParams {
+        // the shaper of `derive`: scene A, or scene B while it is the one being edited and nothing is morphing
+        let (shape, curve) = self.scene_view(if self.blending() { 0 } else { self.ab });
         SatParams {
-            shape: self.shape,
-            curve: self.tiled_curve(),
+            shape,
+            curve,
             drive: self.drive,
             bias: self.bias,
             hp: self.sat_hp,
             lp: self.sat_lp,
             tone: self.tone,
             // TILE's folded / wrapped edges alias: x4 oversampling at least
-            os: if self.effective_tile() != 0 { self.os.max(2) } else { self.os },
+            os: if self.tile_active() { self.os.max(2) } else { self.os },
             mix: self.sat_mix,
             out_db: self.sat_gain,
-            asym: Some(self.asym[(self.shape.max(0) as usize).min(SHAPER_COUNT - 1)]),
+            asym: Some(self.asym[(shape.max(0) as usize).min(SHAPER_COUNT - 1)]),
             steep: false,
         }
     }

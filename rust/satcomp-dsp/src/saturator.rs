@@ -103,6 +103,12 @@ pub struct Saturator {
     m_periodic: bool,
     m_lut_dirty: bool,
     was_on: bool,
+    /// Scene B for a blend of two shapers (a LUT blend, one evaluation per sample): (shape, curve, position 0..1, write directly).
+    scene_b: Option<(i32, Curve, f64, bool)>,
+    src_a: ShaperLut,
+    src_b: ShaperLut,
+    blend_buf: Vec<f64>,
+    blend_m: f64,
     /// |shaper input| of the last sample per channel (after the HP / LP split, DRIVE and BIAS; the plain input while off)
     pub xin_abs: [f64; 2],
     dry: StereoDelay<64>,
@@ -180,6 +186,11 @@ impl Saturator {
             m_periodic: false,
             m_lut_dirty: false,
             was_on: false,
+            scene_b: None,
+            src_a: ShaperLut::new(0),
+            src_b: ShaperLut::new(0),
+            blend_buf: vec![0.0; crate::shapers::LUT_LEN],
+            blend_m: -1.0,
             xin_abs: [0.0; 2],
             dry: StereoDelay::new(),
             res: StereoDelay::new(),
@@ -209,6 +220,30 @@ impl Saturator {
     /// happens (no lag, and it works in silence, where the DC is just the shaper at the bias), then released slowly.
     pub fn set_dc_comp(&mut self, on: bool) {
         self.dc_comp = on;
+    }
+
+    /// Blend the shaper with a second one (`Some((shape, curve, position, direct))`: position 0 = the shaper of `derive`, 1 = this one)
+    /// or go back to the single shaper (`None`). Set before `derive`; a moving position is `blend_now`.
+    pub fn set_scene_b(&mut self, b: Option<(i32, Curve, f64, bool)>) {
+        self.scene_b = b;
+    }
+
+    fn blend_into_lut(&mut self, m: f64, direct: bool) {
+        let (a, b) = (&self.src_a.table, &self.src_b.table);
+        for (o, (x, y)) in self.blend_buf.iter_mut().zip(a.iter().zip(b)) {
+            *o = x + (y - x) * m;
+        }
+        let periodic = self.src_a.periodic || self.src_b.periodic;
+        self.lut.set_blend(&self.blend_buf, periodic, direct);
+        self.blend_m = m;
+        self.m_lut_dirty = true;
+    }
+
+    /// Move the blend position at once (audio rate, from a detector). No-op without a scene B.
+    pub fn blend_now(&mut self, m: f64) {
+        if self.scene_b.is_some() && (m - self.blend_m).abs() > 1e-9 {
+            self.blend_into_lut(m.clamp(0.0, 1.0), true);
+        }
     }
 
     /// DC of the blocker input and of the even part over the recent input, for table `t` at the given drive and bias.
@@ -285,7 +320,16 @@ impl Saturator {
         self.lut.fade = smoothing;
         // asym_k decides which DC the tracker looks at: set it before the shaper table moves
         self.asym_k = p.asym.map(|a| (a * 0.01).clamp(0.0, 1.0));
-        if self.lut.sync(p.shape, &p.curve) {
+        if let Some((sb, cb, m, direct)) = self.scene_b {
+            // blend: bake both scenes (only when they change) and mix the tables
+            self.src_a.fade = false;
+            self.src_b.fade = false;
+            let ca = self.src_a.sync(p.shape, &p.curve);
+            let cbn = self.src_b.sync(sb, &cb);
+            if ca || cbn || self.lut.sel != crate::shapers::BLEND_SEL || (m - self.blend_m).abs() > 1e-9 {
+                self.blend_into_lut(m.clamp(0.0, 1.0), direct || !smoothing);
+            }
+        } else if self.lut.sync(p.shape, &p.curve) {
             self.m_lut_dirty = true;
         }
         // the offsets are only ever a DC the filters would remove anyway: release them very slowly (they just must not run away)
