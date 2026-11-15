@@ -8,13 +8,24 @@
 use crate::canvas::Canvas;
 use nih_plug::prelude::{GuiContext, ParamPtr};
 
+/// Bipolar-log taper: `|v|` in 0..max -> 0..1, fine near zero (the knee sits at 1 % of max), coarse towards the ends.
+fn bipolar_fwd(a: f32, max: f32) -> f32 {
+    let c = max * 0.01;
+    (1.0 + a / c).ln() / (1.0 + max / c).ln()
+}
+
+fn bipolar_inv(u: f32, max: f32) -> f32 {
+    let c = max * 0.01;
+    c * ((u * (1.0 + max / c).ln()).exp() - 1.0)
+}
+
 /// Value range and drag behaviour of one parameter slot.
 #[derive(Clone, Copy, Default)]
 pub struct Meta {
     pub min: f32,
     pub max: f32,
     pub def: f32,
-    /// 0 linear, 1 log, 2 sqrt
+    /// 0 linear, 1 log, 2 sqrt, 3 bipolar log (symmetric around 0, the centre of travel; `min` = -`max`)
     pub mode: u8,
     /// bit 0: snap to min near the start of travel, bit 1: snap to max near the end
     pub snap: u8,
@@ -178,6 +189,7 @@ pub trait Widgets<'c> {
         let t = match m.mode {
             1 => (v.max(m.min) / m.min).ln() / (m.max / m.min).ln(),
             2 => ((v - m.min).max(0.0) / (m.max - m.min)).sqrt(),
+            3 => 0.5 + 0.5 * v.signum() * bipolar_fwd(v.abs(), m.max),
             _ => (v - m.min) / (m.max - m.min),
         };
         t.clamp(0.0, 1.0)
@@ -194,6 +206,11 @@ pub trait Widgets<'c> {
         let mut v = match m.mode {
             1 => m.min * (t * (m.max / m.min).ln()).exp(),
             2 => m.min + (m.max - m.min) * t * t,
+            // a small dead zone at the centre of travel lands exactly on 0
+            3 => {
+                let u = (t - 0.5) * 2.0;
+                if u.abs() < 0.01 { 0.0 } else { u.signum() * bipolar_inv(u.abs(), m.max) }
+            }
             _ => m.min + (m.max - m.min) * t,
         };
         if m.step > 0.0 {
