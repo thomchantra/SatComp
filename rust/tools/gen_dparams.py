@@ -45,6 +45,12 @@ add(48, "fx_fb", "FX Feedback", "f", -95, 95, 0, 1, " %")            # phaser / 
 add(49, "fx_delay", "FX Delay", "f", 0.1, 10, 2, 0.01, " ms")        # flanger centre delay
 add(50, "fx_shape", "FX Shape", "int", 0, 3, 0)                      # ring modulator carrier: sine / triangle / square / saw
 SKEW = {}  # host ranges stay linear: the editor tapers RATE and DELAY (log) itself, like FREQ
+# scene B's waveshaper module (scene A's are slots 1-6; the editor addresses the viewed scene)
+add(51, "drive_b", "Drive B", "f", 0, 100, 0, 0.1, " %")
+add(52, "bias_b", "Bias B", "f", -100, 100, 0, 0.1, " %")
+add(53, "sat_hp_b", "Sat HP B", "f", 20, 2000, 20, 1, " Hz")
+add(54, "sat_lp_b", "Sat LP B", "f", 200, 20000, 20000, 1, " Hz")
+add(55, "tone_b", "Tone B", "f", 1000, 20000, 20000, 1, " Hz")
 add(43, "fx_spread", "FX Spread", "f", 0, 100, 50, 1, " %")  # fans the diffusor stages out over up to 8 octaves around FREQ
 
 def f(x):
@@ -73,6 +79,7 @@ o.append('    /// Curve handles and the LINEAR | CURVE choice of scene A\'s draw
 o.append('    /// Same for scene B.\n    #[persist = "custom-curve-ext-b"]\n    pub custom_curve_ext_b: Arc<parking_lot::Mutex<Vec<f32>>>,')
 o.append('    /// Scene B\'s drawn curve (same format as `custom_curve`).\n    #[persist = "custom-curve-b"]\n    pub custom_curve_b: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,')
 o.append('    /// ASYM per waveshaper (0..100 %, index = shaper); saved with the project and presets (absent = all 100 %).\n    #[persist = "asym"]\n    pub asym: Arc<parking_lot::Mutex<Vec<f32>>>,')
+o.append('    /// Scene B\'s ASYM per waveshaper (same format).\n    #[persist = "asym-b"]\n    pub asym_b: Arc<parking_lot::Mutex<Vec<f32>>>,')
 for n, i, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{i}"]\n    pub {i}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
 o.append("}\n")
@@ -91,6 +98,7 @@ o.append("            custom_curve_ext: Arc::new(parking_lot::Mutex::new(Vec::ne
 o.append("            custom_curve_ext_b: Arc::new(parking_lot::Mutex::new(Vec::new())),")
 o.append("            custom_curve_b: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),")
 o.append("            asym: Arc::new(parking_lot::Mutex::new(Vec::new())),")
+o.append("            asym_b: Arc::new(parking_lot::Mutex::new(Vec::new())),")
 for n, i, name, k, mn, mx, df, st, u in P:
     if k == "int":
         o.append(f'            {i}: IntParam::new("{name}", {int(df)}, IntRange::Linear {{ min: {int(mn)}, max: {int(mx)} }}),')
@@ -105,12 +113,12 @@ for n, i, name, k, mn, mx, df, st, u in P:
 o.append("        }\n    }\n}\n")
 o.append("impl SatDiffParams {")
 o.append("    /// Sanitised copy of the persisted custom curve (the UI holds this lock only for a point edit).\n    pub fn curve_snapshot(&self) -> Curve {\n        Curve::from_parts(&self.custom_curve.lock(), &self.custom_curve_ext.lock())\n    }\n\n    /// Scene B's drawn curve.\n    pub fn curve_snapshot_b(&self) -> Curve {\n        Curve::from_parts(&self.custom_curve_b.lock(), &self.custom_curve_ext_b.lock())\n    }\n\n    /// The drawn curve of scene `ab`.\n    pub fn curve_of(&self, ab: i32) -> Curve {\n        if ab == 1 {\n            self.curve_snapshot_b()\n        } else {\n            self.curve_snapshot()\n        }\n    }\n\n    /// Store the drawn curve of scene `ab` (points and handles).\n    pub fn store_curve(&self, ab: i32, c: &Curve) {\n        let (pts, ext) = if ab == 1 { (&self.custom_curve_b, &self.custom_curve_ext_b) } else { (&self.custom_curve, &self.custom_curve_ext) };\n        *pts.lock() = c.pts().to_vec();\n        *ext.lock() = c.ext();\n    }\n\n    /// The drawn curve of scene `ab` (0 = A, 1 = B).\n    pub fn curve_cell(&self, ab: i32) -> &Arc<parking_lot::Mutex<Vec<(f32, f32)>>> {\n        if ab == 1 {\n            &self.custom_curve_b\n        } else {\n            &self.custom_curve\n        }\n    }\n")
-o.append("    /// ASYM per shaper, sanitised (short / missing = 100 %).\n    pub fn asym_snapshot(&self) -> [f64; SHAPER_COUNT] {\n        asym_from(&self.asym.lock())\n    }\n")
-o.append("    /// Snapshot for the DSP engine (UI side: may wait briefly for the curve lock).\n    pub fn to_dsp(&self) -> DiffParams {\n        self.to_dsp_with([self.curve_snapshot(), self.curve_snapshot_b()], self.asym_snapshot())\n    }\n")
-o.append("    /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.\n    pub fn to_dsp_rt(&self, last: &mut [Curve; 2], last_asym: &mut [f64; SHAPER_COUNT]) -> DiffParams {\n        if let (Some(g), Some(e)) = (self.custom_curve.try_lock(), self.custom_curve_ext.try_lock()) {\n            last[0] = Curve::from_parts(&g, &e);\n        }\n        if let (Some(g), Some(e)) = (self.custom_curve_b.try_lock(), self.custom_curve_ext_b.try_lock()) {\n            last[1] = Curve::from_parts(&g, &e);\n        }\n        if let Some(g) = self.asym.try_lock() {\n            *last_asym = asym_from(&g);\n        }\n        self.to_dsp_with(*last, *last_asym)\n    }\n")
-o.append("    fn to_dsp_with(&self, curves: [Curve; 2], asym: [f64; SHAPER_COUNT]) -> DiffParams {")
+o.append("    /// ASYM per shaper, sanitised (short / missing = 100 %).\n    pub fn asym_snapshot(&self) -> [f64; SHAPER_COUNT] {\n        asym_from(&self.asym.lock())\n    }\n\n    /// Scene B's ASYM per shaper, sanitised.\n    pub fn asym_snapshot_b(&self) -> [f64; SHAPER_COUNT] {\n        asym_from(&self.asym_b.lock())\n    }\n\n    /// The ASYM cell of scene `ab`.\n    pub fn asym_cell(&self, ab: i32) -> &Arc<parking_lot::Mutex<Vec<f32>>> {\n        if ab == 1 {\n            &self.asym_b\n        } else {\n            &self.asym\n        }\n    }\n")
+o.append("    /// Snapshot for the DSP engine (UI side: may wait briefly for the curve lock).\n    pub fn to_dsp(&self) -> DiffParams {\n        self.to_dsp_with([self.curve_snapshot(), self.curve_snapshot_b()], [self.asym_snapshot(), self.asym_snapshot_b()])\n    }\n")
+o.append("    /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.\n    pub fn to_dsp_rt(&self, last: &mut [Curve; 2], last_asym: &mut [[f64; SHAPER_COUNT]; 2]) -> DiffParams {\n        if let (Some(g), Some(e)) = (self.custom_curve.try_lock(), self.custom_curve_ext.try_lock()) {\n            last[0] = Curve::from_parts(&g, &e);\n        }\n        if let (Some(g), Some(e)) = (self.custom_curve_b.try_lock(), self.custom_curve_ext_b.try_lock()) {\n            last[1] = Curve::from_parts(&g, &e);\n        }\n        if let Some(g) = self.asym.try_lock() {\n            last_asym[0] = asym_from(&g);\n        }\n        if let Some(g) = self.asym_b.try_lock() {\n            last_asym[1] = asym_from(&g);\n        }\n        self.to_dsp_with(*last, *last_asym)\n    }\n")
+o.append("    fn to_dsp_with(&self, curves: [Curve; 2], asyms: [[f64; SHAPER_COUNT]; 2]) -> DiffParams {")
 o.append("        DiffParams {")
-o.append("            shape: self.shape.value(), curve: curves[0], curve_b: curves[1], shape_b: self.shape_b.value(), tile_b: self.tile_b.value(), asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,")
+o.append("            shape: self.shape.value(), curve: curves[0], curve_b: curves[1], shape_b: self.shape_b.value(), tile_b: self.tile_b.value(), asym: asyms[0], asym_b: asyms[1], drive_b: self.drive_b.value() as f64, bias_b: self.bias_b.value() as f64, sat_hp_b: self.sat_hp_b.value() as f64, sat_lp_b: self.sat_lp_b.value() as f64, tone_b: self.tone_b.value() as f64, drive: self.drive.value() as f64, bias: self.bias.value() as f64,")
 o.append("            sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64,")
 o.append("            sat_mix: self.sat_mix.value() as f64, in_gain: self.in_gain.value() as f64, os: self.os.value(),")
 o.append("            out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),")

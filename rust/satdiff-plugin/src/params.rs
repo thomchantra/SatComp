@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 51;
+pub const SLOTS: usize = 56;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -45,6 +45,11 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (48, "fx_fb", -95.0, 95.0, 0.0),
     (49, "fx_delay", 0.1, 10.0, 2.0),
     (50, "fx_shape", 0.0, 3.0, 0.0),
+    (51, "drive_b", 0.0, 100.0, 0.0),
+    (52, "bias_b", -100.0, 100.0, 0.0),
+    (53, "sat_hp_b", 20.0, 2000.0, 20.0),
+    (54, "sat_lp_b", 200.0, 20000.0, 20000.0),
+    (55, "tone_b", 1000.0, 20000.0, 20000.0),
     (43, "fx_spread", 0.0, 100.0, 50.0),
 ];
 
@@ -88,6 +93,9 @@ pub struct SatDiffParams {
     /// ASYM per waveshaper (0..100 %, index = shaper); saved with the project and presets (absent = all 100 %).
     #[persist = "asym"]
     pub asym: Arc<parking_lot::Mutex<Vec<f32>>>,
+    /// Scene B's ASYM per waveshaper (same format).
+    #[persist = "asym-b"]
+    pub asym_b: Arc<parking_lot::Mutex<Vec<f32>>>,
     #[id = "shape"]
     pub shape: IntParam,
     #[id = "drive"]
@@ -154,6 +162,16 @@ pub struct SatDiffParams {
     pub fx_delay: FloatParam,
     #[id = "fx_shape"]
     pub fx_shape: IntParam,
+    #[id = "drive_b"]
+    pub drive_b: FloatParam,
+    #[id = "bias_b"]
+    pub bias_b: FloatParam,
+    #[id = "sat_hp_b"]
+    pub sat_hp_b: FloatParam,
+    #[id = "sat_lp_b"]
+    pub sat_lp_b: FloatParam,
+    #[id = "tone_b"]
+    pub tone_b: FloatParam,
     #[id = "fx_spread"]
     pub fx_spread: FloatParam,
 }
@@ -184,6 +202,7 @@ impl SatDiffParams {
             custom_curve_ext_b: Arc::new(parking_lot::Mutex::new(Vec::new())),
             custom_curve_b: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             asym: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            asym_b: Arc::new(parking_lot::Mutex::new(Vec::new())),
             shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 14 }),
             drive: FloatParam::new("Drive", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
             bias: FloatParam::new("Bias", 0.0, FloatRange::Linear { min: -100.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
@@ -217,6 +236,11 @@ impl SatDiffParams {
             fx_fb: FloatParam::new("FX Feedback", 0.0, FloatRange::Linear { min: -95.0, max: 95.0 }).with_unit(" %").with_step_size(1.0),
             fx_delay: FloatParam::new("FX Delay", 2.0, FloatRange::Linear { min: 0.1, max: 10.0 }).with_unit(" ms").with_step_size(0.01),
             fx_shape: IntParam::new("FX Shape", 0, IntRange::Linear { min: 0, max: 3 }),
+            drive_b: FloatParam::new("Drive B", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
+            bias_b: FloatParam::new("Bias B", 0.0, FloatRange::Linear { min: -100.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
+            sat_hp_b: FloatParam::new("Sat HP B", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
+            sat_lp_b: FloatParam::new("Sat LP B", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
+            tone_b: FloatParam::new("Tone B", 20000.0, FloatRange::Linear { min: 1000.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             fx_spread: FloatParam::new("FX Spread", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
         }
     }
@@ -263,13 +287,27 @@ impl SatDiffParams {
         asym_from(&self.asym.lock())
     }
 
+    /// Scene B's ASYM per shaper, sanitised.
+    pub fn asym_snapshot_b(&self) -> [f64; SHAPER_COUNT] {
+        asym_from(&self.asym_b.lock())
+    }
+
+    /// The ASYM cell of scene `ab`.
+    pub fn asym_cell(&self, ab: i32) -> &Arc<parking_lot::Mutex<Vec<f32>>> {
+        if ab == 1 {
+            &self.asym_b
+        } else {
+            &self.asym
+        }
+    }
+
     /// Snapshot for the DSP engine (UI side: may wait briefly for the curve lock).
     pub fn to_dsp(&self) -> DiffParams {
-        self.to_dsp_with([self.curve_snapshot(), self.curve_snapshot_b()], self.asym_snapshot())
+        self.to_dsp_with([self.curve_snapshot(), self.curve_snapshot_b()], [self.asym_snapshot(), self.asym_snapshot_b()])
     }
 
     /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.
-    pub fn to_dsp_rt(&self, last: &mut [Curve; 2], last_asym: &mut [f64; SHAPER_COUNT]) -> DiffParams {
+    pub fn to_dsp_rt(&self, last: &mut [Curve; 2], last_asym: &mut [[f64; SHAPER_COUNT]; 2]) -> DiffParams {
         if let (Some(g), Some(e)) = (self.custom_curve.try_lock(), self.custom_curve_ext.try_lock()) {
             last[0] = Curve::from_parts(&g, &e);
         }
@@ -277,14 +315,17 @@ impl SatDiffParams {
             last[1] = Curve::from_parts(&g, &e);
         }
         if let Some(g) = self.asym.try_lock() {
-            *last_asym = asym_from(&g);
+            last_asym[0] = asym_from(&g);
+        }
+        if let Some(g) = self.asym_b.try_lock() {
+            last_asym[1] = asym_from(&g);
         }
         self.to_dsp_with(*last, *last_asym)
     }
 
-    fn to_dsp_with(&self, curves: [Curve; 2], asym: [f64; SHAPER_COUNT]) -> DiffParams {
+    fn to_dsp_with(&self, curves: [Curve; 2], asyms: [[f64; SHAPER_COUNT]; 2]) -> DiffParams {
         DiffParams {
-            shape: self.shape.value(), curve: curves[0], curve_b: curves[1], shape_b: self.shape_b.value(), tile_b: self.tile_b.value(), asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,
+            shape: self.shape.value(), curve: curves[0], curve_b: curves[1], shape_b: self.shape_b.value(), tile_b: self.tile_b.value(), asym: asyms[0], asym_b: asyms[1], drive_b: self.drive_b.value() as f64, bias_b: self.bias_b.value() as f64, sat_hp_b: self.sat_hp_b.value() as f64, sat_lp_b: self.sat_lp_b.value() as f64, tone_b: self.tone_b.value() as f64, drive: self.drive.value() as f64, bias: self.bias.value() as f64,
             sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64,
             sat_mix: self.sat_mix.value() as f64, in_gain: self.in_gain.value() as f64, os: self.os.value(),
             out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),
@@ -331,6 +372,11 @@ impl SatDiffParams {
             48 => self.fx_fb.as_ptr(),
             49 => self.fx_delay.as_ptr(),
             50 => self.fx_shape.as_ptr(),
+            51 => self.drive_b.as_ptr(),
+            52 => self.bias_b.as_ptr(),
+            53 => self.sat_hp_b.as_ptr(),
+            54 => self.sat_lp_b.as_ptr(),
+            55 => self.tone_b.as_ptr(),
             43 => self.fx_spread.as_ptr(),
             _ => return None,
         })

@@ -35,11 +35,14 @@ pub struct Preset {
     /// ASYM (0..100 %) per waveshaper (absent / empty = all 100 %). Backward compatible: version stays 1.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub asym: Vec<f32>,
+    /// Scene B's ASYM per waveshaper (absent / empty = all 100 %).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asym_b: Vec<f32>,
 }
 
 impl Preset {
     pub fn new(name: &str, params: BTreeMap<String, f32>) -> Self {
-        Self { format: "satdiff-preset".into(), version: 1, name: name.into(), params, curve: Vec::new(), curve_ext: Vec::new(), curve_ext_b: Vec::new(), curve_b: Vec::new(), asym: Vec::new() }
+        Self { format: "satdiff-preset".into(), version: 1, name: name.into(), params, curve: Vec::new(), curve_ext: Vec::new(), curve_ext_b: Vec::new(), curve_b: Vec::new(), asym: Vec::new(), asym_b: Vec::new() }
     }
 
     /// All defaults.

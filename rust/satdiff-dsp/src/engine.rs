@@ -41,6 +41,15 @@ pub struct DiffEngine {
     /// where the fx currently runs (0 before the saturator, 1 after)
     fx_pos: i32,
     sat: Saturator,
+    /// scene B's saturator: runs (and is crossfaded in) only while MORPH is on
+    sat_b: Saturator,
+    /// crossfade position towards scene B: target (static DEPTH, or the detector's) and the smoothed value in use
+    m_t: f64,
+    m_s: f64,
+    b_on: bool,
+    /// smoothed mean square of the blended saturator output (the level-match reference)
+    sms: f64,
+    rms_slow_c: f64,
     lim: Limiter,
     /// the input, kept to line up the bypass and the delta with the processed path
     dry: StereoDelay<RING>,
@@ -120,6 +129,12 @@ impl DiffEngine {
             det_cnt: 0,
             fx_pos: 0,
             sat: Saturator::new(),
+            sat_b: Saturator::new(),
+            m_t: 0.0,
+            m_s: 0.0,
+            b_on: false,
+            sms: 1e-9,
+            rms_slow_c: 0.0,
             lim: Limiter::new(sr),
             dry: StereoDelay::new(),
             pre: StereoDelay::new(),
@@ -224,21 +239,34 @@ impl DiffEngine {
             self.sm_c = one_pole(sr, 0.02);
             self.byp_c = one_pole(sr, 0.01);
             self.rms_c = one_pole(sr, 0.3);
+            self.rms_slow_c = one_pole(sr, 0.5);
         }
-        let sp: SatParams = p.sat();
-        // MORPH: DEPTH 0 = one scene (the edited one); MIX = a static blend at DEPTH; A>B / B>A = the detector moves it
+        let (sp, spb): (SatParams, SatParams) = (p.sat(), p.sat_b());
+        // MORPH: DEPTH 0 = scene A alone; MIX = a static crossfade at DEPTH; A>B / B>A = the detector moves it. Each scene is a
+        // whole saturator chain (drive, bias, filters, shaper, tone), so the blend is of their outputs.
         let depth = p.morph_depth * 0.01;
         self.morph_det = p.blending() && p.morph_dir != 2;
         if !p.blending() {
             self.morph_m = 0.0;
         }
         self.det.set_speed(p.morph_speed * 0.01, sr);
-        let m0 = if p.morph_dir == 2 { depth } else { self.morph_m };
-        self.sat.set_scene_b(if p.blending() { Some((p.shape_b, p.tiled_curve_b(), m0, self.morph_det)) } else { None });
+        self.m_t = if !p.blending() {
+            0.0
+        } else if p.morph_dir == 2 {
+            depth
+        } else {
+            self.morph_m
+        };
+        if self.snap {
+            self.m_s = self.m_t;
+        }
         self.ig_t = (p.in_gain * LN10_20).exp();
-        self.sat.set_dc_comp(self.dc_comp);
-        self.sat.set_morph_steps(((self.morph_ms * 0.001 * sr / crate::MORPH_EVERY as f64).round() as u32).max(1));
-        self.sat.derive(&sp, sr, self.snap, self.smoothing);
+        let steps = ((self.morph_ms * 0.001 * sr / crate::MORPH_EVERY as f64).round() as u32).max(1);
+        for (sat, params) in [(&mut self.sat, &sp), (&mut self.sat_b, &spb)] {
+            sat.set_dc_comp(self.dc_comp);
+            sat.set_morph_steps(steps);
+            sat.derive(params, sr, self.snap, self.smoothing);
+        }
         self.rot.set(p.phase, self.snap);
         self.fx.set(&p, self.snap);
         if p.fx_pos != self.fx_pos {
@@ -304,7 +332,7 @@ impl DiffEngine {
         if self.gate_open {
             self.diff_db = DB_POW * (self.oms.max(1e-12) / self.ims.max(1e-12)).ln();
             // the saturator's own loudness change: its output against what entered it (after IN GAIN)
-            self.sat_db = DB_POW * (self.sat.ms.max(1e-12) / self.gms.max(1e-12)).ln();
+            self.sat_db = DB_POW * (self.sms.max(1e-12) / self.gms.max(1e-12)).ln();
             self.diff_disp = self.diff_db;
         }
         if self.sat_req {
@@ -323,6 +351,7 @@ impl DiffEngine {
             }
         }
         self.sat.begin_block();
+        self.sat_b.begin_block();
         if self.out_m.active && self.gate_open {
             if let Some(avg) = self.out_m.step(self.diff_db, dt) {
                 self.match_trim = avg.clamp(-12.0, 12.0);
@@ -331,9 +360,11 @@ impl DiffEngine {
         let trim = if self.match_on { self.match_trim } else { 0.0 };
         self.og_t = ((self.p.out_gain + trim) * LN10_20).exp();
         let vz_d = (-(n as f64) / (self.sr * 0.15)).exp();
-        self.sat_vz = self.sat.blk.max(self.sat_vz * vz_d);
-        self.sat_out = self.sat_out.max(self.sat.blk);
+        let blk = if self.b_on { self.sat.blk.max(self.sat_b.blk) } else { self.sat.blk };
+        self.sat_vz = blk.max(self.sat_vz * vz_d);
+        self.sat_out = self.sat_out.max(blk);
         self.sat.blk = 0.0;
+        self.sat_b.blk = 0.0;
     }
 
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
@@ -378,12 +409,26 @@ impl DiffEngine {
                 let depth = self.p.morph_depth * 0.01;
                 let l = Follower::to_unit(lv);
                 self.morph_m = if self.p.morph_dir == 0 { depth * l } else { depth * (1.0 - l) };
-                self.sat.blend_now(self.morph_m);
+                self.m_t = self.morph_m;
             }
         }
 
         // SAT, then the diffusor when it runs after
         let mut s = self.sat.tick(pre, self.smoothing);
+        // scene B joins while the crossfade is above 0 (and until it has faded out): a second whole chain, mixed by position
+        self.m_s = if self.smoothing { self.m_s + (self.m_t - self.m_s) * self.sm_c } else { self.m_t };
+        if self.m_s > 1e-5 || self.m_t > 0.0 {
+            if !self.b_on {
+                self.sat_b.rewarm(); // it has been idle: start its blocker and oversampler settled
+                self.b_on = true;
+            }
+            let b = self.sat_b.tick(pre, self.smoothing);
+            let m = self.m_s.clamp(0.0, 1.0);
+            s = [s[0] + (b[0] - s[0]) * m, s[1] + (b[1] - s[1]) * m];
+        } else {
+            self.b_on = false;
+        }
+        ms_step(&mut self.sms, s[0], s[1], self.rms_slow_c);
         if self.fx_pos == 1 {
             s = self.fx.tick(s);
         }
@@ -824,7 +869,7 @@ mod tests {
 
     fn scenes(depth: f64, dir: i32) -> DiffParams {
         // scene A = Soft, scene B = Hard clip, both driven
-        DiffParams { shape: 1, shape_b: 4, drive: 45.0, morph_depth: depth, morph_dir: dir, ..DiffParams::default() }
+        DiffParams { shape: 1, shape_b: 4, drive: 45.0, drive_b: 45.0, morph_depth: depth, morph_dir: dir, ..DiffParams::default() }
     }
 
     #[test]
@@ -938,7 +983,7 @@ mod tests {
         // drag DEPTH of a MIX between two scenes with very different DC (Rectify vs Soft) in silence plus a quiet tone
         let x = tone(48000, 0.05);
         let mut e = DiffEngine::new(SR);
-        let base = DiffParams { shape: 1, shape_b: 10, drive: 40.0, bias: 20.0, morph_dir: 2, ..DiffParams::default() };
+        let base = DiffParams { shape: 1, shape_b: 10, drive: 40.0, bias: 20.0, drive_b: 40.0, bias_b: 20.0, morph_dir: 2, ..DiffParams::default() };
         e.set_params(&base);
         let (mut l, mut r) = (x.clone(), x.clone());
         let mut pk = 0.0f64;
@@ -989,5 +1034,48 @@ mod tests {
         // match compared with the ungained input it would have moved by the 6 dB of IN GAIN itself.
         let (a, b) = (hot(0.0), hot(6.0));
         assert!(b > a && b < a + 3.0, "match at 0 dB in {a}, at +6 dB in {b}");
+    }
+
+    #[test]
+    fn each_scene_has_its_own_drive_bias_filters_and_tone() {
+        let x = tone(24000, 0.3);
+        // scene B tuned differently from A in every module setting
+        let b_set = |p: DiffParams| DiffParams { shape: 4, drive: 70.0, bias: 15.0, sat_hp: 300.0, sat_lp: 6000.0, tone: 4000.0, ..p };
+        let plain_b = b_set(DiffParams::default());
+        let morph = DiffParams {
+            shape: 1,
+            drive: 10.0,
+            shape_b: 4,
+            drive_b: 70.0,
+            bias_b: 15.0,
+            sat_hp_b: 300.0,
+            sat_lp_b: 6000.0,
+            tone_b: 4000.0,
+            morph_dir: 2,
+            ..DiffParams::default()
+        };
+        let (b_ref, _) = run(&plain_b, &x);
+        let (full, _) = run(&DiffParams { morph_depth: 100.0, ..morph }, &x);
+        let maxd = |p: &[f32], q: &[f32]| p.iter().zip(q).map(|(u, v)| (u - v).abs()).fold(0.0f32, f32::max);
+        assert!(maxd(&full, &b_ref) < 1e-4, "MIX 100 % is scene B with its own settings: {}", maxd(&full, &b_ref));
+        let (a_ref, _) = run(&DiffParams { shape: 1, drive: 10.0, ..DiffParams::default() }, &x);
+        let (off, _) = run(&morph, &x);
+        assert_eq!(off, a_ref, "MORPH off is scene A with its own settings, untouched by B's");
+        // the middle is the average of the two chains
+        let (half, _) = run(&DiffParams { morph_depth: 50.0, ..morph }, &x);
+        let avg: Vec<f32> = a_ref.iter().zip(&b_ref).map(|(u, v)| 0.5 * (u + v)).collect();
+        assert!(maxd(&half, &avg) < 2e-3, "{}", maxd(&half, &avg));
+    }
+
+    #[test]
+    fn a_tile_in_either_scene_keeps_the_latency_the_same_whatever_the_depth() {
+        let lat = |p: DiffParams| {
+            let mut e = DiffEngine::new(SR);
+            e.set_params(&p);
+            e.latency()
+        };
+        let b_tile = DiffParams { shape_b: 1, tile_b: 1, ..DiffParams::default() };
+        assert_eq!(lat(b_tile), lat(DiffParams { morph_depth: 60.0, ..b_tile }));
+        assert!(lat(b_tile) > lat(DiffParams::default()));
     }
 }

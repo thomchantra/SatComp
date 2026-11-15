@@ -21,8 +21,6 @@ pub fn asym_from(v: &[f32]) -> [f64; SHAPER_COUNT] {
 
 /// Shaper index of the user-drawn curve.
 pub const CUSTOM: i32 = 14;
-/// `ShaperLut::sel` while the table is a blend of two scenes.
-pub const BLEND_SEL: i32 = -3;
 
 /// Max points of the custom curve the SatComp-family editors let you draw, including the two fixed-x end points.
 pub const MAX_PTS: usize = 10;
@@ -460,20 +458,6 @@ impl ShaperLut {
             }
         }
         false
-    }
-
-    /// Install a table that is a blend of two others (`sel` becomes `BLEND_SEL`, so the next `sync` to a plain shaper rebuilds it).
-    /// `direct` writes it at once (a detector moving the blend per block); otherwise it crossfades in like any new table.
-    pub fn set_blend(&mut self, blend: &[f64], periodic: bool, direct: bool) {
-        self.tgt.copy_from_slice(blend);
-        self.periodic = periodic;
-        if direct || !self.fade || self.sel == -1 {
-            self.table.copy_from_slice(&self.tgt);
-            self.steps = 0;
-            self.sel = BLEND_SEL;
-        } else {
-            self.commit(BLEND_SEL);
-        }
     }
 
     /// Updates left in the running table crossfade (0 = settled).

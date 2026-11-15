@@ -32,10 +32,17 @@ pub struct DiffParams {
     /// A (0) or B (1) waveshaper scene: which one the editor shows and edits. A view switch only, it never changes what is heard
     /// (MORPH / MIX does: DEPTH 0 = scene A, 100 % in MIX = scene B).
     pub ab: i32,
-    /// scene B's shaper (scene A's are `shape` / `curve` / `tile`)
+    /// scene B's whole waveshaper module (scene A's is `shape` / `curve` / `tile` / `asym` / `drive` / `bias` / `sat_hp` / `sat_lp` /
+    /// `tone`): each scene is tuned on its own, SAT MIX stays shared
     pub shape_b: i32,
     pub curve_b: Curve,
     pub tile_b: i32,
+    pub asym_b: [f64; SHAPER_COUNT],
+    pub drive_b: f64,
+    pub bias_b: f64,
+    pub sat_hp_b: f64,
+    pub sat_lp_b: f64,
+    pub tone_b: f64,
     /// phase rotator, degrees
     pub phase: f64,
     pub fx_on: bool,
@@ -94,6 +101,12 @@ impl Default for DiffParams {
             shape_b: 0,
             curve_b: Curve::linear(),
             tile_b: 0,
+            asym_b: [100.0; SHAPER_COUNT],
+            drive_b: 0.0,
+            bias_b: 0.0,
+            sat_hp_b: 20.0,
+            sat_lp_b: 20000.0,
+            tone_b: 20000.0,
             phase: 0.0,
             fx_on: false,
             fx_type: 0,
@@ -159,27 +172,39 @@ impl DiffParams {
         self.morph_depth > 0.0
     }
 
-    /// Whether any scene that is heard has an effective tile (its folded / wrapped edges alias).
+    /// Whether either scene has an effective tile (its folded / wrapped edges alias). Counted whether or not the morph is on, so the
+    /// forced oversampling (and with it the reported latency) does not change when DEPTH moves off 0.
     pub fn tile_active(&self) -> bool {
-        self.effective_tile() != 0 || (self.blending() && self.effective_tile_b() != 0)
+        self.effective_tile() != 0 || self.effective_tile_b() != 0
     }
 
+    /// Scene A's saturator settings (the one that is heard when MORPH is off).
     pub fn sat(&self) -> SatParams {
-        // the shaper of `derive` is scene A (the blend towards B is `DiffEngine`'s business)
         let (shape, curve) = self.scene_view(0);
+        self.sat_for(shape, curve, self.drive, self.bias, self.sat_hp, self.sat_lp, self.tone, &self.asym)
+    }
+
+    /// Scene B's saturator settings (blended in by MORPH).
+    pub fn sat_b(&self) -> SatParams {
+        let (shape, curve) = self.scene_view(1);
+        self.sat_for(shape, curve, self.drive_b, self.bias_b, self.sat_hp_b, self.sat_lp_b, self.tone_b, &self.asym_b)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sat_for(&self, shape: i32, curve: Curve, drive: f64, bias: f64, hp: f64, lp: f64, tone: f64, asym: &[f64; SHAPER_COUNT]) -> SatParams {
         SatParams {
             shape,
             curve,
-            drive: self.drive,
-            bias: self.bias,
-            hp: self.sat_hp,
-            lp: self.sat_lp,
-            tone: self.tone,
-            // TILE's folded / wrapped edges alias: x4 oversampling at least
+            drive,
+            bias,
+            hp,
+            lp,
+            tone,
+            // TILE's folded / wrapped edges alias: x4 oversampling at least (for both scenes, so their latencies match)
             os: if self.tile_active() { self.os.max(2) } else { self.os },
             mix: self.sat_mix,
             out_db: 0.0,
-            asym: Some(self.asym[(shape.max(0) as usize).min(SHAPER_COUNT - 1)]),
+            asym: Some(asym[(shape.max(0) as usize).min(SHAPER_COUNT - 1)]),
             steep: false,
         }
     }

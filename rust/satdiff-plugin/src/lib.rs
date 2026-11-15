@@ -89,7 +89,7 @@ pub struct SatDiff {
     engine: DiffEngine,
     last_latency: u32,
     last_curve: [Curve; 2],
-    last_asym: [f64; satcomp_dsp::shapers::SHAPER_COUNT],
+    last_asym: [[f64; satcomp_dsp::shapers::SHAPER_COUNT]; 2],
 }
 
 impl SatDiff {
@@ -113,7 +113,7 @@ impl Default for SatDiff {
             engine,
             last_latency: u32::MAX,
             last_curve: [Curve::linear(); 2],
-            last_asym: [100.0; satcomp_dsp::shapers::SHAPER_COUNT],
+            last_asym: [[100.0; satcomp_dsp::shapers::SHAPER_COUNT]; 2],
         }
     }
 }
