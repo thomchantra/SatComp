@@ -149,7 +149,7 @@ fn script() -> (u64, Vec<String>) {
     }
     r.drag(46.0, 336.0, 46.0, 311.0); // DRIVE
     r.click(275.0, 63.0); // LIMIT off
-    r.drag(200.0, 524.0, 200.0, 510.0); // OUT GAIN
+    r.drag(275.0, 524.0, 275.0, 510.0); // OUT GAIN (under the meters)
     r.click(50.0, 63.0); // scene B
     r.click(18.0, 401.0); // fx on
     r.click(120.0, 443.0); // POST-SAT

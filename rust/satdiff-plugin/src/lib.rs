@@ -22,6 +22,9 @@ pub struct Shared {
     pub scope: Arc<ScopeRing>,
     /// mono output samples (spectrum / oscilloscope)
     pub tap: Arc<TapRing>,
+    /// colour-fx output as mid / side (the fx viewport's stereo-field underlay)
+    pub fx_mid: Arc<TapRing>,
+    pub fx_side: Arc<TapRing>,
     /// input peak per channel, linear (accumulates like `opk`)
     pub ipk: [AtomicF32; 2],
     pub epoch: Instant,
@@ -56,6 +59,8 @@ impl Shared {
         Self {
             scope: Arc::new(ScopeRing::new()),
             tap: Arc::new(TapRing::new()),
+            fx_mid: Arc::new(TapRing::new()),
+            fx_side: Arc::new(TapRing::new()),
             ipk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
             epoch: Instant::now(),
             sample_rate: AtomicF32::new(48000.0),
@@ -97,6 +102,8 @@ impl SatDiff {
         let mut e = DiffEngine::new(sr);
         e.scope = self.shared.scope.clone();
         e.tap = self.shared.tap.clone();
+        e.fx_mid = self.shared.fx_mid.clone();
+        e.fx_side = self.shared.fx_side.clone();
         e
     }
 }
@@ -107,6 +114,8 @@ impl Default for SatDiff {
         let mut engine = DiffEngine::new(48000.0);
         engine.scope = shared.scope.clone();
         engine.tap = shared.tap.clone();
+        engine.fx_mid = shared.fx_mid.clone();
+        engine.fx_side = shared.fx_side.clone();
         Self {
             params: Arc::new(SatDiffParams::default()),
             shared,

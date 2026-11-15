@@ -41,7 +41,7 @@ struct MItem {
 const VU_RANGES: [(f32, &[i32]); 4] = [(48.0, &[-6, -12, -24, -36]), (24.0, &[-3, -6, -12, -18]), (12.0, &[-2, -4, -6, -9]), (6.0, &[-1, -2, -3, -4, -5])];
 
 /// colour-fx types in the dropdown
-const FX_NAMES: [&str; 4] = ["DIFFUSOR", "PHASER", "FLANGER", "RINGMOD"];
+const FX_NAMES: [&str; 5] = ["DIFFUSOR", "PHASER", "FLANGER", "RINGMOD", "FREQ SHIFT"];
 /// oscilloscope windows (ms). Under 500 ms the trace scrolls like a normal scope (newest at the top); from 500 ms it is a hard
 /// wipe that waits for the next transient after each sweep (retrigger) so peaks land on the same row, and free-runs after one
 /// window without one. Both gather the tap samples frame by frame, so any length works.
@@ -145,6 +145,8 @@ pub struct State {
     viz_mode: u8,
     viz_win: usize,
     spec: Spectrum,
+    /// spectrum of the colour fx's side signal ((L-R)/2), the accent-coloured layer of the fx viewport
+    spec_side: Spectrum,
     /// scope wipe: per row (min, max), the row being written, samples gathered for it, last tap head
     sc_rows: Vec<(f32, f32)>,
     sc_row: usize,
@@ -203,6 +205,7 @@ impl State {
             self.ihl_r_t = now;
             self.iclip_t = -10.0;
             self.spec.rebase(now);
+            self.spec_side.rebase(now);
             self.gr_hold_t = now;
             self.sat_clip_t = -10.0;
             self.hold_until = now;
@@ -250,6 +253,7 @@ impl State {
         sp(48, 0, 0, 1.0);
         sp(49, 1, 0, 0.01);
         sp(50, 0, 0, 1.0);
+        sp(56, 3, 0, 0.1);
         let mut st = Self {
             kit,
             pal,
@@ -305,6 +309,7 @@ impl State {
             sc_wait_n: 0.0,
             sc_env: 0.0,
             spec: Spectrum::new(),
+            spec_side: Spectrum::new(),
             sc_rows: Vec::new(),
             sc_row: 0,
             sc_acc: 0.0,
@@ -626,6 +631,7 @@ impl<'a> Gui<'a> {
             46 => if v < 10.0 { format!("{:.2}Hz", v) } else { format!("{:.1}Hz", v) },
             48 => format!("{:+.0}%", v),
             49 => format!("{:.1}ms", v),
+            56 => if v.abs() < 100.0 { format!("{:+.1}Hz", v) } else { format!("{:+.0}Hz", v) },
             50 => ["SIN", "TRI", "SQR", "SAW"][(v + 0.5).floor().clamp(0.0, 3.0) as usize].to_string(),
             3 => format!("{:+.0}%", v),
             4 => {
@@ -1163,12 +1169,17 @@ impl<'a> Gui<'a> {
         let on = self.sget(31) > 0.5;
         let byp = self.sget(26) > 0.5;
         self.set_dk(if byp { 0.5 } else { 1.0 });
-        // enable square
-        let sq = 12.0;
-        self.sqind(x + 2.0, y + (h - sq) * 0.5, sq, on, false, false);
-        self.sq_tog(31, x + 2.0, y + (h - sq) * 0.5, sq);
+        // enable square inside its own stroke box, flush against the dropdown (the two outlines share an edge)
+        let sq = 8.0;
+        self.setc(false);
+        self.cv.boxr(x, y, h, h);
+        self.sqind(x + ((h - sq) * 0.5).floor(), y + ((h - sq) * 0.5).floor(), sq, on, false, false);
+        if self.hit(x, y, h, h) && self.press && self.act == 0 {
+            self.click_set(31, if on { 0.0 } else { 1.0 });
+            self.press = false;
+        }
         // dropdown
-        let (dx, dw) = (x + 22.0, w - 22.0);
+        let (dx, dw) = (x + h - 1.0, w - h + 1.0);
         let ty = (self.sget(32) + 0.5).floor() as usize;
         let hv = self.hit(dx, y, dw, h);
         if hv && (self.press || self.rpress) && self.act == 0 {
@@ -1216,20 +1227,26 @@ impl<'a> Gui<'a> {
         let sr = sh.sample_rate.load(Ordering::Relaxed).max(8000.0);
         let cols = (w - 2.0) as usize;
         let prev = self.dk;
-        // faint spectrum underlay (the shared analyser; it only analyses every 30 ms, so the vertical viz sharing it costs nothing)
+        // two translucent spectrum layers of the colour fx's output (stereo-field check): the summed L/R in the UI colour, the
+        // difference L/R (the sides) in the accent colour. Each analyses every 30 ms
         {
             let now = self.now;
-            let head = sh.tap.w.load(Ordering::Acquire);
-            self.spec.update(now, head, |i| sh.tap.get(i));
-            let db = self.spec.columns(cols, sr);
-            self.set_dk(prev * 0.3);
-            self.setc(false);
-            for (i, v) in db.iter().enumerate() {
-                let bar = (((v + 100.0) / 95.0).clamp(0.0, 1.0) * (h - 3.0)).floor();
-                if bar > 0.0 {
-                    self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - bar, 1.0, bar);
+            let head = sh.fx_mid.w.load(Ordering::Acquire);
+            self.spec.update(now, head, |i| sh.fx_mid.get(i));
+            let head = sh.fx_side.w.load(Ordering::Acquire);
+            self.spec_side.update(now, head, |i| sh.fx_side.get(i));
+            for (layer, accent) in [(0, false), (1, true)] {
+                let db = if layer == 0 { self.spec.columns(cols, sr) } else { self.spec_side.columns(cols, sr) };
+                self.set_dk(prev * 0.3);
+                self.setc(accent);
+                for (i, v) in db.iter().enumerate() {
+                    let bar = (((v + 100.0) / 95.0).clamp(0.0, 1.0) * (h - 3.0)).floor();
+                    if bar > 0.0 {
+                        self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - bar, 1.0, bar);
+                    }
                 }
             }
+            self.setc(false);
         }
         if ty > 0.0 {
             self.fx_viz_other(ty as i32, x, y, w, h, cols, prev, on);
@@ -1354,6 +1371,28 @@ impl<'a> Gui<'a> {
                     put(self, i, v / top);
                 }
                 let _ = sr;
+            }
+            4 => {
+                // a harmonic comb (300 Hz and its first eight multiples) before and after: the dim bars are the input, the bright bars the shifted
+                // copy (every partial moves by the same number of Hz, so the comb stops being harmonic), then the feedback repeats
+                let (shift, fb) = (self.sget(56) as f64, (self.sget(48) as f64 * 0.01).abs());
+                let xi = |f: f64| (((f.max(20.0) / 20.0).ln() / 6.9077553 * cols as f64) as f32).clamp(0.0, cols as f32 - 1.0);
+                let fill = |s: &mut Self, f: f64, a: f64| {
+                    if f >= 20.0 && f < 20000.0 && a > 0.02 {
+                        let bar = (amp as f64 * a.clamp(0.0, 1.0)).floor() as f32;
+                        s.cv.fill(x + 1.0 + xi(f).floor(), y + h - 4.0 - bar, 1.0, bar.max(1.0));
+                    }
+                };
+                for k in 1..=8 {
+                    let f = 300.0 * k as f64;
+                    self.set_dk(prev * if on { 0.35 } else { 0.2 });
+                    fill(self, f, (1.0 - mix).max(0.25));
+                    self.set_dk(prev * if on { 1.0 } else { 0.5 });
+                    for n in 0..4 {
+                        fill(self, f + shift * (n + 1) as f64, mix * fb.powi(n));
+                    }
+                }
+                let _ = &mut put;
             }
             _ => {
                 let (shape, a) = ((self.sget(50) + 0.5).floor() as i32, (self.sget(47) as f64 * 0.01).clamp(0.0, 1.0));
@@ -2742,8 +2781,8 @@ impl<'a> Gui<'a> {
                 self.cell(s6, 164.0, 350.0, 72.0, 38.0, "TONE");
             }
 
-            // ---------- colour section: fx row (enable + type) with PHASE beside it, viewport + PRE-SAT / POST-SAT + IN GAIN, then a
-            // grid of three slots (a dual cell or one normal cell each) with COLOR MIX, SAT MIX and OUT GAIN
+            // ---------- colour section: fx row (enable box + type) with PHASE beside it, viewport + PRE-SAT / POST-SAT + COLOR #1, a row
+            // of COLOR #2..#4, then (below a divider) COLOR MIX and SAT MIX. IN GAIN and OUT GAIN sit under the meters.
             self.fx_row(10.0, 392.0, 149.0, 18.0);
             let fx_on = self.sget(31) > 0.5;
             self.set_dk(if fx_on { bd } else { bd * 0.5 });
@@ -2751,18 +2790,17 @@ impl<'a> Gui<'a> {
             self.fx_pos_btns(87.0, 414.0, 72.0, 38.0);
             self.set_dk(bd);
             if !editing {
-                // PHASE is a small slider row next to the dropdown; the cell it freed holds IN GAIN (a normal cell: the inverted fill
-                // belongs to OUT GAIN alone)
                 self.cell1(30, 164.0, 392.0, 72.0, 18.0, "PHASE");
-                self.cell(27, 164.0, 414.0, 72.0, 38.0, "IN GAIN");
                 self.set_dk(if fx_on { bd } else { bd * 0.5 });
-                // three slots (a dual cell or one normal cell each), filled in order; with more than three parameters the first ones
-                // pair up. The diffusor has four: FREQ | Q, STAGES, SPREAD
-                let slots = [(10.0, 456.0), (87.0, 456.0), (10.0, 498.0)];
+                // four slots (a dual cell or one normal cell each), filled in order; with more parameters than slots the first ones
+                // pair up. Diffusor: FREQ, Q, STAGES, SPREAD. Phaser: FREQ | RATE, DEPTH | STAGES, FDBK, WIDTH. Flanger: DELAY | RATE,
+                // DEPTH, FDBK, WIDTH. Ringmod: FREQ, SHAPE, AMOUNT. Freq shift: SHIFT, DELAY, FDBK, WIDTH
+                let slots = [(164.0, 414.0), (10.0, 456.0), (87.0, 456.0), (164.0, 456.0)];
                 let params: &[(usize, &str)] = match (self.sget(32) + 0.5).floor() as i32 {
                     1 => &[(34, "FREQ"), (46, "RATE"), (47, "DEPTH"), (36, "STAGES"), (48, "FDBK"), (43, "WIDTH")],
                     2 => &[(49, "DELAY"), (46, "RATE"), (47, "DEPTH"), (48, "FDBK"), (43, "WIDTH")],
                     3 => &[(34, "FREQ"), (50, "SHAPE"), (47, "AMOUNT")],
+                    4 => &[(56, "SHIFT"), (49, "DELAY"), (48, "FDBK"), (43, "WIDTH")],
                     _ => &[(34, "FREQ"), (35, "Q"), (36, "STAGES"), (43, "SPREAD")],
                 };
                 let mut si = 0;
@@ -2779,15 +2817,21 @@ impl<'a> Gui<'a> {
                     }
                     si += 1;
                 }
-                self.cell(37, 87.0, 498.0, 72.0, 38.0, "COLOR MIX");
+                // divider between the colour section and the mix / gain stage, with a little more air around it
                 self.set_dk(bd);
-                self.cell(25, 164.0, 456.0, 72.0, 38.0, "SAT MIX");
-                self.cell_o(22, 164.0, 498.0, 72.0, 38.0, "OUT GAIN");
+                self.setc(false);
+                self.cv.fill(10.0, 499.0, 226.0, 1.0);
+                self.set_dk(if fx_on { bd } else { bd * 0.5 });
+                self.cell(37, 10.0, 505.0, 72.0, 38.0, "COLOR MIX");
+                self.set_dk(bd);
+                self.cell(25, 87.0, 505.0, 72.0, 38.0, "SAT MIX");
+                self.cell(27, 244.0, 456.0, 62.0, 38.0, "IN GAIN");
+                self.cell_o(22, 244.0, 505.0, 62.0, 38.0, "OUT GAIN");
             }
 
             // ---------- meters (input hatched, output solid) down the right column beside the cell rows
-            self.in_vu(244.0, 308.0, 27.0, 228.0);
-            self.out_vu(279.0, 308.0, 27.0, 228.0);
+            self.in_vu(244.0, 308.0, 27.0, 144.0);
+            self.out_vu(279.0, 308.0, 27.0, 144.0);
         }
         self.set_dk(1.0);
 

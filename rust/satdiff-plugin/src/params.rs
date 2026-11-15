@@ -27,7 +27,7 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (26, "bypass", 0.0, 1.0, 0.0),
     (30, "phase", -180.0, 180.0, 0.0),
     (31, "fx_on", 0.0, 1.0, 0.0),
-    (32, "fx_type", 0.0, 3.0, 0.0),
+    (32, "fx_type", 0.0, 4.0, 0.0),
     (33, "fx_pos", 0.0, 1.0, 0.0),
     (34, "fx_freq", 20.0, 20000.0, 1000.0),
     (35, "fx_q", 0.3, 8.0, 0.7),
@@ -190,7 +190,7 @@ impl SatDiffParams {
     pub fn from_defaults(d: Option<satcomp_ui::appearance::Defaults>) -> Self {
         Self {
             editor_state: {
-                let (w, h) = d.as_ref().map(|d| d.size((316.0, 550.0))).unwrap_or((316, 550));
+                let (w, h) = d.as_ref().map(|d| d.size((316.0, 556.0))).unwrap_or((316, 556));
                 EguiState::from_size(w, h)
             },
             palette_v2: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.pal_index()).unwrap_or(-1))),
@@ -221,7 +221,7 @@ impl SatDiffParams {
             bypass: BoolParam::new("Bypass", false),
             phase: FloatParam::new("Phase", 0.0, FloatRange::Linear { min: -180.0, max: 180.0 }).with_unit(" deg").with_step_size(1.0),
             fx_on: BoolParam::new("FX On", false),
-            fx_type: IntParam::new("FX Type", 0, IntRange::Linear { min: 0, max: 3 }),
+            fx_type: IntParam::new("FX Type", 0, IntRange::Linear { min: 0, max: 4 }),
             fx_pos: IntParam::new("FX Pre/Post", 0, IntRange::Linear { min: 0, max: 1 }),
             fx_freq: FloatParam::new("FX Freq", 1000.0, FloatRange::Linear { min: 20.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             fx_q: FloatParam::new("FX Q", 0.7, FloatRange::Linear { min: 0.3, max: 8.0 }).with_step_size(0.01),
