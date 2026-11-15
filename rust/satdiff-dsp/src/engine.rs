@@ -78,7 +78,7 @@ pub struct DiffEngine {
     /// output peak per channel, linear
     pub opk: [f64; 2],
     /// input peak per channel, linear (the left meter)
-    /// peak of the saturator's output (after SAT MIX and SAT GAIN, before a POST fx), since the owner last cleared it
+    /// peak of the dry input per channel, since the owner last cleared it
     pub ipk: [f64; 2],
     /// post-saturator (after SAT GAIN) peak, linear
     pub sat_out: f64,
@@ -346,6 +346,9 @@ impl DiffEngine {
     #[inline]
     pub fn tick(&mut self, in_l: f64, in_r: f64) -> (f64, f64) {
         let inp = [in_l, in_r];
+        // the segmented meter reads the dry input, before anything touches it
+        self.ipk[0] = self.ipk[0].max(in_l.abs());
+        self.ipk[1] = self.ipk[1].max(in_r.abs());
         ms_step(&mut self.ims, in_l, in_r, self.rms_c);
         self.dry.advance();
         self.dry.put(inp);
@@ -370,10 +373,6 @@ impl DiffEngine {
 
         // SAT (+ SAT GAIN), then the diffusor when it runs after
         let mut s = self.sat.tick(pre, self.smoothing);
-        // the segmented meter reads the saturator's output (after SAT MIX and SAT GAIN, before a POST fx): over 0 dBFS = the SAT
-        // stage itself clips, whatever the later gain does
-        self.ipk[0] = self.ipk[0].max(s[0].abs());
-        self.ipk[1] = self.ipk[1].max(s[1].abs());
         if self.fx_pos == 1 {
             s = self.fx.tick(s);
         }
@@ -735,23 +734,19 @@ mod tests {
     }
 
     #[test]
-    fn the_segmented_meter_reads_the_saturator_output() {
+    fn the_segmented_meter_reads_the_dry_input() {
         let x: Vec<f32> = (0..24000).map(|i| (0.3 * (2.0 * PI * 90.0 * i as f64 / SR).sin()) as f32).collect();
         let peak = |p: DiffParams| run_peak(&p, &x).1;
-        // saturator off: the input
         let dry = peak(DiffParams::default());
         assert!((dry - 0.3).abs() < 0.01, "{dry}");
-        // SAT GAIN raises it, SAT MIX at 0 takes the shaping (and the gain's reach on the shaped part) away
-        let gained = peak(DiffParams { drive: 30.0, sat_gain: 12.0, ..DiffParams::default() });
-        assert!(gained > 0.9, "{gained}");
-        assert!(peak(DiffParams { drive: 30.0, sat_gain: 12.0, sat_mix: 0.0, ..DiffParams::default() }) < gained * 0.5);
-        // a hard-clipped, hot signal peaks near the clip level: the meter sees the clipped output, not the input
-        let hot = peak(DiffParams { shape: 4, drive: 80.0, ..DiffParams::default() });
-        assert!(hot > 0.85 && hot < 1.2, "{hot}");
-        // over 1.0 when the SAT stage is pushed past full scale
-        assert!(peak(DiffParams { shape: 4, drive: 80.0, sat_gain: 12.0, ..DiffParams::default() }) > 1.0);
-        // OUT GAIN comes after the sat stage: it does not move the meter
-        assert!((peak(DiffParams { drive: 30.0, out_gain: 12.0, ..DiffParams::default() }) - peak(DiffParams { drive: 30.0, ..DiffParams::default() })).abs() < 0.01);
+        // nothing after the input moves it: drive, gains, a PRE or POST fx, the phase rotator
+        for p in [
+            DiffParams { drive: 80.0, sat_gain: 12.0, out_gain: 12.0, ..DiffParams::default() },
+            DiffParams { fx_on: true, fx_pos: 0, fx_freq: 300.0, fx_q: 6.0, fx_stages: 12, phase: 90.0, ..DiffParams::default() },
+            DiffParams { fx_on: true, fx_pos: 1, ..DiffParams::default() },
+        ] {
+            assert!((peak(p) - dry).abs() < 1e-6);
+        }
     }
 
     fn run_peak(p: &DiffParams, x: &[f32]) -> (Vec<f32>, f64) {

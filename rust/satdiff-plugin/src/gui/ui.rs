@@ -26,6 +26,7 @@ enum MenuKind {
     Preset,
     Fx,
     Os,
+    Morph,
 }
 
 /// kind: 0 selectable item, 1 header (dim, not selectable), 2 separator
@@ -162,6 +163,8 @@ pub struct State {
     even: bool,
     // sat plot
     lut: ShaperLut,
+    /// the other scene's table (the faint underlay in the plot)
+    lut2: ShaperLut,
     /// custom-curve draw mode (pencil) and the point being dragged
     curve_edit: bool,
     /// draw view tool: true = symmetry (odd curve), false = free draw
@@ -300,6 +303,7 @@ impl State {
             chg: false,
             even: false,
             lut: ShaperLut::new(0),
+            lut2: ShaperLut::new(0),
             curve_edit: false,
             sym_mode: true,
             edit_seen: false,
@@ -722,9 +726,8 @@ impl<'a> Gui<'a> {
         self.sat_lv = self.env.shared.sat_pk.swap(0.0, Ordering::Relaxed); // drained so it cannot saturate
     }
 
-    /// Saturator output level (after SAT MIX and SAT GAIN), vertical, hatched (every other row) so it reads apart from the solid
-    /// output meter. Same ranges as the output meter (click the bars to cycle them); the clip lamp on top lights for 1 s after any
-    /// sample over 0 dBFS, so it says whether the SAT stage itself clips.
+    /// Dry input level, vertical, hatched (every other row) so it reads apart from the solid output meter. Same ranges as the
+    /// output meter (click the bars to cycle them); the IN lamp on top lights for 1 s after any sample over 0 dBFS.
     fn in_vu(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let sh = self.env.shared;
         let pa = sh.ipk[0].swap(0.0, Ordering::Relaxed);
@@ -732,7 +735,7 @@ impl<'a> Gui<'a> {
         if pa.max(pb) >= 1.0 {
             self.iclip_t = self.now;
         }
-        let lamp = 12.0;
+        let lamp = 18.0;
         let (by, bh) = (y + lamp + 1.0, h - lamp - 1.0);
         if self.hit(x, by, w, bh) && self.press && self.act == 0 {
             self.vu_ri = (self.vu_ri + 1) % VU_RANGES.len();
@@ -781,9 +784,12 @@ impl<'a> Gui<'a> {
         self.setc(clip);
         if clip {
             self.cv.fill(x, y, w, lamp);
+            self.cv.setbg();
         } else {
             self.cv.boxr(x, y, w, lamp);
         }
+        self.cv.set_font(1);
+        self.cv.textc(x, y + ((lamp - 8.0) * 0.5).floor(), w, "IN");
         self.setc(false);
     }
 
@@ -799,7 +805,7 @@ impl<'a> Gui<'a> {
             self.clip_lat = true;
             self.clip_t = self.now;
         }
-        let lamp = 12.0;
+        let lamp = 18.0;
         let (by, bh) = (y + lamp + 1.0, h - lamp - 1.0);
         if self.hit(x, y, w, lamp) && self.press && self.act == 0 {
             self.opk_max = 0.0;
@@ -856,9 +862,12 @@ impl<'a> Gui<'a> {
         self.setc(clip);
         if clip {
             self.cv.fill(x, y, w, lamp);
+            self.cv.setbg();
         } else {
             self.cv.boxr(x, y, w, lamp);
         }
+        self.cv.set_font(1);
+        self.cv.textc(x, y + ((lamp - 8.0) * 0.5).floor(), w, "OUT");
         self.setc(false);
     }
 
@@ -1061,10 +1070,18 @@ impl<'a> Gui<'a> {
         let dir = ((self.sget(39) + 0.5).floor() as i32).clamp(0, 2);
         let mix = dir == 2;
         let depth_on = self.sget(40) > 0.0;
-        let (th, hv) = (30.0, self.hit(x, y, w, 30.0));
+        // the three cells share 111 px, half of the plot's height
+        let (th, dh, sh_, dy, sy) = (36.0, 34.0, 35.0, 39.0, 76.0);
+        let hv = self.hit(x, y, w, th);
         if hv && self.press && self.act == 0 {
             self.click_set(39, [0.0, 1.0, 2.0][((dir + 1) % 3) as usize]); // MIX > A>B > B>A > MIX
             self.press = false;
+        }
+        if hv && self.rpress && self.act == 0 {
+            // right click: the modes as a list
+            let items = ["MIX  A <> B", "A > B  DETECT", "B > A  DETECT"].iter().map(|s| s.to_string()).collect();
+            self.open_menu(MenuKind::Morph, x - 66.0, y + th, items, [1usize, 2, 0][dir as usize]);
+            self.rpress = false;
         }
         if hv {
             self.setc(false);
@@ -1075,7 +1092,7 @@ impl<'a> Gui<'a> {
             self.cv.boxr(x, y, w, th);
         }
         self.cv.set_font(1);
-        self.cv.textc(x, y + 3.0, w, if mix { "XFADE" } else { "MORPH" });
+        self.cv.textc(x, y + 4.0, w, if mix { "XFADE" } else { "MORPH" });
         let (l, r) = if dir == 1 { ("B", "A") } else { ("A", "B") };
         let cy = y + 20.0;
         self.cv.text(x + w * 0.5 - 14.0, cy - 4.0, l);
@@ -1089,18 +1106,27 @@ impl<'a> Gui<'a> {
             self.cv.tri((x + w * 0.5 + 1.0, cy - 3.0), (x + w * 0.5 + 1.0, cy + 3.0), (x + w * 0.5 + 5.0, cy));
         }
         self.cv.text(x + w * 0.5 + 8.0, cy - 4.0, r);
+        // where the blend leans right now: a thin line along the bottom edge growing from the centre, left = scene A, right = B
+        // (nothing but the centre notch while the morph is off)
+        let pos = self.env.shared.morph_pos.load(Ordering::Relaxed).clamp(0.0, 1.0);
+        let (cx, half) = (x + 2.0 + ((w - 4.0) * 0.5).floor(), (w - 4.0) * 0.5);
+        let len = if depth_on { ((pos - 0.5).abs() * 2.0 * half).floor() } else { 0.0 };
+        if len >= 1.0 {
+            self.cv.fill(if pos < 0.5 { cx - len } else { cx }, y + th - 4.0, len, 2.0);
+        }
+        self.cv.fill(cx, y + th - 6.0, 1.0, 4.0);
         self.setc(false);
-        self.cell_acc(40, x, y + 33.0, w, 32.0, if mix { "MIX" } else { "DEPTH" }, depth_on, mix);
+        self.cell_acc(40, x, y + dy, w, dh, if mix { "MIX" } else { "DEPTH" }, depth_on, mix);
         if mix {
             // SPEED belongs to the detector: greyed out and inert while the crossfade is static
             let keep = self.dk;
             self.set_dk(keep * 0.35);
             self.mask_in();
-            self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", false, false);
+            self.cell_acc(41, x, y + sy, w, sh_, "SPEED", false, false);
             self.unmask_in();
             self.set_dk(keep);
         } else {
-            self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", depth_on, false);
+            self.cell_acc(41, x, y + sy, w, sh_, "SPEED", depth_on, false);
         }
     }
 
@@ -1401,6 +1427,31 @@ impl<'a> Gui<'a> {
         self.setc(false);
     }
 
+    /// Secondary grid: the domain split 10 x 10, drawn as sparse, faint, dim dashes (the centre cross is drawn separately).
+    fn grid10(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let prev = self.dk;
+        self.set_dk(prev * 0.3);
+        self.setc(false);
+        for i in 1..10 {
+            if i == 5 {
+                continue;
+            }
+            let gx = (x + w * i as f32 / 10.0).floor();
+            let gy = (y + h * i as f32 / 10.0).floor();
+            let mut t = 0.0;
+            while t < h {
+                self.cv.fill(gx, y + t, 1.0, 2.0f32.min(h - t));
+                t += 8.0;
+            }
+            let mut t = 0.0;
+            while t < w {
+                self.cv.fill(x + t, gy, 2.0f32.min(w - t), 1.0);
+                t += 8.0;
+            }
+        }
+        self.set_dk(prev);
+    }
+
     fn draw_plot(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let sh = self.env.shared;
         let dsp = self.env.dsp;
@@ -1409,6 +1460,8 @@ impl<'a> Gui<'a> {
         let bias = (dsp.bias * 0.01) as f32;
         let (shape, curve) = dsp.scene_view(self.ab());
         self.lut.sync(shape, &curve);
+        let (shape2, curve2) = dsp.scene_view(1 - self.ab());
+        self.lut2.sync(shape2, &curve2);
         // static curve as heard: the shaper minus the part of its even half that ASYM removes
         let ak = dsp.asym[(shape.max(0) as usize).min(dsp.asym.len() - 1)] * 0.01;
         let eff = move |l: &ShaperLut, v: f64| {
@@ -1451,6 +1504,10 @@ impl<'a> Gui<'a> {
         }
         self.setc(self.act == 27);
         self.cv.boxr(x, y, w, h);
+        if !self.curve_edit {
+            self.grid10(x + 1.0, y + 1.0, w - 2.0, h - 2.0);
+        }
+        self.setc(self.act == 27);
         for i in 0..(w / 2.0).floor() as i32 {
             self.cv.fill(x + i as f32 * 2.0, y + (h / 2.0).floor(), 1.0, 1.0);
         }
@@ -1465,6 +1522,28 @@ impl<'a> Gui<'a> {
         if self.curve_edit {
             self.draw_curve_edit(x, y, w, h);
             return;
+        }
+        // the other scene as a faint underlay (same drive and bias), under the scene being edited
+        if sat_on {
+            let ak2 = dsp.asym[(shape2.max(0) as usize).min(dsp.asym.len() - 1)] * 0.01;
+            let r2 = 0.5 * (1.0 - ak2);
+            let prev = self.dk;
+            self.set_dk(prev * 0.35);
+            self.setc(false);
+            let (mut lx, mut ly) = (0.0, 0.0);
+            let un = (w as usize).max(64);
+            for i in 0..=un {
+                let vx = -1.0 + 2.0 * i as f32 / un as f32;
+                let v = (vx * pre + bias) as f64;
+                let vy = ((self.lut2.eval(v) * (1.0 - r2) - r2 * self.lut2.eval(-v)) as f32).clamp(-1.0, 1.0);
+                let (qx, qy) = (x + (vx + 1.0) * 0.5 * (w - 1.0), y + (1.0 - (vy + 1.0) * 0.5) * (h - 1.0));
+                if i > 0 {
+                    self.cv.line(lx, ly, qx, qy);
+                }
+                lx = qx;
+                ly = qy;
+            }
+            self.set_dk(prev);
         }
         let pk = sh.sat_vz.load(Ordering::Relaxed).min(1.0);
         // one point per pixel column: a tiled curve under drive folds / wraps many times across the plot
@@ -1605,6 +1684,7 @@ impl<'a> Gui<'a> {
         let (ex, ey, ew, eh) = (x + 22.0, y + 22.0, w - 44.0, h - 44.0);
         let (px, py) = (|vx: f32| ex + (vx + 1.0) * 0.5 * (ew - 1.0), |vy: f32| ey + (1.0 - (vy + 1.0) * 0.5) * (eh - 1.0));
         let to_v = |mx: f32, my: f32| (((mx - ex) / (ew - 1.0)) * 2.0 - 1.0, 1.0 - ((my - ey) / (eh - 1.0)) * 2.0);
+        self.grid10(ex, ey, ew - 1.0, eh - 1.0);
         // working lists: the whole curve, or in symmetry mode its right half (x > 0, ending at x = 1); the left is derived.
         // `hb[i]`: free = the bend of the segment that starts at point i, symmetry = of the one that ends at it (0 = across the centre)
         let (mut hv, mut hb): (Vec<(f32, f32)>, Vec<f32>) = if sym {
@@ -1956,6 +2036,7 @@ impl<'a> Gui<'a> {
                                 MenuKind::Preset => 3,
                                 MenuKind::Fx => 4,
                                 MenuKind::Os => 6,
+                                MenuKind::Morph => 7,
                             }));
                         } else {
                             return self.eat_menu_input();
@@ -1985,6 +2066,7 @@ impl<'a> Gui<'a> {
                         }
                     }
                     6 => self.click_set(7, id as f32),
+                    7 => self.click_set(39, [2.0, 0.0, 1.0][(id as usize).min(2)]),
                     _ => self.preset_action(id),
                 }
             }
@@ -2351,7 +2433,7 @@ impl<'a> Gui<'a> {
         self.cv.set_font(2);
         // TILE on the drawn curve runs at x4 at least: show what is actually running
         let forced = self.env.dsp.tile_active();
-        self.cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, &format!("{}x", 1 << if forced { os.max(2) } else { os }));
+        self.cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, &format!("{}x{}", 1 << if forced { os.max(2) } else { os }, if forced && os < 2 { "*" } else { "" }));
         self.setc(false);
     }
 
@@ -2544,7 +2626,7 @@ impl<'a> Gui<'a> {
             // ---------- plot (the sat plot / draw view); right column: MORPH, then the viz down to the plot's bottom
             self.draw_plot(10.0, 76.0, 226.0, 226.0);
             self.morph_block(244.0, 76.0, 62.0);
-            self.vviz(244.0, 181.0, 62.0, 121.0);
+            self.vviz(244.0, 191.0, 62.0, 111.0);
 
             // ---------- sat cells: three columns of 72 (just wide enough for the longest label + value pair)
             if editing {

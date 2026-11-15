@@ -35,6 +35,8 @@ pub struct Shared {
     pub sat_pk: AtomicF32,
     /// decaying peak of the saturator input (live dot on the plot)
     pub sat_vz: AtomicF32,
+    /// where the MORPH blend sits right now, 0 (scene A) .. 1 (scene B)
+    pub morph_pos: AtomicF32,
     /// smoothed output mean-square (RMS readout)
     pub fms: AtomicF32,
     /// loudness change across the saturator (before SAT GAIN), dB
@@ -62,6 +64,7 @@ impl Shared {
             gr_pk: AtomicF32::new(0.0),
             sat_pk: AtomicF32::new(0.0),
             sat_vz: AtomicF32::new(0.0),
+            morph_pos: AtomicF32::new(0.0),
             fms: AtomicF32::new(1e-9),
             sat_db: AtomicF32::new(0.0),
             sat_meas: AtomicBool::new(false),
@@ -188,6 +191,7 @@ impl Plugin for SatDiff {
         sh.sat_pk.fetch_max(e.sat_out as f32, Ordering::Relaxed);
         e.sat_out = 0.0;
         sh.sat_vz.store(e.sat_vz as f32, Ordering::Relaxed);
+        sh.morph_pos.store(e.morph_pos() as f32, Ordering::Relaxed);
         sh.fms.store(e.fms as f32, Ordering::Relaxed);
         sh.sat_db.store(e.sat_db as f32, Ordering::Relaxed);
         sh.sat_meas.store(e.sat_matching(), Ordering::Relaxed);
