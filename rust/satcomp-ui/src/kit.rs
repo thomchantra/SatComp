@@ -36,6 +36,11 @@ pub struct Meta {
 pub struct Kit {
     pub meta: Vec<Meta>,
     pub touched: Vec<bool>,
+    /// per slot: the value the editor last asked for and when (kit time); NaN = none. While it is fresh the editor shows it instead
+    /// of the parameter: a host applies a UI write only inside a later audio callback (nih-plug does not set the value locally
+    /// while audio runs), a delay of one or more host blocks, up to ~100 ms with PulseAudio, and a slider that only moves when the
+    /// host's answer arrives lags behind the mouse.
+    pub pend: Vec<(f32, f64)>,
     /// the widget being dragged: 1..99 = slot number (vertical drag), >= 100 = viewport drags owned by the page
     pub act: i32,
     pub act_t: f32,
@@ -58,11 +63,27 @@ pub struct Kit {
     pub dk: f32,
 }
 
+/// how long a written value is shown in place of the parameter (the host answers within a few blocks; this covers PulseAudio's
+/// 100 ms plus a slow frame, and is short enough that an automation move right after is not hidden for long)
+const PENDING_S: f64 = 0.6;
+
 impl Kit {
+    /// The value the editor wrote to slot `n` within the last `PENDING_S` seconds, if any.
+    pub fn pending(&self, n: usize) -> Option<f32> {
+        let (v, t) = *self.pend.get(n)?;
+        // (a clock that went backwards, the editor was reopened, counts as expired)
+        if v.is_finite() && self.now >= t && self.now - t < PENDING_S {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
     pub fn new(slots: usize) -> Self {
         Self {
             meta: vec![Meta::default(); slots],
             touched: vec![false; slots],
+            pend: vec![(f32::NAN, 0.0); slots],
             act: 0,
             act_t: 0.0,
             last_my: 0.0,
@@ -128,6 +149,9 @@ pub trait Widgets<'c> {
 
     // ------------------------------------------------------------------ params (slot-number addressing)
     fn sget(&self, n: usize) -> f32 {
+        if let Some(v) = self.kit_ref().pending(n) {
+            return v;
+        }
         match self.param_ptr(n) {
             Some(p) => {
                 let m = self.kit_ref().meta[n];
@@ -145,6 +169,8 @@ pub trait Widgets<'c> {
             let m = self.kit().meta[n];
             let norm = ((v - m.min) / (m.max - m.min)).clamp(0.0, 1.0);
             let first = !self.kit().touched[n];
+            let now = self.kit().now;
+            self.kit().pend[n] = (v.clamp(m.min, m.max), now);
             unsafe {
                 if first {
                     self.host().raw_begin_set_parameter(p);
@@ -485,3 +511,30 @@ pub trait Widgets<'c> {
         }
     }
 }
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    #[test]
+    fn a_written_value_is_shown_until_it_expires_and_a_new_clock_expires_it() {
+        let mut k = Kit::new(4);
+        k.now = 10.0;
+        assert_eq!(k.pending(1), None);
+        k.pend[1] = (3.5, 10.0);
+        assert_eq!(k.pending(1), Some(3.5));
+        k.now = 10.5;
+        assert_eq!(k.pending(1), Some(3.5), "still fresh");
+        k.now = 10.7;
+        assert_eq!(k.pending(1), None, "expired: the parameter shows again");
+        // a restarted egui clock must not keep it alive
+        k.now = 2.0;
+        assert_eq!(k.pending(1), None);
+        assert_eq!(k.pending(99), None, "unknown slot");
+        // a fresh write after the first
+        k.pend[1] = (4.0, 2.0);
+        k.now = 2.1;
+        assert_eq!(k.pending(1), Some(4.0));
+    }
+}
+
