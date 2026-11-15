@@ -279,7 +279,7 @@ impl State {
             ihl_l_t: 0.0,
             ihl_r_t: 0.0,
             iclip_t: -10.0,
-            viz_mode: 0,
+            viz_mode: 1, // oscilloscope first; right-click flips to the spectrum
             viz_win: 8,
             sc_scroll: false,
             sc_wait: false,
@@ -555,7 +555,7 @@ impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ formatting
     fn fmt_slot(&self, n: usize, v: f32) -> String {
         match n {
-            2 | 25 | 11 | 37 | 40 | 41 => format!("{:.0}%", v),
+            2 | 25 | 11 | 36 | 37 | 40 | 41 | 43 => format!("{:.0}%", v),
             30 => format!("{:+.0}\u{b0}", v),
             34 => {
                 if v >= 10000.0 {
@@ -567,7 +567,6 @@ impl<'a> Gui<'a> {
                 }
             }
             35 => format!("{:.2}", v),
-            36 => format!("{:.0}", v),
             3 => format!("{:+.0}%", v),
             4 => {
                 if v <= 20.5 {
@@ -1043,8 +1042,9 @@ impl<'a> Gui<'a> {
         self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", depth_on);
     }
 
-    /// Row with the fx enable square, the fx type dropdown (right-click anywhere or click the arrow) and PRE | POST.
-    fn fx_row(&mut self, x: f32, y: f32, h: f32) {
+    /// Full-width row: the fx enable square and the fx type dropdown (right-click anywhere or click the arrow). PRE-SAT | POST-SAT
+    /// lives beside the viewport (`fx_pos_btns`).
+    fn fx_row(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let on = self.sget(31) > 0.5;
         let byp = self.sget(26) > 0.5;
         self.set_dk(if byp { 0.5 } else { 1.0 });
@@ -1053,7 +1053,7 @@ impl<'a> Gui<'a> {
         self.sqind(x + 2.0, y + (h - sq) * 0.5, sq, on, false, false);
         self.sq_tog(31, x + 2.0, y + (h - sq) * 0.5, sq);
         // dropdown
-        let (dx, dw) = (x + 22.0, 127.0);
+        let (dx, dw) = (x + 22.0, w - 22.0);
         let ty = (self.sget(32) + 0.5).floor() as usize;
         let hv = self.hit(dx, y, dw, h);
         let arrow = self.hit(dx + dw - 24.0, y, 24.0, h);
@@ -1076,17 +1076,23 @@ impl<'a> Gui<'a> {
         let (ax, ay) = (dx + dw - 14.0, y + h * 0.5);
         self.cv.tri((ax - 4.0, ay - 2.0), (ax + 4.0, ay - 2.0), (ax, ay + 2.0));
         self.setc(false);
-        // PRE | POST
-        let pos = (self.sget(33) + 0.5).floor() as usize;
-        if let Some(i) = self.seg(x + 154.0, y, 72.0, h, &["PRE", "POST"], pos) {
-            self.click_set(33, i as f32);
-            self.press = false;
-        }
         self.set_dk(1.0);
     }
 
-    /// The fx viewport: group delay of the diffusor (N cascaded second-order allpass stages) over 20 Hz..20 kHz, with a marker
-    /// at FREQ. Other fx types have no view yet.
+    /// PRE-SAT over POST-SAT, two stacked buttons beside the fx viewport (the active one is drawn filled).
+    fn fx_pos_btns(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let pos = (self.sget(33) + 0.5).floor() as usize;
+        let bh = ((h - 2.0) * 0.5).floor();
+        for (i, lab) in ["PRE-SAT", "POST-SAT"].iter().enumerate() {
+            if self.hbtn(x, y + i as f32 * (bh + 2.0), w, bh, lab, (pos == i) as u8) {
+                self.click_set(33, i as f32);
+            }
+        }
+    }
+
+    /// The fx viewport: a faint spectrum of the output underneath, and over it the group delay of the diffusor (the sum of its
+    /// N second-order allpass stages) over 20 Hz..20 kHz. Every stage adds a bump at its own centre, so SPREAD fans the bumps
+    /// out and STAGES raises them (the baseline ticks mark the centres). Other fx types have no view yet.
     fn fx_viz(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let on = self.sget(31) > 0.5;
         self.setc(false);
@@ -1097,50 +1103,87 @@ impl<'a> Gui<'a> {
             self.cv.textc(x, y + (h * 0.5 - 4.0).floor(), w, "SOON");
             return;
         }
-        let sr = self.env.shared.sample_rate.load(Ordering::Relaxed).max(8000.0) as f64;
-        let (f0, q, n) = (self.sget(34) as f64, self.sget(35) as f64, (self.sget(36) + 0.5).floor() as f64);
-        let w0 = 2.0 * std::f64::consts::PI * f0 / sr;
-        let alpha = w0.sin() / (2.0 * q);
-        let a0 = 1.0 + alpha;
-        let (a1, a2) = (-2.0 * w0.cos() / a0, (1.0 - alpha) / a0);
-        let phase = |om: f64| -> f64 {
-            // allpass: H = (a2 + a1 z^-1 + z^-2) / (1 + a1 z^-1 + a2 z^-2)
-            let (c1, s1, c2, s2) = (om.cos(), om.sin(), (2.0 * om).cos(), (2.0 * om).sin());
-            let (nr, ni) = (a2 + a1 * c1 + c2, -(a1 * s1 + s2));
-            let (dr, di) = (1.0 + a1 * c1 + a2 * c2, -(a1 * s1 + a2 * s2));
-            ni.atan2(nr) - di.atan2(dr)
-        };
+        let sh = self.env.shared;
+        let sr = sh.sample_rate.load(Ordering::Relaxed).max(8000.0);
         let cols = (w - 2.0) as usize;
+        let prev = self.dk;
+        // faint spectrum underlay (the shared analyser; it only analyses every 30 ms, so the vertical viz sharing it costs nothing)
+        {
+            let now = self.now;
+            let head = sh.tap.w.load(Ordering::Acquire);
+            self.spec.update(now, head, |i| sh.tap.get(i));
+            let db = self.spec.columns(cols, sr);
+            self.set_dk(prev * 0.3);
+            self.setc(false);
+            for (i, v) in db.iter().enumerate() {
+                let bar = (((v + 100.0) / 95.0).clamp(0.0, 1.0) * (h - 3.0)).floor();
+                if bar > 0.0 {
+                    self.cv.fill(x + 1.0 + i as f32, y + h - 1.0 - bar, 1.0, bar);
+                }
+            }
+        }
+        let (f0, q) = (self.sget(34) as f64, (self.sget(35) as f64).clamp(0.3, 8.0));
+        let (pct, spread) = (self.sget(36) as f64, self.sget(43) as f64);
+        let n = satdiff_dsp::diffuse::stages_from_pct(pct) as usize;
+        let srd = sr as f64;
+        let stage_gd = |fc: f64, om: f64| -> f64 {
+            let w0 = 2.0 * std::f64::consts::PI * fc / srd;
+            let alpha = w0.sin() / (2.0 * q);
+            let a0 = 1.0 + alpha;
+            let (a1, a2) = (-2.0 * w0.cos() / a0, (1.0 - alpha) / a0);
+            let phase = |om: f64| -> f64 {
+                // allpass: H = (a2 + a1 z^-1 + z^-2) / (1 + a1 z^-1 + a2 z^-2)
+                let (c1, s1, c2, s2) = (om.cos(), om.sin(), (2.0 * om).cos(), (2.0 * om).sin());
+                let (nr, ni) = (a2 + a1 * c1 + c2, -(a1 * s1 + s2));
+                let (dr, di) = (1.0 + a1 * c1 + a2 * c2, -(a1 * s1 + a2 * s2));
+                ni.atan2(nr) - di.atan2(dr)
+            };
+            let d = om * 0.002;
+            let mut dp = phase(om + d) - phase(om - d);
+            while dp > std::f64::consts::PI {
+                dp -= 2.0 * std::f64::consts::PI;
+            }
+            while dp < -std::f64::consts::PI {
+                dp += 2.0 * std::f64::consts::PI;
+            }
+            (-dp / (2.0 * d)).max(0.0)
+        };
+        let centres: Vec<f64> = (0..n).map(|k| satdiff_dsp::diffuse::stage_freq(f0, spread, k, n)).collect();
+        let stacked = spread < 0.01 || n == 1;
         let gd: Vec<f64> = (0..cols)
             .map(|i| {
                 let f = 20.0 * (i as f64 / cols as f64 * 6.9077553).exp();
-                let om = 2.0 * std::f64::consts::PI * f / sr;
-                let d = om * 0.002;
-                let mut dp = phase(om + d) - phase(om - d);
-                while dp > std::f64::consts::PI {
-                    dp -= 2.0 * std::f64::consts::PI;
+                let om = 2.0 * std::f64::consts::PI * f / srd;
+                if stacked {
+                    stage_gd(centres[0], om) * n as f64
+                } else {
+                    centres.iter().map(|&fc| stage_gd(fc, om)).sum()
                 }
-                while dp < -std::f64::consts::PI {
-                    dp += 2.0 * std::f64::consts::PI;
-                }
-                (-dp / (2.0 * d) * n).max(0.0)
             })
             .collect();
         let top = gd.iter().cloned().fold(1.0, f64::max);
-        let prev = self.dk;
+        let amp = h - 9.0;
         self.set_dk(prev * if on { 1.0 } else { 0.5 });
         self.setc(false);
         let mut last: Option<(f32, f32)> = None;
         for (i, g) in gd.iter().enumerate() {
-            let (px, py) = (x + 1.0 + i as f32, y + h - 3.0 - ((h - 8.0) * (*g / top) as f32).floor());
+            let (px, py) = (x + 1.0 + i as f32, y + h - 4.0 - (amp * (*g / top) as f32).floor());
             if let Some((lx, ly)) = last {
                 self.cv.line(lx, ly, px, py);
             }
             last = Some((px, py));
         }
+        // one tick per stage centre on the bottom edge (stacked stages share a tick)
+        let xi = |fc: f64| (((fc.max(20.0) / 20.0).ln() / 6.9077553 * cols as f64) as f32).clamp(0.0, cols as f32 - 1.0);
+        for fc in &centres {
+            self.cv.fill(x + 1.0 + xi(*fc).floor(), y + h - 3.0, 1.0, 2.0);
+            if stacked {
+                break;
+            }
+        }
         // marker at FREQ, on the curve
-        let fi = (((f0 as f32).max(20.0) / 20.0).ln() / 6.9077553 * cols as f32).clamp(0.0, cols as f32 - 1.0) as usize;
-        let my = y + h - 3.0 - ((h - 8.0) * (gd[fi] / top) as f32).floor();
+        let fi = xi(f0) as usize;
+        let my = y + h - 4.0 - (amp * (gd[fi] / top) as f32).floor();
         self.setc(on);
         self.cv.fill(x + 1.0 + fi as f32 - 1.0, my - 1.0, 3.0, 3.0);
         self.set_dk(prev);
@@ -2310,25 +2353,29 @@ impl<'a> Gui<'a> {
                 self.cell(6, 164.0, 350.0, 72.0, 38.0, "TONE");
             }
 
-            // ---------- phase section: fx row, then viz + PHASE + SAT MIX, then the fx params and OUT GAIN
-            self.fx_row(10.0, 392.0, 18.0);
+            // ---------- colour section: fx row (enable + type), viewport + PRE-SAT / POST-SAT + PHASE, then a grid of three
+            // slots (a dual cell or one normal cell each) with COLOR MIX, SAT MIX and OUT GAIN
+            self.fx_row(10.0, 392.0, 226.0, 18.0);
             let fx_on = self.sget(31) > 0.5;
             self.set_dk(if fx_on { bd } else { bd * 0.5 });
             self.fx_viz(10.0, 414.0, 72.0, 38.0);
+            self.fx_pos_btns(87.0, 414.0, 72.0, 38.0);
             self.set_dk(bd);
             if !editing {
-                self.cell(30, 87.0, 414.0, 72.0, 38.0, "PHASE");
-                self.cell(25, 164.0, 414.0, 72.0, 38.0, "SAT MIX");
+                self.cell(30, 164.0, 414.0, 72.0, 38.0, "PHASE");
                 self.set_dk(if fx_on { bd } else { bd * 0.5 });
+                // diffusor slots: FREQ | Q, STAGES | SPREAD; the third slot is free for the next fx
                 self.cell2(34, 35, 10.0, 456.0, 72.0, 38.0, "FREQ", "Q");
-                self.cell2(36, 37, 87.0, 456.0, 72.0, 38.0, "STAGES", "D.MIX");
+                self.cell2(36, 43, 87.0, 456.0, 72.0, 38.0, "STAGES", "SPREAD");
+                self.cell(37, 87.0, 498.0, 72.0, 38.0, "COLOR MIX");
                 self.set_dk(bd);
-                self.cell_o(22, 164.0, 456.0, 72.0, 38.0, "OUT GAIN");
+                self.cell(25, 164.0, 456.0, 72.0, 38.0, "SAT MIX");
+                self.cell_o(22, 164.0, 498.0, 72.0, 38.0, "OUT GAIN");
             }
 
             // ---------- meters (input hatched, output solid) down the right column beside the cell rows
-            self.in_vu(244.0, 308.0, 27.0, 186.0);
-            self.out_vu(279.0, 308.0, 27.0, 186.0);
+            self.in_vu(244.0, 308.0, 27.0, 228.0);
+            self.out_vu(279.0, 308.0, 27.0, 228.0);
         }
         self.set_dk(1.0);
 

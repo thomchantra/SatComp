@@ -149,10 +149,10 @@ fn script() -> (u64, Vec<String>) {
     }
     r.drag(46.0, 336.0, 46.0, 311.0); // DRIVE
     r.click(275.0, 63.0); // LIMIT off
-    r.drag(200.0, 482.0, 200.0, 468.0); // OUT GAIN
+    r.drag(200.0, 524.0, 200.0, 510.0); // OUT GAIN
     r.click(50.0, 63.0); // scene B
     r.click(18.0, 401.0); // fx on
-    r.click(220.0, 401.0); // fx POST
+    r.click(120.0, 443.0); // POST-SAT
     r.click(135.0, 378.0); // tile REPEAT
     r.click(275.0, 86.0); // morph direction
     r.drag(275.0, 130.0, 275.0, 118.0); // morph DEPTH
@@ -238,6 +238,10 @@ fn clicking_the_output_bars_cycles_the_range_without_writing_parameters() {
 fn the_scope_outline_mode_draws_and_differs_from_solid() {
     let run = |solid: bool| {
         let mut r = Rig::with_params(|p| p.fft_solid = Arc::new(std::sync::atomic::AtomicBool::new(solid)));
+        for _ in 0..6 {
+            r.frame(vec![]);
+        }
+        r.rclick(275.0, 240.0); // the vertical viz starts as the oscilloscope: right-click for the spectrum, where the fill shows
         for _ in 0..6 {
             r.frame(vec![]);
         }
