@@ -32,10 +32,12 @@ add(35, "fx_q", "FX Q", "f", 0.3, 8, 0.7, 0.01, "")
 add(36, "fx_stages", "FX Stages", "f", 0, 100, 20, 1, " %")   # percent of the 100-stage cap (0 % = 1 stage)
 add(37, "fx_mix", "Color Mix", "f", 0, 100, 100, 1, " %")  # wet / dry of the whole colour fx
 add(38, "tile", "Tile", "int", 0, 2, 0)
-add(39, "morph_dir", "Morph Dir", "int", 0, 1, 0)
+add(39, "morph_dir", "Morph Mode", "int", 0, 2, 2)  # 0 A>B, 1 B>A (detector), 2 MIX (static crossfade by depth)
 add(40, "morph_depth", "Morph Depth", "f", 0, 100, 0, 1, " %")
 add(41, "morph_speed", "Morph Speed", "f", 0, 100, 50, 1, " %")
 add(42, "ab", "Scene A/B", "int", 0, 1, 0)
+add(44, "shape_b", "Shape B", "int", 0, 14, 0)     # scene B (scene A: shape, custom curve, tile)
+add(45, "tile_b", "Tile B", "int", 0, 2, 0)
 add(43, "fx_spread", "FX Spread", "f", 0, 100, 50, 1, " %")  # fans the diffusor stages out over up to 8 octaves around FREQ
 
 def f(x):
@@ -60,6 +62,7 @@ o.append('    /// Active user colour theme (`name|` + 18 hex digits) so a projec
 o.append('    /// Packed scope view settings (see gui/ui/scope.rs); UI-only, saved with the project.\n    #[persist = "scope-v3"]\n    pub scope: Arc<AtomicI32>,')
 o.append('    /// Name of the last loaded/saved preset (display only).\n    #[persist = "preset-name"]\n    pub preset_name: Arc<parking_lot::Mutex<String>>,')
 o.append('    /// User-drawn waveshaper curve (points on [-1,1]^2, shaper 14 "Custom"); saved with the project and presets.\n    #[persist = "custom-curve"]\n    pub custom_curve: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,')
+o.append('    /// Scene B\'s drawn curve (same format as `custom_curve`).\n    #[persist = "custom-curve-b"]\n    pub custom_curve_b: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,')
 o.append('    /// ASYM per waveshaper (0..100 %, index = shaper); saved with the project and presets (absent = all 100 %).\n    #[persist = "asym"]\n    pub asym: Arc<parking_lot::Mutex<Vec<f32>>>,')
 for n, i, name, k, mn, mx, df, st, u in P:
     o.append(f'    #[id = "{i}"]\n    pub {i}: {"IntParam" if k=="int" else "BoolParam" if k=="bool" else "FloatParam"},')
@@ -75,6 +78,7 @@ o.append("            scope: Arc::new(AtomicI32::new((5 << 4) | (8 << 8))),")
 o.append("            custom_theme: Arc::new(parking_lot::Mutex::new(d.as_ref().map(|d| d.theme.clone()).unwrap_or_default())),")
 o.append("            preset_name: Arc::new(parking_lot::Mutex::new(String::new())),")
 o.append("            custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),")
+o.append("            custom_curve_b: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),")
 o.append("            asym: Arc::new(parking_lot::Mutex::new(Vec::new())),")
 for n, i, name, k, mn, mx, df, st, u in P:
     if k == "int":
@@ -88,13 +92,13 @@ for n, i, name, k, mn, mx, df, st, u in P:
         o.append(s + ",")
 o.append("        }\n    }\n}\n")
 o.append("impl SatDiffParams {")
-o.append("    /// Sanitised copy of the persisted custom curve (the UI holds this lock only for a point edit).\n    pub fn curve_snapshot(&self) -> Curve {\n        Curve::from_points(&self.custom_curve.lock())\n    }\n")
+o.append("    /// Sanitised copy of the persisted custom curve (the UI holds this lock only for a point edit).\n    pub fn curve_snapshot(&self) -> Curve {\n        Curve::from_points(&self.custom_curve.lock())\n    }\n\n    /// Scene B's drawn curve.\n    pub fn curve_snapshot_b(&self) -> Curve {\n        Curve::from_points(&self.custom_curve_b.lock())\n    }\n\n    /// The drawn curve of scene `ab` (0 = A, 1 = B).\n    pub fn curve_cell(&self, ab: i32) -> &Arc<parking_lot::Mutex<Vec<(f32, f32)>>> {\n        if ab == 1 {\n            &self.custom_curve_b\n        } else {\n            &self.custom_curve\n        }\n    }\n")
 o.append("    /// ASYM per shaper, sanitised (short / missing = 100 %).\n    pub fn asym_snapshot(&self) -> [f64; SHAPER_COUNT] {\n        asym_from(&self.asym.lock())\n    }\n")
-o.append("    /// Snapshot for the DSP engine (UI side: may wait briefly for the curve lock).\n    pub fn to_dsp(&self) -> DiffParams {\n        self.to_dsp_with(self.curve_snapshot(), self.asym_snapshot())\n    }\n")
-o.append("    /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.\n    pub fn to_dsp_rt(&self, last: &mut Curve, last_asym: &mut [f64; SHAPER_COUNT]) -> DiffParams {\n        if let Some(g) = self.custom_curve.try_lock() {\n            *last = Curve::from_points(&g);\n        }\n        if let Some(g) = self.asym.try_lock() {\n            *last_asym = asym_from(&g);\n        }\n        self.to_dsp_with(*last, *last_asym)\n    }\n")
-o.append("    fn to_dsp_with(&self, curve: Curve, asym: [f64; SHAPER_COUNT]) -> DiffParams {")
+o.append("    /// Snapshot for the DSP engine (UI side: may wait briefly for the curve lock).\n    pub fn to_dsp(&self) -> DiffParams {\n        self.to_dsp_with([self.curve_snapshot(), self.curve_snapshot_b()], self.asym_snapshot())\n    }\n")
+o.append("    /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.\n    pub fn to_dsp_rt(&self, last: &mut [Curve; 2], last_asym: &mut [f64; SHAPER_COUNT]) -> DiffParams {\n        if let Some(g) = self.custom_curve.try_lock() {\n            last[0] = Curve::from_points(&g);\n        }\n        if let Some(g) = self.custom_curve_b.try_lock() {\n            last[1] = Curve::from_points(&g);\n        }\n        if let Some(g) = self.asym.try_lock() {\n            *last_asym = asym_from(&g);\n        }\n        self.to_dsp_with(*last, *last_asym)\n    }\n")
+o.append("    fn to_dsp_with(&self, curves: [Curve; 2], asym: [f64; SHAPER_COUNT]) -> DiffParams {")
 o.append("        DiffParams {")
-o.append("            shape: self.shape.value(), curve, asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,")
+o.append("            shape: self.shape.value(), curve: curves[0], curve_b: curves[1], shape_b: self.shape_b.value(), tile_b: self.tile_b.value(), asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,")
 o.append("            sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64,")
 o.append("            sat_mix: self.sat_mix.value() as f64, sat_gain: self.sat_gain.value() as f64, os: self.os.value(),")
 o.append("            out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),")

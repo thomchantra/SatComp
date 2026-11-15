@@ -85,7 +85,7 @@ pub struct SatDiff {
     shared: Arc<Shared>,
     engine: DiffEngine,
     last_latency: u32,
-    last_curve: Curve,
+    last_curve: [Curve; 2],
     last_asym: [f64; satcomp_dsp::shapers::SHAPER_COUNT],
 }
 
@@ -109,7 +109,7 @@ impl Default for SatDiff {
             shared,
             engine,
             last_latency: u32::MAX,
-            last_curve: Curve::linear(),
+            last_curve: [Curve::linear(); 2],
             last_asym: [100.0; satcomp_dsp::shapers::SHAPER_COUNT],
         }
     }

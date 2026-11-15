@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 44;
+pub const SLOTS: usize = 46;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -34,10 +34,12 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (36, "fx_stages", 0.0, 100.0, 20.0),
     (37, "fx_mix", 0.0, 100.0, 100.0),
     (38, "tile", 0.0, 2.0, 0.0),
-    (39, "morph_dir", 0.0, 1.0, 0.0),
+    (39, "morph_dir", 0.0, 2.0, 2.0),
     (40, "morph_depth", 0.0, 100.0, 0.0),
     (41, "morph_speed", 0.0, 100.0, 50.0),
     (42, "ab", 0.0, 1.0, 0.0),
+    (44, "shape_b", 0.0, 14.0, 0.0),
+    (45, "tile_b", 0.0, 2.0, 0.0),
     (43, "fx_spread", 0.0, 100.0, 50.0),
 ];
 
@@ -69,6 +71,9 @@ pub struct SatDiffParams {
     /// User-drawn waveshaper curve (points on [-1,1]^2, shaper 14 "Custom"); saved with the project and presets.
     #[persist = "custom-curve"]
     pub custom_curve: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,
+    /// Scene B's drawn curve (same format as `custom_curve`).
+    #[persist = "custom-curve-b"]
+    pub custom_curve_b: Arc<parking_lot::Mutex<Vec<(f32, f32)>>>,
     /// ASYM per waveshaper (0..100 %, index = shaper); saved with the project and presets (absent = all 100 %).
     #[persist = "asym"]
     pub asym: Arc<parking_lot::Mutex<Vec<f32>>>,
@@ -124,6 +129,10 @@ pub struct SatDiffParams {
     pub morph_speed: FloatParam,
     #[id = "ab"]
     pub ab: IntParam,
+    #[id = "shape_b"]
+    pub shape_b: IntParam,
+    #[id = "tile_b"]
+    pub tile_b: IntParam,
     #[id = "fx_spread"]
     pub fx_spread: FloatParam,
 }
@@ -150,6 +159,7 @@ impl SatDiffParams {
             custom_theme: Arc::new(parking_lot::Mutex::new(d.as_ref().map(|d| d.theme.clone()).unwrap_or_default())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
+            custom_curve_b: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
             asym: Arc::new(parking_lot::Mutex::new(Vec::new())),
             shape: IntParam::new("Shape", 0, IntRange::Linear { min: 0, max: 14 }),
             drive: FloatParam::new("Drive", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(0.1),
@@ -173,10 +183,12 @@ impl SatDiffParams {
             fx_stages: FloatParam::new("FX Stages", 20.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             fx_mix: FloatParam::new("Color Mix", 100.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             tile: IntParam::new("Tile", 0, IntRange::Linear { min: 0, max: 2 }),
-            morph_dir: IntParam::new("Morph Dir", 0, IntRange::Linear { min: 0, max: 1 }),
+            morph_dir: IntParam::new("Morph Mode", 2, IntRange::Linear { min: 0, max: 2 }),
             morph_depth: FloatParam::new("Morph Depth", 0.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             morph_speed: FloatParam::new("Morph Speed", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
             ab: IntParam::new("Scene A/B", 0, IntRange::Linear { min: 0, max: 1 }),
+            shape_b: IntParam::new("Shape B", 0, IntRange::Linear { min: 0, max: 14 }),
+            tile_b: IntParam::new("Tile B", 0, IntRange::Linear { min: 0, max: 2 }),
             fx_spread: FloatParam::new("FX Spread", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
         }
     }
@@ -188,6 +200,20 @@ impl SatDiffParams {
         Curve::from_points(&self.custom_curve.lock())
     }
 
+    /// Scene B's drawn curve.
+    pub fn curve_snapshot_b(&self) -> Curve {
+        Curve::from_points(&self.custom_curve_b.lock())
+    }
+
+    /// The drawn curve of scene `ab` (0 = A, 1 = B).
+    pub fn curve_cell(&self, ab: i32) -> &Arc<parking_lot::Mutex<Vec<(f32, f32)>>> {
+        if ab == 1 {
+            &self.custom_curve_b
+        } else {
+            &self.custom_curve
+        }
+    }
+
     /// ASYM per shaper, sanitised (short / missing = 100 %).
     pub fn asym_snapshot(&self) -> [f64; SHAPER_COUNT] {
         asym_from(&self.asym.lock())
@@ -195,13 +221,16 @@ impl SatDiffParams {
 
     /// Snapshot for the DSP engine (UI side: may wait briefly for the curve lock).
     pub fn to_dsp(&self) -> DiffParams {
-        self.to_dsp_with(self.curve_snapshot(), self.asym_snapshot())
+        self.to_dsp_with([self.curve_snapshot(), self.curve_snapshot_b()], self.asym_snapshot())
     }
 
     /// Audio-thread snapshot: never blocks on the curve lock. While the UI holds it the previous curve is reused.
-    pub fn to_dsp_rt(&self, last: &mut Curve, last_asym: &mut [f64; SHAPER_COUNT]) -> DiffParams {
+    pub fn to_dsp_rt(&self, last: &mut [Curve; 2], last_asym: &mut [f64; SHAPER_COUNT]) -> DiffParams {
         if let Some(g) = self.custom_curve.try_lock() {
-            *last = Curve::from_points(&g);
+            last[0] = Curve::from_points(&g);
+        }
+        if let Some(g) = self.custom_curve_b.try_lock() {
+            last[1] = Curve::from_points(&g);
         }
         if let Some(g) = self.asym.try_lock() {
             *last_asym = asym_from(&g);
@@ -209,9 +238,9 @@ impl SatDiffParams {
         self.to_dsp_with(*last, *last_asym)
     }
 
-    fn to_dsp_with(&self, curve: Curve, asym: [f64; SHAPER_COUNT]) -> DiffParams {
+    fn to_dsp_with(&self, curves: [Curve; 2], asym: [f64; SHAPER_COUNT]) -> DiffParams {
         DiffParams {
-            shape: self.shape.value(), curve, asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,
+            shape: self.shape.value(), curve: curves[0], curve_b: curves[1], shape_b: self.shape_b.value(), tile_b: self.tile_b.value(), asym, drive: self.drive.value() as f64, bias: self.bias.value() as f64,
             sat_hp: self.sat_hp.value() as f64, sat_lp: self.sat_lp.value() as f64, tone: self.tone.value() as f64,
             sat_mix: self.sat_mix.value() as f64, sat_gain: self.sat_gain.value() as f64, os: self.os.value(),
             out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),
@@ -251,6 +280,8 @@ impl SatDiffParams {
             40 => self.morph_depth.as_ptr(),
             41 => self.morph_speed.as_ptr(),
             42 => self.ab.as_ptr(),
+            44 => self.shape_b.as_ptr(),
+            45 => self.tile_b.as_ptr(),
             43 => self.fx_spread.as_ptr(),
             _ => return None,
         })

@@ -181,7 +181,7 @@ fn the_editor_runs_scripted_input_and_is_deterministic() {
     let (h1, _) = script();
     let (h2, log) = script();
     assert_eq!(h1, h2, "frames differ between two identical runs");
-    for want in ["Drive", "Limiter", "Out Gain", "Scene A/B", "FX On", "FX Pre/Post", "Tile", "Morph Dir", "Morph Depth", "Oversampling", "Bypass"] {
+    for want in ["Drive", "Limiter", "Out Gain", "Scene A/B", "FX On", "FX Pre/Post", "Tile", "Morph Mode", "Morph Depth", "Oversampling", "Bypass"] {
         assert!(log.iter().any(|l| l.starts_with(want)), "no write to {want}: {log:?}");
     }
 }
@@ -475,4 +475,56 @@ fn tile_shows_in_the_plot_and_dims_on_the_periodic_shapers() {
     assert!(off != mir && off != rep && mir != rep, "plot ignores TILE");
     // Wrap tiles itself: the switch changes nothing, not even the buttons' look beyond the dimming already there
     assert_eq!(run(1, 9), run(2, 9));
+}
+
+#[test]
+fn the_whole_fx_dropdown_button_opens_the_menu() {
+    let base = {
+        let mut r = Rig::new();
+        for _ in 0..4 {
+            r.frame(vec![]);
+        }
+        r.hash
+    };
+    let mut r = Rig::new();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(100.0, 401.0); // the middle of the button, not the arrow
+    r.frame(vec![]);
+    assert_ne!(r.hash, base, "the menu did not open");
+}
+
+#[test]
+fn speed_is_inert_in_mix_and_live_in_the_detector_modes() {
+    let drag_speed = |mode: f32| {
+        let mut r = Rig::with_params(|p| p.morph_dir = nih_plug::prelude::IntParam::new("Morph Mode", mode as i32, nih_plug::prelude::IntRange::Linear { min: 0, max: 2 }));
+        for _ in 0..3 {
+            r.frame(vec![]);
+        }
+        r.drag(275.0, 160.0, 275.0, 140.0);
+        r.log().iter().any(|l| l.starts_with("Morph Speed"))
+    };
+    assert!(!drag_speed(2.0), "SPEED should be greyed out in MIX");
+    assert!(drag_speed(0.0), "SPEED should work in A>B");
+}
+
+#[test]
+fn the_ab_switch_sends_shape_and_tile_edits_to_the_scene_being_edited() {
+    use nih_plug::prelude::{IntParam, IntRange};
+    let on_scene = |ab: i32| {
+        let mut r = Rig::with_params(|p| p.ab = IntParam::new("Scene A/B", ab, IntRange::Linear { min: 0, max: 1 }));
+        for _ in 0..3 {
+            r.frame(vec![]);
+        }
+        r.click(226.0, 63.0); // selector right arrow
+        r.click(135.0, 378.0); // tile REPEAT
+        r.log()
+    };
+    let a = on_scene(0);
+    assert!(a.iter().any(|l| l.starts_with("Shape 0")) && a.iter().any(|l| l.starts_with("Tile 1")), "{a:?}");
+    assert!(!a.iter().any(|l| l.contains(" B ")), "{a:?}");
+    let b = on_scene(1);
+    assert!(b.iter().any(|l| l.starts_with("Shape B")) && b.iter().any(|l| l.starts_with("Tile B")), "{b:?}");
+    assert!(!b.iter().any(|l| l.starts_with("Shape 0") || l.starts_with("Tile 1")), "{b:?}");
 }

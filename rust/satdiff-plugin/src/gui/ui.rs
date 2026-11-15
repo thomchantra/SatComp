@@ -552,6 +552,30 @@ impl<'a> Gui<'a> {
         self.env.dsp = self.env.params.to_dsp();
     }
 
+    // ------------------------------------------------------------------ scenes
+    /// 1 while scene B is the one being edited (the A | B switch), else 0.
+    fn ab(&self) -> i32 {
+        (self.sget(42) + 0.5).floor() as i32
+    }
+
+    /// Parameter slot of the edited scene's shaper / tile: scene A's (1, 38) or scene B's (44, 45). Presets and the modified marker
+    /// address both scenes by slot directly, only the editing widgets go through these.
+    fn sc_shape(&self) -> usize {
+        if self.ab() == 1 {
+            44
+        } else {
+            1
+        }
+    }
+
+    fn sc_tile(&self) -> usize {
+        if self.ab() == 1 {
+            45
+        } else {
+            38
+        }
+    }
+
     // ------------------------------------------------------------------ formatting
     fn fmt_slot(&self, n: usize, v: f32) -> String {
         match n {
@@ -839,7 +863,7 @@ impl<'a> Gui<'a> {
     /// ASYM: the current shaper's share of its even part (the part that carries DC and sub-audio pulses): one value per
     /// shaper, stored in the project / presets (not a host parameter). Drag, wheel, double-click = 100 %.
     fn asym_cell(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let shape = ((self.sget(1) + 0.5).floor() as i32).clamp(0, CUSTOM) as usize;
+        let shape = ((self.sget(self.sc_shape()) + 0.5).floor() as i32).clamp(0, CUSTOM) as usize;
         let cell = self.env.params.asym.clone();
         let get = || cell.lock().get(shape).copied().unwrap_or(100.0);
         let set = |v: f32| {
@@ -906,12 +930,13 @@ impl<'a> Gui<'a> {
         self.cv.fill(x + 2.0, y + hh - 3.0, ((tb * (w - 4.0)).floor()).max(1.0), 1.0);
         self.setc(false);
         // tile segments: dimmed and inert on the periodic shapers (Tri Fold, Sine Fold, Wrap, Asym Fold already tile themselves)
-        let applies = satcomp_dsp::shapers::tile_applies((self.sget(1) + 0.5).floor() as i32);
+        let (tile_slot, shape_slot) = (self.sc_tile(), self.sc_shape());
+        let applies = satcomp_dsp::shapers::tile_applies((self.sget(shape_slot) + 0.5).floor() as i32);
         let keep_dk = self.dk;
         if !applies {
             self.set_dk(keep_dk * 0.35);
         }
-        let sel = if applies { (self.sget(38) + 0.5).floor() as i32 } else { -1 };
+        let sel = if applies { (self.sget(tile_slot) + 0.5).floor() as i32 } else { -1 };
         let (sy, sh) = (y + hh + 1.0, h - hh - 1.0);
         for i in 0..3i32 {
             let sx = x + (w * i as f32 / 3.0).floor();
@@ -919,7 +944,7 @@ impl<'a> Gui<'a> {
             let sw = sx2 - sx;
             let hv = self.hit(sx, sy, sw, sh) && applies;
             if hv && self.press && self.act == 0 {
-                self.click_set(38, i as f32);
+                self.click_set(tile_slot, i as f32);
                 self.press = false;
             }
             let lit = sel == i || hv;
@@ -1019,12 +1044,13 @@ impl<'a> Gui<'a> {
 
     /// MORPH block (top of the right column): direction toggle on top, DEPTH and SPEED below. No sound yet.
     fn morph_block(&mut self, x: f32, y: f32, w: f32) {
-        let dir = (self.sget(39) + 0.5).floor() as i32;
+        // mode: 2 = MIX (a static A <-> B crossfade by DEPTH, the default), 0 = A > B and 1 = B > A (the detector moves it)
+        let dir = ((self.sget(39) + 0.5).floor() as i32).clamp(0, 2);
+        let mix = dir == 2;
         let depth_on = self.sget(40) > 0.0;
-        // direction toggle: MORPH over "A > B" (or "B > A") drawn with a small arrow
         let (th, hv) = (30.0, self.hit(x, y, w, 30.0));
         if hv && self.press && self.act == 0 {
-            self.click_set(39, if dir == 0 { 1.0 } else { 0.0 });
+            self.click_set(39, [0.0, 1.0, 2.0][((dir + 1) % 3) as usize]); // MIX > A>B > B>A > MIX
             self.press = false;
         }
         if hv {
@@ -1037,18 +1063,35 @@ impl<'a> Gui<'a> {
         }
         self.cv.set_font(1);
         self.cv.textc(x, y + 3.0, w, "MORPH");
-        let (l, r) = if dir == 0 { ("A", "B") } else { ("B", "A") };
+        let (l, r) = if dir == 1 { ("B", "A") } else { ("A", "B") };
         let cy = y + 20.0;
         self.cv.text(x + w * 0.5 - 14.0, cy - 4.0, l);
-        self.cv.line(x + w * 0.5 - 6.0, cy, x + w * 0.5 + 3.0, cy);
-        self.cv.tri((x + w * 0.5 + 1.0, cy - 3.0), (x + w * 0.5 + 1.0, cy + 3.0), (x + w * 0.5 + 5.0, cy));
+        if mix {
+            // A <-> B: a line with a head at each end
+            self.cv.line(x + w * 0.5 - 6.0, cy, x + w * 0.5 + 3.0, cy);
+            self.cv.tri((x + w * 0.5 + 1.0, cy - 3.0), (x + w * 0.5 + 1.0, cy + 3.0), (x + w * 0.5 + 5.0, cy));
+            self.cv.tri((x + w * 0.5 - 4.0, cy - 3.0), (x + w * 0.5 - 4.0, cy + 3.0), (x + w * 0.5 - 8.0, cy));
+        } else {
+            self.cv.line(x + w * 0.5 - 6.0, cy, x + w * 0.5 + 3.0, cy);
+            self.cv.tri((x + w * 0.5 + 1.0, cy - 3.0), (x + w * 0.5 + 1.0, cy + 3.0), (x + w * 0.5 + 5.0, cy));
+        }
         self.cv.text(x + w * 0.5 + 8.0, cy - 4.0, r);
         self.setc(false);
-        self.cell_acc(40, x, y + 33.0, w, 32.0, "DEPTH", depth_on);
-        self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", depth_on);
+        self.cell_acc(40, x, y + 33.0, w, 32.0, if mix { "MIX" } else { "DEPTH" }, depth_on);
+        if mix {
+            // SPEED belongs to the detector: greyed out and inert while the crossfade is static
+            let keep = self.dk;
+            self.set_dk(keep * 0.35);
+            self.mask_in();
+            self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", false);
+            self.unmask_in();
+            self.set_dk(keep);
+        } else {
+            self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", depth_on);
+        }
     }
 
-    /// Full-width row: the fx enable square and the fx type dropdown (right-click anywhere or click the arrow). PRE-SAT | POST-SAT
+    /// Full-width row: the fx enable square and the fx type dropdown (click or right-click anywhere on it). PRE-SAT | POST-SAT
     /// lives beside the viewport (`fx_pos_btns`).
     fn fx_row(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let on = self.sget(31) > 0.5;
@@ -1062,8 +1105,7 @@ impl<'a> Gui<'a> {
         let (dx, dw) = (x + 22.0, w - 22.0);
         let ty = (self.sget(32) + 0.5).floor() as usize;
         let hv = self.hit(dx, y, dw, h);
-        let arrow = self.hit(dx + dw - 24.0, y, 24.0, h);
-        if hv && ((self.press && arrow) || self.rpress) && self.act == 0 {
+        if hv && (self.press || self.rpress) && self.act == 0 {
             let items = FX_NAMES.iter().enumerate().map(|(i, n)| format!("{}{}", n, if i == 0 { "" } else { " (SOON)" })).collect();
             self.open_menu(MenuKind::Fx, dx, y + h, items, ty.min(FX_NAMES.len() - 1));
             self.press = false;
@@ -1352,9 +1394,10 @@ impl<'a> Gui<'a> {
         let sat_on = dsp.drive > 0.0 || dsp.bias != 0.0;
         let pre = (dsp.drive * 0.01 * 36.0 * 0.11512925).exp() as f32;
         let bias = (dsp.bias * 0.01) as f32;
-        self.lut.sync(dsp.shape, &dsp.tiled_curve());
+        let (shape, curve) = dsp.scene_view(self.ab());
+        self.lut.sync(shape, &curve);
         // static curve as heard: the shaper minus the part of its even half that ASYM removes
-        let ak = dsp.asym[(dsp.shape.max(0) as usize).min(dsp.asym.len() - 1)] * 0.01;
+        let ak = dsp.asym[(shape.max(0) as usize).min(dsp.asym.len() - 1)] * 0.01;
         let eff = move |l: &ShaperLut, v: f64| {
             let r = 0.5 * (1.0 - ak);
             l.eval(v) * (1.0 - r) - r * l.eval(-v)
@@ -1365,15 +1408,16 @@ impl<'a> Gui<'a> {
             self.curve_edit = !self.curve_edit;
             self.edit_seen = false;
             if self.curve_edit {
-                self.click_set(1, CUSTOM as f32);
+                let sl = self.sc_shape();
+                self.click_set(sl, CUSTOM as f32);
                 // symmetry is the default tool, unless the stored curve is lopsided: opening must not alter it
-                self.sym_mode = self.env.params.curve_snapshot().is_odd();
+                self.sym_mode = Curve::from_points(&self.env.params.curve_cell(self.ab()).lock()).is_odd();
                 self.even = false;
             }
             self.press = false;
         }
         if self.curve_edit {
-            if (self.sget(1) + 0.5).floor() as i32 == CUSTOM {
+            if (self.sget(self.sc_shape()) + 0.5).floor() as i32 == CUSTOM {
                 self.edit_seen = true;
             } else if self.edit_seen {
                 self.curve_edit = false; // another shaper was chosen
@@ -1411,7 +1455,7 @@ impl<'a> Gui<'a> {
         }
         let pk = sh.sat_vz.load(Ordering::Relaxed).min(1.0);
         // one point per pixel column: a tiled curve under drive folds / wraps many times across the plot
-        let n = if dsp.effective_tile() != 0 { (w as usize).max(64) } else { 64 };
+        let n = if curve.tile != 0 { (w as usize).max(64) } else { 64 };
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
             let vx = -1.0 + 2.0 * i as f32 / n as f32;
@@ -1506,7 +1550,7 @@ impl<'a> Gui<'a> {
     /// Left click empty space = add a point (and drag it), drag = move, double click = remove.
     /// The two end points are fixed in x and cannot be removed.
     fn draw_curve_edit(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let mut c = self.env.params.curve_snapshot();
+        let mut c = Curve::from_points(&self.env.params.curve_cell(self.ab()).lock());
         let before = c;
         // LINEAR | CURVE (top left; UI only for now)
         if let Some(i) = self.seg(x + 3.0, y + 3.0, 104.0, 16.0, &["LINEAR", "CURVE"], if self.seg_linear { 0 } else { 1 }) {
@@ -1615,7 +1659,7 @@ impl<'a> Gui<'a> {
         }
         c = if sym && self.even { Curve::from_even_half(&hv) } else if sym { Curve::from_odd_half(&hv) } else { Curve::from_points(&hv) };
         if c != before {
-            *self.env.params.custom_curve.lock() = c.pts().to_vec();
+            *self.env.params.curve_cell(self.ab()).lock() = c.pts().to_vec();
         }
         // identity reference (dotted), the curve, then the points
         let prev = self.dk;
@@ -1797,7 +1841,10 @@ impl<'a> Gui<'a> {
             self.menu = None;
             if let Some((id, kind)) = chosen {
                 match kind {
-                    0 => self.click_set(1, id as f32),
+                    0 => {
+                        let sl = self.sc_shape();
+                        self.click_set(sl, id as f32)
+                    }
                     1 if id >= 1000 => self.set_light(!self.light),
                     1 => self.set_pal(id as usize),
                     2 => self.request_scale(SIZES[(id as usize).min(SIZES.len() - 1)]),
@@ -1890,6 +1937,7 @@ impl<'a> Gui<'a> {
         // absent curve = linear (deterministic: loading a preset never keeps the previous preset's curve)
         let c = Curve::from_points(&p.curve);
         *self.env.params.custom_curve.lock() = c.pts().to_vec();
+        *self.env.params.custom_curve_b.lock() = Curve::from_points(&p.curve_b).pts().to_vec();
         *self.env.params.asym.lock() = satcomp_dsp::shapers::asym_from(&p.asym).iter().map(|&v| v as f32).collect();
         self.set_preset_name(&p.name);
         self.base = None;
@@ -1922,7 +1970,7 @@ impl<'a> Gui<'a> {
                 return true;
             }
         }
-        Curve::from_points(&b.curve) != self.env.params.curve_snapshot() || satcomp_dsp::shapers::asym_from(&b.asym) != self.env.params.asym_snapshot()
+        Curve::from_points(&b.curve) != self.env.params.curve_snapshot() || Curve::from_points(&b.curve_b) != self.env.params.curve_snapshot_b() || satcomp_dsp::shapers::asym_from(&b.asym) != self.env.params.asym_snapshot()
     }
 
     fn capture(&self, name: &str) -> Preset {
@@ -1935,6 +1983,10 @@ impl<'a> Gui<'a> {
         let c = self.env.params.curve_snapshot();
         if c != Curve::linear() {
             p.curve = c.pts().to_vec();
+        }
+        let cb = self.env.params.curve_snapshot_b();
+        if cb != Curve::linear() {
+            p.curve_b = cb.pts().to_vec();
         }
         let a = self.env.params.asym_snapshot();
         if a.iter().any(|&v| v != 100.0) {
@@ -2166,7 +2218,7 @@ impl<'a> Gui<'a> {
         }
         self.cv.set_font(2);
         // TILE on the drawn curve runs at x4 at least: show what is actually running
-        let forced = self.env.dsp.effective_tile() != 0;
+        let forced = self.env.dsp.tile_active();
         self.cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, &format!("{}x", 1 << if forced { os.max(2) } else { os }));
         self.setc(false);
     }
@@ -2349,7 +2401,8 @@ impl<'a> Gui<'a> {
                 self.click_set(42, i as f32);
                 self.press = false;
             }
-            self.selector(1, 70.0, 54.0, 166.0, 18.0);
+            let sl = self.sc_shape();
+            self.selector(sl, 70.0, 54.0, 166.0, 18.0);
             let gr = self.rd_gr;
             let lim_lab = if lim_on && gr > 0.1 { format!("-{:.1}", gr) } else { "LIMIT".to_string() };
             if self.hbtn(244.0, 54.0, 62.0, 18.0, &lim_lab, lim_on as u8) {
