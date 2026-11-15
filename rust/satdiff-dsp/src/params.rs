@@ -46,7 +46,7 @@ pub struct DiffParams {
     /// phase rotator, degrees
     pub phase: f64,
     pub fx_on: bool,
-    /// 0 diffusor, 1 phaser, 2 flanger, 3 ringmod (only the diffusor exists; the others act as off)
+    /// 0 diffusor, 1 phaser, 2 flanger, 3 ringmod, 4 frequency shifter
     pub fx_type: i32,
     /// 0 = before the shaper, 1 = after
     pub fx_pos: i32,
@@ -68,6 +68,8 @@ pub struct DiffParams {
     pub fx_delay: f64,
     /// ring modulator carrier: 0 sine, 1 triangle, 2 square, 3 saw
     pub fx_shape: i32,
+    /// frequency shifter: shift in Hz, negative = down
+    pub fx_shift: f64,
     /// COLOR MIX: wet / dry of the whole colour fx, 0..100 %
     pub fx_mix: f64,
     /// 0 off, 1 mirror, 2 repeat
@@ -120,6 +122,7 @@ impl Default for DiffParams {
             fx_fb: 0.0,
             fx_delay: 2.0,
             fx_shape: 0,
+            fx_shift: 0.0,
             fx_mix: 100.0,
             tile: 0,
             morph_dir: 2,

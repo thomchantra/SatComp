@@ -1,4 +1,4 @@
-//! The colour-fx slot: DIFFUSOR (diffuse.rs), PHASER, FLANGER and RINGMOD behind one switch. Each type is the wet signal of its
+//! The colour-fx slot: DIFFUSOR (diffuse.rs), PHASER, FLANGER, RINGMOD and FREQ SHIFT behind one switch. Each type is the wet signal of its
 //! effect; the global COLOR MIX blends it with the dry (so a phaser or flanger at 50 % has the classic notches). One type runs at a
 //! time: changing the type fades the old one out, resets the new one and fades it in. No latency.
 //!
@@ -7,9 +7,14 @@
 //! * FLANGER: a modulated delay line (centre DELAY, DEPTH = share of it, 4-point cubic read), FEEDBACK of either sign, WIDTH as above.
 //! * RINGMOD: the signal times an internal carrier (sine / triangle / square / saw, band-limited square and saw), FREQ 20 Hz..20 kHz,
 //!   AMOUNT blends from the unchanged signal (0 %) through amplitude modulation to ring modulation (100 %).
+//! * FREQ SHIFT: a single-sideband (Bode) shifter, every partial moves by the same number of Hz (so harmonics stop being
+//!   harmonic). Clean-room: the textbook chain Hilbert pair -> multiply by a complex exponential, with the Hilbert pair of
+//!   `phase.rs`; SHIFT is bipolar in Hz, a feedback delay (DELAY, FEEDBACK) re-shifts the output every pass (the endless
+//!   "barber pole" rise / fall) and WIDTH counter-shifts the right channel for a stereo spread. Zero latency.
 
 use crate::diffuse::{Diffusor, MAX_STAGES};
 use crate::params::DiffParams;
+use crate::phase::Rotator;
 use satcomp_dsp::level::one_pole;
 use std::f64::consts::{PI, TAU};
 
@@ -17,6 +22,7 @@ pub const FX_DIFFUSOR: i32 = 0;
 pub const FX_PHASER: i32 = 1;
 pub const FX_FLANGER: i32 = 2;
 pub const FX_RINGMOD: i32 = 3;
+pub const FX_FSHIFT: i32 = 4;
 
 /// Phaser stage count for the shared STAGES percentage (0 % = 2 stages, 100 % = 12), from the diffusor's 1..100 count.
 pub fn phaser_stages(count: i32) -> usize {
@@ -202,12 +208,74 @@ impl RingMod {
     }
 }
 
+/// Single-sideband frequency shifter: `y = Re[(I + jQ) e^{j 2 pi s t}]` with the analytic pair from the phase rotator's chains.
+struct FreqShift {
+    /// only its two Hilbert chains are used (`quad`), the rotation itself stays off
+    hil: Rotator,
+    phase: f64,
+    shift: Smooth, // Hz, bipolar
+    fb: Smooth,
+    delay: Smooth, // ms
+    width: Smooth, // 0..1, share of the shift the right channel goes the other way
+    buf: [Vec<f64>; 2],
+    w: usize,
+    sr: f64,
+}
+
+impl FreqShift {
+    fn new(sr: f64) -> Self {
+        let mut f = Self { hil: Rotator::new(sr), phase: 0.0, shift: Smooth::new(0.0), fb: Smooth::new(0.0), delay: Smooth::new(2.0), width: Smooth::new(0.0), buf: [vec![], vec![]], w: 0, sr };
+        f.resize(sr);
+        f
+    }
+
+    fn resize(&mut self, sr: f64) {
+        let n = ((MAX_FLANGE_MS * 0.001 * sr) as usize + 8).max(16);
+        self.buf = [vec![0.0; n], vec![0.0; n]];
+        self.w = 0;
+        self.sr = sr;
+        self.hil.set_sample_rate(sr);
+    }
+
+    fn reset(&mut self) {
+        for b in &mut self.buf {
+            b.iter_mut().for_each(|v| *v = 0.0);
+        }
+        self.hil = Rotator::new(self.sr);
+    }
+
+    #[inline]
+    fn tick(&mut self, x: [f64; 2], sr: f64, c: f64) -> [f64; 2] {
+        let (sh, fb, dl, wid) = (self.shift.step(c), self.fb.step(c), self.delay.step(c), self.width.step(c));
+        let d = (dl * 0.001 * sr).clamp(1.0, self.buf[0].len() as f64 - 4.0);
+        let n = self.buf[0].len();
+        let mut out = [0.0; 2];
+        for ch in 0..2 {
+            // the feedback is the delayed shifted output, soft-limited so a loop gain near 1 cannot run away
+            let del = Flanger::read(&self.buf[ch], self.w, d);
+            let v = x[ch] + (fb * del).tanh();
+            let (i, q) = self.hil.quad(ch, v);
+            // the right channel moves by (1 - 2 width) times the shift: width 100 % = opposite directions
+            let k = if ch == 0 { 1.0 } else { 1.0 - 2.0 * wid };
+            let ph = self.phase * k;
+            // the quadrature chain leads the in-phase one by 90 degrees, so adding it moves the spectrum up
+            let y = i * (TAU * ph).cos() + q * (TAU * ph).sin();
+            self.buf[ch][self.w] = y;
+            out[ch] = y;
+        }
+        self.w = (self.w + 1) % n;
+        self.phase = (self.phase + sh / sr).rem_euclid(1.0);
+        out
+    }
+}
+
 pub struct ColorFx {
     sr: f64,
     dif: Diffusor,
     pha: Phaser,
     fla: Flanger,
     rm: RingMod,
+    fsh: FreqShift,
     /// the type that is running and the one the host asks for
     cur: i32,
     want: i32,
@@ -223,7 +291,7 @@ pub struct ColorFx {
 
 impl ColorFx {
     pub fn new(sr: f64) -> Self {
-        let mut f = Self { sr, dif: Diffusor::new(sr), pha: Phaser::new(), fla: Flanger::new(sr), rm: RingMod::new(), cur: FX_DIFFUSOR, want: FX_DIFFUSOR, on: false, gate: 0.0, mix: Smooth::new(1.0), sm_c: 0.0, gate_c: 0.0, p: DiffParams::default() };
+        let mut f = Self { sr, dif: Diffusor::new(sr), pha: Phaser::new(), fla: Flanger::new(sr), rm: RingMod::new(), fsh: FreqShift::new(sr), cur: FX_DIFFUSOR, want: FX_DIFFUSOR, on: false, gate: 0.0, mix: Smooth::new(1.0), sm_c: 0.0, gate_c: 0.0, p: DiffParams::default() };
         f.set_sample_rate(sr);
         f
     }
@@ -232,6 +300,7 @@ impl ColorFx {
         self.sr = sr;
         self.dif.set_sample_rate(sr);
         self.fla.resize(sr);
+        self.fsh.resize(sr);
         self.sm_c = one_pole(sr, 0.01);
         self.gate_c = one_pole(sr, 0.02);
     }
@@ -241,6 +310,7 @@ impl ColorFx {
         self.dif.reset();
         self.pha.reset();
         self.fla.reset();
+        self.fsh.reset();
     }
 
     fn arm_diffusor(&mut self, snap: bool) {
@@ -252,7 +322,7 @@ impl ColorFx {
     /// `snap` jumps every smoothed value to its target (a fresh engine starts at the host's settings).
     pub fn set(&mut self, p: &DiffParams, snap: bool) {
         self.on = p.fx_on;
-        self.want = p.fx_type.clamp(0, 3);
+        self.want = p.fx_type.clamp(0, 4);
         if snap {
             self.cur = self.want;
         }
@@ -274,9 +344,13 @@ impl ColorFx {
         self.rm.freq.t = p.fx_freq.clamp(20.0, top);
         self.rm.amount.t = p.fx_depth.clamp(0.0, 100.0) * 0.01;
         self.rm.shape = p.fx_shape.clamp(0, 3);
+        self.fsh.shift.t = p.fx_shift.clamp(-1000.0, 1000.0);
+        self.fsh.fb.t = p.fx_fb.clamp(-95.0, 95.0) * 0.01;
+        self.fsh.delay.t = p.fx_delay.clamp(0.1, 10.0);
+        self.fsh.width.t = p.fx_spread.clamp(0.0, 100.0) * 0.01;
         self.mix.t = (p.fx_mix * 0.01).clamp(0.0, 1.0);
         if snap {
-            for s in [&mut self.pha.centre, &mut self.pha.depth, &mut self.pha.fb, &mut self.pha.width, &mut self.fla.delay, &mut self.fla.depth, &mut self.fla.fb, &mut self.fla.width, &mut self.rm.freq, &mut self.rm.amount, &mut self.mix] {
+            for s in [&mut self.pha.centre, &mut self.pha.depth, &mut self.pha.fb, &mut self.pha.width, &mut self.fla.delay, &mut self.fla.depth, &mut self.fla.fb, &mut self.fla.width, &mut self.rm.freq, &mut self.rm.amount, &mut self.fsh.shift, &mut self.fsh.fb, &mut self.fsh.delay, &mut self.fsh.width, &mut self.mix] {
                 s.snap();
             }
             self.gate = 0.0;
@@ -299,6 +373,7 @@ impl ColorFx {
                 self.rm.phase = 0.0;
                 self.pha.phase = 0.0;
                 self.fla.phase = 0.0;
+                self.fsh.phase = 0.0;
                 self.arm_diffusor(false); // a diffusor that just became the running type starts fading in
             }
         }
@@ -315,6 +390,7 @@ impl ColorFx {
         let wet = match self.cur {
             FX_PHASER => self.pha.tick(x, self.sr, self.sm_c),
             FX_FLANGER => self.fla.tick(x, self.sr, self.sm_c),
+            FX_FSHIFT => self.fsh.tick(x, self.sr, self.sm_c),
             _ => self.rm.tick(x, self.sr, self.sm_c),
         };
         [x[0] + (wet[0] - x[0]) * m, x[1] + (wet[1] - x[1]) * m]
@@ -358,7 +434,7 @@ mod tests {
     #[test]
     fn off_is_an_exact_bypass_for_every_type() {
         let x = noise(6000, 3);
-        for ty in 0..4 {
+        for ty in 0..5 {
             let mut p = params(ty);
             p.fx_on = false;
             assert_eq!(render(&p, &x), x, "type {ty}");
@@ -477,5 +553,67 @@ mod tests {
         assert!(step < 0.15, "step {step}");
         // and the new type is what ends up running
         assert_eq!(f.cur, FX_RINGMOD);
+    }
+
+    /// amplitude of the tone `f` in `y[24000..]`
+    fn amp(y: &[f64], f: f64) -> f64 {
+        let (mut re, mut im) = (0.0, 0.0);
+        for i in 24000..y.len() {
+            let w = TAU * f * i as f64 / SR;
+            re += y[i] * w.cos();
+            im += y[i] * w.sin();
+        }
+        2.0 * (re * re + im * im).sqrt() / (y.len() - 24000) as f64
+    }
+
+    #[test]
+    fn the_shifter_moves_every_partial_by_the_same_number_of_hz() {
+        let tone = sine(1000.0, 48000, 0.5);
+        for (sh, want) in [(100.0, 1100.0), (-250.0, 750.0), (400.0, 1400.0)] {
+            let y = render(&DiffParams { fx_shift: sh, fx_spread: 0.0, ..params(FX_FSHIFT) }, &tone);
+            let hit = amp(&y, want);
+            let mirror = amp(&y, 1000.0 - sh);
+            let carrier = amp(&y, 1000.0);
+            assert!((hit - 0.5).abs() < 0.03, "shift {sh}: {want} Hz at {hit}");
+            // single sideband: the opposite sideband and the original are well down (the Hilbert pair is good to ~2.5 degrees)
+            assert!(mirror < 0.03 && carrier < 0.03, "shift {sh}: image {mirror}, leak {carrier}");
+        }
+        // a harmonic series stays equally spaced by the shift, not by the pitch: 200 / 400 / 600 + 50 Hz
+        let h: Vec<f64> = (0..48000).map(|i| (1..=3).map(|k| 0.2 * (TAU * 200.0 * k as f64 * i as f64 / SR).sin()).sum()).collect();
+        let y = render(&DiffParams { fx_shift: 50.0, fx_spread: 0.0, ..params(FX_FSHIFT) }, &h);
+        assert!(amp(&y, 250.0) > 0.15 && amp(&y, 450.0) > 0.15 && amp(&y, 650.0) > 0.15);
+        assert!(amp(&y, 400.0) < 0.03, "no octave left behind");
+    }
+
+    #[test]
+    fn zero_shift_is_a_level_preserving_dispersion_and_width_splits_the_channels() {
+        let tone = sine(800.0, 48000, 0.5);
+        let y = render(&DiffParams { fx_shift: 0.0, ..params(FX_FSHIFT) }, &tone);
+        assert!((amp(&y, 800.0) - 0.5).abs() < 0.02, "{}", amp(&y, 800.0));
+        // WIDTH 100 %: left goes up, right goes down
+        let mut f = ColorFx::new(SR);
+        f.set(&DiffParams { fx_shift: 120.0, fx_spread: 100.0, ..params(FX_FSHIFT) }, true);
+        let (mut l, mut r) = (vec![], vec![]);
+        for &v in &tone {
+            let o = f.tick([v, v]);
+            l.push(o[0]);
+            r.push(o[1]);
+        }
+        assert!(amp(&l, 920.0) > 0.45 && amp(&r, 680.0) > 0.45, "{} {}", amp(&l, 920.0), amp(&r, 680.0));
+    }
+
+    #[test]
+    fn feedback_climbs_the_barber_pole_and_stays_bounded() {
+        // 100 Hz shift, 2 ms loop, 70 % feedback: repeats of an input tone at 1000 Hz appear at 1100, 1200, ...
+        let tone = sine(1000.0, 96000, 0.4);
+        let y = render(&DiffParams { fx_shift: 100.0, fx_fb: 70.0, fx_delay: 2.0, fx_spread: 0.0, fx_mix: 100.0, ..params(FX_FSHIFT) }, &tone);
+        assert!(amp(&y, 1100.0) > 0.2 && amp(&y, 1200.0) > 0.08 && amp(&y, 1300.0) > 0.02, "{} {} {}", amp(&y, 1100.0), amp(&y, 1200.0), amp(&y, 1300.0));
+        let x = noise(96000, 21);
+        for fb in [-95.0, 95.0] {
+            for sh in [-1000.0, 3.0, 1000.0] {
+                let y = render(&DiffParams { fx_shift: sh, fx_fb: fb, fx_delay: 0.1, ..params(FX_FSHIFT) }, &x);
+                assert!(y.iter().all(|v| v.is_finite() && v.abs() < 25.0), "shift {sh} fb {fb}");
+            }
+        }
     }
 }
