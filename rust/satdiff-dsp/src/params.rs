@@ -29,7 +29,8 @@ pub struct DiffParams {
     pub lim_on: bool,
     pub bypass: bool,
     // PHASE SECTION (built: rotator + diffusor) and tile / morph / scenes (stored and shown by the editor, no DSP behind them yet, spec steps 3 to 5)
-    /// A (0) or B (1) waveshaper scene: the one the editor shows and, with MORPH DEPTH at 0, the one that is heard
+    /// A (0) or B (1) waveshaper scene: which one the editor shows and edits. A view switch only, it never changes what is heard
+    /// (MORPH / MIX does: DEPTH 0 = scene A, 100 % in MIX = scene B).
     pub ab: i32,
     /// scene B's shaper (scene A's are `shape` / `curve` / `tile`)
     pub shape_b: i32,
@@ -144,18 +145,12 @@ impl DiffParams {
 
     /// Whether any scene that is heard has an effective tile (its folded / wrapped edges alias).
     pub fn tile_active(&self) -> bool {
-        if self.blending() {
-            self.effective_tile() != 0 || self.effective_tile_b() != 0
-        } else if self.ab == 1 {
-            self.effective_tile_b() != 0
-        } else {
-            self.effective_tile() != 0
-        }
+        self.effective_tile() != 0 || (self.blending() && self.effective_tile_b() != 0)
     }
 
     pub fn sat(&self) -> SatParams {
-        // the shaper of `derive`: scene A, or scene B while it is the one being edited and nothing is morphing
-        let (shape, curve) = self.scene_view(if self.blending() { 0 } else { self.ab });
+        // the shaper of `derive` is scene A (the blend towards B is `DiffEngine`'s business)
+        let (shape, curve) = self.scene_view(0);
         SatParams {
             shape,
             curve,

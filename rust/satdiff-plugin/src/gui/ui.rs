@@ -716,8 +716,9 @@ impl<'a> Gui<'a> {
         self.sat_lv = self.env.shared.sat_pk.swap(0.0, Ordering::Relaxed); // drained so it cannot saturate
     }
 
-    /// Stereo input level, vertical, hatched (every other row) so it reads apart from the solid output meter. Same ranges
-    /// as the output meter (click the bars to cycle them), a clip lamp on top (click to clear).
+    /// Saturator output level (after SAT MIX and SAT GAIN), vertical, hatched (every other row) so it reads apart from the solid
+    /// output meter. Same ranges as the output meter (click the bars to cycle them); the clip lamp on top lights for 1 s after any
+    /// sample over 0 dBFS, so it says whether the SAT stage itself clips.
     fn in_vu(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let sh = self.env.shared;
         let pa = sh.ipk[0].swap(0.0, Ordering::Relaxed);
@@ -727,10 +728,6 @@ impl<'a> Gui<'a> {
         }
         let lamp = 12.0;
         let (by, bh) = (y + lamp + 1.0, h - lamp - 1.0);
-        if self.hit(x, y, w, lamp) && self.press && self.act == 0 {
-            self.iclip_t = -10.0;
-            self.press = false;
-        }
         if self.hit(x, by, w, bh) && self.press && self.act == 0 {
             self.vu_ri = (self.vu_ri + 1) % VU_RANGES.len();
             self.press = false;
@@ -978,7 +975,7 @@ impl<'a> Gui<'a> {
     }
 
     /// Accent-filled cell (the MORPH block: DEPTH and SPEED); `on` false = outlined, background fill (depth 0).
-    fn cell_acc(&mut self, n: usize, x: f32, y: f32, w: f32, h: f32, lbl: &str, on: bool) {
+    fn cell_acc(&mut self, n: usize, x: f32, y: f32, w: f32, h: f32, lbl: &str, on: bool, centred: bool) {
         let hv = self.hit(x, y, w, h);
         if hv && self.press && self.act == 0 {
             self.begin_drag(n);
@@ -1002,7 +999,17 @@ impl<'a> Gui<'a> {
         self.cv.text(x + 3.0, y + 3.0, lbl);
         self.cv.set_font(2);
         self.cv.textc(x, y + (h * 0.4 + 1.0).floor(), w, &s);
-        self.cv.fill(x + 2.0, y + h - 4.0, ((t * (w - 4.0)).floor()).max(1.0), 2.0);
+        if centred {
+            // centre-tapped: the bar grows from the middle (left = scene A, right = scene B) and a notch marks the centre
+            let (cx, half) = (x + 2.0 + ((w - 4.0) * 0.5).floor(), (w - 4.0) * 0.5);
+            let len = ((t - 0.5).abs() * 2.0 * half).floor();
+            if len >= 1.0 {
+                self.cv.fill(if t < 0.5 { cx - len } else { cx }, y + h - 4.0, len, 2.0);
+            }
+            self.cv.fill(cx, y + h - 6.0, 1.0, 5.0);
+        } else {
+            self.cv.fill(x + 2.0, y + h - 4.0, ((t * (w - 4.0)).floor()).max(1.0), 2.0);
+        }
         self.setc(false);
     }
 
@@ -1062,7 +1069,7 @@ impl<'a> Gui<'a> {
             self.cv.boxr(x, y, w, th);
         }
         self.cv.set_font(1);
-        self.cv.textc(x, y + 3.0, w, "MORPH");
+        self.cv.textc(x, y + 3.0, w, if mix { "XFADE" } else { "MORPH" });
         let (l, r) = if dir == 1 { ("B", "A") } else { ("A", "B") };
         let cy = y + 20.0;
         self.cv.text(x + w * 0.5 - 14.0, cy - 4.0, l);
@@ -1077,17 +1084,17 @@ impl<'a> Gui<'a> {
         }
         self.cv.text(x + w * 0.5 + 8.0, cy - 4.0, r);
         self.setc(false);
-        self.cell_acc(40, x, y + 33.0, w, 32.0, if mix { "MIX" } else { "DEPTH" }, depth_on);
+        self.cell_acc(40, x, y + 33.0, w, 32.0, if mix { "MIX" } else { "DEPTH" }, depth_on, mix);
         if mix {
             // SPEED belongs to the detector: greyed out and inert while the crossfade is static
             let keep = self.dk;
             self.set_dk(keep * 0.35);
             self.mask_in();
-            self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", false);
+            self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", false, false);
             self.unmask_in();
             self.set_dk(keep);
         } else {
-            self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", depth_on);
+            self.cell_acc(41, x, y + 67.0, w, 32.0, "SPEED", depth_on, false);
         }
     }
 

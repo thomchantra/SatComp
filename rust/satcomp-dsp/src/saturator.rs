@@ -109,8 +109,6 @@ pub struct Saturator {
     src_b: ShaperLut,
     blend_buf: Vec<f64>,
     blend_m: f64,
-    /// |shaper input| of the last sample per channel (after the HP / LP split, DRIVE and BIAS; the plain input while off)
-    pub xin_abs: [f64; 2],
     dry: StereoDelay<64>,
     res: StereoDelay<64>,
     band: StereoDelay<64>,
@@ -191,7 +189,6 @@ impl Saturator {
             src_b: ShaperLut::new(0),
             blend_buf: vec![0.0; crate::shapers::LUT_LEN],
             blend_m: -1.0,
-            xin_abs: [0.0; 2],
             dry: StereoDelay::new(),
             res: StereoDelay::new(),
             band: StereoDelay::new(),
@@ -477,7 +474,6 @@ impl Saturator {
             let rd_res = self.res.tap(self.lat);
             for c in 0..2 {
                 let xin = bp[c] * self.pre + self.bias;
-                self.xin_abs[c] = xin.abs();
                 let sh = if let Some(k) = self.asym_k {
                     if self.dc_warm {
                         for _ in 0..256 {
@@ -520,7 +516,6 @@ impl Saturator {
         } else {
             self.res.put([0.0, 0.0]);
             cc = dl;
-            self.xin_abs = [inp[0].abs(), inp[1].abs()];
             if self.dc_comp {
                 self.hist[0][self.hist_i] = inp[0];
                 self.hist[1][self.hist_i] = inp[1];

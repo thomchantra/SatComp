@@ -78,7 +78,7 @@ pub struct DiffEngine {
     /// output peak per channel, linear
     pub opk: [f64; 2],
     /// input peak per channel, linear (the left meter)
-    /// peak of what the shaper sees (after PHASE, a PRE fx, the HP / LP split, DRIVE and BIAS), since the owner last cleared it
+    /// peak of the saturator's output (after SAT MIX and SAT GAIN, before a POST fx), since the owner last cleared it
     pub ipk: [f64; 2],
     /// post-saturator (after SAT GAIN) peak, linear
     pub sat_out: f64,
@@ -370,10 +370,10 @@ impl DiffEngine {
 
         // SAT (+ SAT GAIN), then the diffusor when it runs after
         let mut s = self.sat.tick(pre, self.smoothing);
-        // the input meter reads what the shaper just saw (after the HP / LP split, DRIVE and BIAS; the plain input while the
-        // saturator is off): 0 dBFS is the edge of the drawn curve, so it shows at a glance whether the SAT stage is clipped
-        self.ipk[0] = self.ipk[0].max(self.sat.xin_abs[0]);
-        self.ipk[1] = self.ipk[1].max(self.sat.xin_abs[1]);
+        // the segmented meter reads the saturator's output (after SAT MIX and SAT GAIN, before a POST fx): over 0 dBFS = the SAT
+        // stage itself clips, whatever the later gain does
+        self.ipk[0] = self.ipk[0].max(s[0].abs());
+        self.ipk[1] = self.ipk[1].max(s[1].abs());
         if self.fx_pos == 1 {
             s = self.fx.tick(s);
         }
@@ -735,21 +735,23 @@ mod tests {
     }
 
     #[test]
-    fn the_input_meter_reads_what_the_shaper_sees() {
+    fn the_segmented_meter_reads_the_saturator_output() {
         let x: Vec<f32> = (0..24000).map(|i| (0.3 * (2.0 * PI * 90.0 * i as f64 / SR).sin()) as f32).collect();
         let peak = |p: DiffParams| run_peak(&p, &x).1;
+        // saturator off: the input
         let dry = peak(DiffParams::default());
         assert!((dry - 0.3).abs() < 0.01, "{dry}");
-        // drive raises it, past 1.0 once the shaper is hit beyond the edge of its curve
-        let driven = peak(DiffParams { drive: 60.0, ..DiffParams::default() });
-        assert!(driven > 1.0, "{driven}");
-        assert!(peak(DiffParams { drive: 20.0, ..DiffParams::default() }) < driven);
-        // bias adds to it
-        assert!(peak(DiffParams { drive: 20.0, bias: 30.0, ..DiffParams::default() }) > peak(DiffParams { drive: 20.0, ..DiffParams::default() }) + 0.1);
-        // a PRE diffusor reshapes the peaks before the shaper, POST does not
-        let fx = |pos: i32| DiffParams { fx_on: true, fx_pos: pos, fx_freq: 300.0, fx_q: 6.0, fx_stages: 12, ..DiffParams::default() };
-        assert!((peak(fx(0)) - dry).abs() > 0.005, "pre {} dry {dry}", peak(fx(0)));
-        assert!((peak(fx(1)) - dry).abs() < 0.01);
+        // SAT GAIN raises it, SAT MIX at 0 takes the shaping (and the gain's reach on the shaped part) away
+        let gained = peak(DiffParams { drive: 30.0, sat_gain: 12.0, ..DiffParams::default() });
+        assert!(gained > 0.9, "{gained}");
+        assert!(peak(DiffParams { drive: 30.0, sat_gain: 12.0, sat_mix: 0.0, ..DiffParams::default() }) < gained * 0.5);
+        // a hard-clipped, hot signal peaks near the clip level: the meter sees the clipped output, not the input
+        let hot = peak(DiffParams { shape: 4, drive: 80.0, ..DiffParams::default() });
+        assert!(hot > 0.85 && hot < 1.2, "{hot}");
+        // over 1.0 when the SAT stage is pushed past full scale
+        assert!(peak(DiffParams { shape: 4, drive: 80.0, sat_gain: 12.0, ..DiffParams::default() }) > 1.0);
+        // OUT GAIN comes after the sat stage: it does not move the meter
+        assert!((peak(DiffParams { drive: 30.0, out_gain: 12.0, ..DiffParams::default() }) - peak(DiffParams { drive: 30.0, ..DiffParams::default() })).abs() < 0.01);
     }
 
     fn run_peak(p: &DiffParams, x: &[f32]) -> (Vec<f32>, f64) {
@@ -812,22 +814,28 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_being_edited_is_heard_while_morph_depth_is_zero() {
+    fn the_ab_switch_is_a_view_only_and_depth_zero_is_scene_a() {
         let x = tone(20000, 0.4);
         let (a, _) = run(&scenes(0.0, 2), &x);
         let (a_ref, _) = run(&DiffParams { shape: 1, drive: 45.0, ..DiffParams::default() }, &x);
-        assert_eq!(a, a_ref, "A with no morph must be exactly the plain shaper");
-        let (b, _) = run(&DiffParams { ab: 1, ..scenes(0.0, 2) }, &x);
+        assert_eq!(a, a_ref, "no morph must be exactly the plain scene A shaper");
+        // editing scene B changes nothing that is heard
+        let (a_viewing_b, _) = run(&DiffParams { ab: 1, ..scenes(0.0, 2) }, &x);
+        assert_eq!(a, a_viewing_b);
+        // scene B is only ever heard through MORPH: MIX at 100 % is B alone
         let (b_ref, _) = run(&DiffParams { shape: 4, drive: 45.0, ..DiffParams::default() }, &x);
-        assert_eq!(b, b_ref, "B with no morph must be exactly scene B's shaper");
-        assert_ne!(a, b);
+        let (b, _) = run(&scenes(100.0, 2), &x);
+        let d = a.iter().zip(&b).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max);
+        assert!(d > 0.01);
+        let db = b.iter().zip(&b_ref).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max);
+        assert!(db < 1e-5, "{db}");
     }
 
     #[test]
     fn mix_crossfades_the_two_scenes_statically() {
         let x = tone(20000, 0.4);
         let (a, _) = run(&scenes(0.0, 2), &x);
-        let (b, _) = run(&DiffParams { ab: 1, ..scenes(0.0, 2) }, &x);
+        let (b, _) = run(&DiffParams { shape: 4, drive: 45.0, ..DiffParams::default() }, &x);
         let (full, _) = run(&scenes(100.0, 2), &x);
         let maxd = |p: &[f32], q: &[f32]| p.iter().zip(q).map(|(u, v)| (u - v).abs()).fold(0.0f32, f32::max);
         assert!(maxd(&full, &b) < 1e-5, "MIX 100 % is scene B: {}", maxd(&full, &b));
