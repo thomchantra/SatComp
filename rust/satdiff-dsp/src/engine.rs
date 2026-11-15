@@ -72,7 +72,7 @@ pub struct DiffEngine {
     /// output peak per channel, linear
     pub opk: [f64; 2],
     /// input peak per channel, linear (the left meter)
-    /// peak at the saturator's input (after PHASE and a PRE fx, before DRIVE), since the owner last cleared it
+    /// peak of what the shaper sees (after PHASE, a PRE fx, the HP / LP split, DRIVE and BIAS), since the owner last cleared it
     pub ipk: [f64; 2],
     /// post-saturator (after SAT GAIN) peak, linear
     pub sat_out: f64,
@@ -324,13 +324,13 @@ impl DiffEngine {
         // PHASE, then the diffusor when it runs before the saturator
         let r = self.rot.tick(inp);
         let pre = if self.fx_pos == 0 { self.fx.tick(r) } else { r };
-        // the input meter reads here, at the saturator's input (before DRIVE): the dry input while PHASE and a PRE fx do nothing,
-        // so it checks the input level and what reaches the shaper in one
-        self.ipk[0] = self.ipk[0].max(pre[0].abs());
-        self.ipk[1] = self.ipk[1].max(pre[1].abs());
 
         // SAT (+ SAT GAIN), then the diffusor when it runs after
         let mut s = self.sat.tick(pre, self.smoothing);
+        // the input meter reads what the shaper just saw (after the HP / LP split, DRIVE and BIAS; the plain input while the
+        // saturator is off): 0 dBFS is the edge of the drawn curve, so it shows at a glance whether the SAT stage is clipped
+        self.ipk[0] = self.ipk[0].max(self.sat.xin_abs[0]);
+        self.ipk[1] = self.ipk[1].max(self.sat.xin_abs[1]);
         if self.fx_pos == 1 {
             s = self.fx.tick(s);
         }
@@ -692,16 +692,17 @@ mod tests {
     }
 
     #[test]
-    fn the_input_meter_reads_the_saturator_input_not_the_dry_input() {
+    fn the_input_meter_reads_what_the_shaper_sees() {
         let x: Vec<f32> = (0..24000).map(|i| (0.3 * (2.0 * PI * 90.0 * i as f64 / SR).sin()) as f32).collect();
-        let peak = |p: DiffParams| {
-            let (_, e) = run_peak(&p, &x);
-            e
-        };
+        let peak = |p: DiffParams| run_peak(&p, &x).1;
         let dry = peak(DiffParams::default());
         assert!((dry - 0.3).abs() < 0.01, "{dry}");
-        // drive does not change it: the meter is before DRIVE
-        assert!((peak(DiffParams { drive: 60.0, ..DiffParams::default() }) - dry).abs() < 0.01);
+        // drive raises it, past 1.0 once the shaper is hit beyond the edge of its curve
+        let driven = peak(DiffParams { drive: 60.0, ..DiffParams::default() });
+        assert!(driven > 1.0, "{driven}");
+        assert!(peak(DiffParams { drive: 20.0, ..DiffParams::default() }) < driven);
+        // bias adds to it
+        assert!(peak(DiffParams { drive: 20.0, bias: 30.0, ..DiffParams::default() }) > peak(DiffParams { drive: 20.0, ..DiffParams::default() }) + 0.1);
         // a PRE diffusor reshapes the peaks before the shaper, POST does not
         let fx = |pos: i32| DiffParams { fx_on: true, fx_pos: pos, fx_freq: 300.0, fx_q: 6.0, fx_stages: 12, ..DiffParams::default() };
         assert!((peak(fx(0)) - dry).abs() > 0.005, "pre {} dry {dry}", peak(fx(0)));
@@ -719,5 +720,42 @@ mod tests {
             e.ipk = [0.0; 2];
         }
         (l, pk)
+    }
+
+    /// Peak |output| while BIAS is dragged from 0 to `to` % over 150 ms (one step per 64-sample block) on `x`, then held.
+    fn bias_drag_peak(x: &[f32], to: f64, drive: f64, shape: i32, comp: bool) -> f64 {
+        let mut e = DiffEngine::new(SR);
+        e.dc_comp = comp;
+        e.set_params(&DiffParams { shape, drive, ..DiffParams::default() });
+        let (mut l, mut r) = (x.to_vec(), x.to_vec());
+        let mut pk = 0.0f64;
+        let lat = e.latency() as usize;
+        for (k, (cl, cr)) in l.chunks_mut(64).zip(r.chunks_mut(64)).enumerate() {
+            let t = (k as f64 * 64.0 / (0.15 * SR)).min(1.0);
+            e.set_params(&DiffParams { shape, drive, bias: to * t, ..DiffParams::default() });
+            e.process(cl, cr);
+            if k * 64 > 2 * lat {
+                pk = cl.iter().fold(pk, |m, v| m.max(v.abs() as f64));
+            }
+        }
+        pk
+    }
+
+    #[test]
+    fn dragging_bias_in_silence_does_not_bump() {
+        let silence = vec![0.0f32; 48000];
+        for shape in [0, 1, 4, 7, 10, 13] {
+            for to in [10.0, 40.0, -40.0] {
+                let on = bias_drag_peak(&silence, to, 0.0, shape, true);
+                let off = bias_drag_peak(&silence, to, 0.0, shape, false);
+                assert!(on < 0.01, "shape {shape} bias {to}: {on} (without compensation {off})");
+                eprintln!("shape {shape} bias {to}: on {on:.4} off {off:.4}");
+            }
+        }
+        // and with a quiet tone going: the bump must not grow beyond the tone itself
+        let tone: Vec<f32> = (0..48000).map(|i| (0.05 * (2.0 * PI * 440.0 * i as f64 / SR).sin()) as f32).collect();
+        let on = bias_drag_peak(&tone, 40.0, 20.0, 1, true);
+        let base = bias_drag_peak(&tone, 0.0, 20.0, 1, true);
+        assert!(on < base * 1.5 + 0.02, "tone: {on} vs {base}");
     }
 }

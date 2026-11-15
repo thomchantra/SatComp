@@ -86,16 +86,25 @@ pub struct Saturator {
     /// True until the first saturated sample: a fresh engine (REAPER rebuilds it on every FX enable) must start the
     /// oversampler and DC blocker in their settled state, else the saturator's constant output (bias) leaks as a step.
     dc_warm: bool,
-    /// Shaper-change DC compensation (off by default; see `set_dc_comp`): ring of the recent shaper inputs per channel, the
-    /// offsets taken off the blocker input / the asym high-pass input while the table crossfades, and their per-step increments.
+    /// DC compensation (off by default; see `set_dc_comp`): ring of the recent band-limited inputs per channel (before DRIVE and
+    /// BIAS), the Hann weights over it, the offsets taken off the blocker input / the asym high-pass input, what the shaper was
+    /// last evaluated with (drive, bias, table) and the evaluation cadence.
     dc_comp: bool,
     hist: [Vec<f64>; 2],
     hist_i: usize,
+    hann: Vec<f64>,
     dc_adj: [f64; 2],
     ev_adj: [f64; 2],
-    dc_inc: [f64; 2],
-    ev_inc: [f64; 2],
     adj_dec: f64,
+    m_cnt: u32,
+    m_pre: f64,
+    m_bias: f64,
+    m_table: Vec<f64>,
+    m_periodic: bool,
+    m_lut_dirty: bool,
+    was_on: bool,
+    /// |shaper input| of the last sample per channel (after the HP / LP split, DRIVE and BIAS; the plain input while off)
+    pub xin_abs: [f64; 2],
     dry: StereoDelay<64>,
     res: StereoDelay<64>,
     band: StereoDelay<64>,
@@ -114,7 +123,9 @@ pub struct Saturator {
 }
 
 /// samples of recent shaper input kept to estimate a shaper's DC on the live signal
-const HIST_LEN: usize = 2048;
+const HIST_LEN: usize = 512;
+/// samples between two looks at whether the shaper's DC moved
+const DC_EVERY: u32 = 16;
 
 impl Default for Saturator {
     fn default() -> Self {
@@ -158,11 +169,18 @@ impl Saturator {
             dc_comp: false,
             hist: [vec![0.0; HIST_LEN], vec![0.0; HIST_LEN]],
             hist_i: 0,
+            hann: (0..HIST_LEN).map(|k| 0.5 - 0.5 * (2.0 * PI * (k as f64 + 0.5) / HIST_LEN as f64).cos()).collect(),
             dc_adj: [0.0; 2],
             ev_adj: [0.0; 2],
-            dc_inc: [0.0; 2],
-            ev_inc: [0.0; 2],
             adj_dec: 1.0,
+            m_cnt: 0,
+            m_pre: 1.0,
+            m_bias: 0.0,
+            m_table: Vec::new(),
+            m_periodic: false,
+            m_lut_dirty: false,
+            was_on: false,
+            xin_abs: [0.0; 2],
             dry: StereoDelay::new(),
             res: StereoDelay::new(),
             band: StereoDelay::new(),
@@ -185,20 +203,21 @@ impl Saturator {
         self.lut.fade_steps = n.max(1);
     }
 
-    /// Keep the output free of the thump a shaper change otherwise makes: when the table crossfades, the DC the new shaper adds
-    /// (measured on the recent input) is taken off the DC blocker's and the asym high-pass's input in step with the crossfade,
-    /// then released slowly, so neither filter sees a DC step to ring on.
+    /// Keep the output free of the thumps a change of the shaper's DC otherwise makes (a different shaper or tile mode, a drawn
+    /// curve edit, DRIVE, BIAS): the DC blocker and the asym high-pass ring on any DC step. While the shaper moves, its DC on the
+    /// recent input is evaluated before and after each small move and the difference is taken off the filters' inputs as it
+    /// happens (no lag, and it works in silence, where the DC is just the shaper at the bias), then released slowly.
     pub fn set_dc_comp(&mut self, on: bool) {
         self.dc_comp = on;
     }
 
-    /// DC of the blocker input and of the even part over the recent input, for the table `t`.
-    fn shaper_dc(&self, t: &[f64], periodic: bool, c: usize) -> (f64, f64) {
-        // Hann-weighted mean, oldest sample first: a plain mean of a few periods of a loud low tone is far from its true DC
+    /// DC of the blocker input and of the even part over the recent input, for table `t` at the given drive and bias.
+    /// Hann-weighted, oldest sample first. Only differences of it are used, so its leakage from loud low tones cancels.
+    fn shaper_dc(&self, t: &[f64], periodic: bool, pre: f64, bias: f64, c: usize) -> (f64, f64) {
         let (mut f_sum, mut e_sum, mut odd_sum, mut wsum) = (0.0, 0.0, 0.0, 0.0);
         for k in 0..HIST_LEN {
-            let x = self.hist[c][(self.hist_i + k) % HIST_LEN];
-            let w = 0.5 - 0.5 * (2.0 * PI * (k as f64 + 0.5) / HIST_LEN as f64).cos();
+            let x = self.hist[c][(self.hist_i + k) % HIST_LEN] * pre + bias;
+            let w = self.hann[k];
             let f = ShaperLut::eval_table(t, periodic, x);
             let e = 0.5 * (f + ShaperLut::eval_table(t, periodic, -x));
             f_sum += w * f;
@@ -211,6 +230,39 @@ impl Saturator {
         } else {
             (f_sum / wsum, 0.0)
         }
+    }
+
+    /// Every `DC_EVERY` samples: if drive, bias or the table moved since the last look, add the change in the shaper's DC to the
+    /// offsets taken off the filter inputs.
+    fn dc_track(&mut self) {
+        self.m_cnt += 1;
+        if self.m_cnt < DC_EVERY {
+            return;
+        }
+        self.m_cnt = 0;
+        if self.m_table.len() != self.lut.table.len() {
+            self.m_table = self.lut.table.clone();
+            self.m_periodic = self.lut.periodic;
+            self.m_pre = self.pre;
+            self.m_bias = self.bias;
+            self.m_lut_dirty = false;
+            return;
+        }
+        let moved = self.m_lut_dirty || (self.pre - self.m_pre).abs() > 1e-9 * self.pre.max(1.0) || (self.bias - self.m_bias).abs() > 1e-9;
+        if !moved {
+            return;
+        }
+        for c in 0..2 {
+            let (d0, e0) = self.shaper_dc(&self.m_table, self.m_periodic, self.m_pre, self.m_bias, c);
+            let (d1, e1) = self.shaper_dc(&self.lut.table, self.lut.periodic, self.pre, self.bias, c);
+            self.dc_adj[c] += d1 - d0;
+            self.ev_adj[c] += e1 - e0;
+        }
+        self.m_table.copy_from_slice(&self.lut.table);
+        self.m_periodic = self.lut.periodic;
+        self.m_pre = self.pre;
+        self.m_bias = self.bias;
+        self.m_lut_dirty = false;
     }
 
     /// PDC latency of the oversampler, samples.
@@ -231,25 +283,13 @@ impl Saturator {
     /// table at once (no morph) and disables the per-sample glide.
     pub fn derive(&mut self, p: &SatParams, sr: f64, snap: bool, smoothing: bool) {
         self.lut.fade = smoothing;
-        let (old, was_morphing) = if self.dc_comp { (Some(self.lut.table.clone()), self.lut.morph_left() > 0) } else { (None, false) };
-        // asym_k decides which DC the estimate looks at: set it before the plan
+        // asym_k decides which DC the tracker looks at: set it before the shaper table moves
         self.asym_k = p.asym.map(|a| (a * 0.01).clamp(0.0, 1.0));
-        if self.lut.sync(p.shape, &p.curve) && smoothing && self.lut.morph_left() > 0 {
-            if let Some(old) = old {
-                // the table now heads for the new target: plan the compensation from where the table is (a crossfade in progress
-                // already moved its own share of the offsets along)
-                let _ = was_morphing;
-                let periodic = self.lut.periodic;
-                let n = self.lut.morph_left() as f64;
-                for c in 0..2 {
-                    let (d0, e0) = self.shaper_dc(&old, periodic, c);
-                    let (d1, e1) = self.shaper_dc(self.lut.target(), periodic, c);
-                    self.dc_inc[c] = (d1 - d0) / n;
-                    self.ev_inc[c] = (e1 - e0) / n;
-                }
-            }
+        if self.lut.sync(p.shape, &p.curve) {
+            self.m_lut_dirty = true;
         }
-        self.adj_dec = 1.0 - 1.0 / (1.0 * sr);
+        // the offsets are only ever a DC the filters would remove anyway: release them very slowly (they just must not run away)
+        self.adj_dec = 1.0 - 1.0 / (30.0 * sr);
         self.pre_t = (p.drive * 0.01 * 36.0 * LN10_20).exp();
         self.bias_t = p.bias * 0.01;
         self.on = p.drive > 0.0 || p.bias != 0.0;
@@ -326,14 +366,10 @@ impl Saturator {
         self.lut_cnt += 1;
         if self.lut_cnt >= crate::shapers::FADE_EVERY {
             self.lut_cnt = 0;
-            let morphing = self.lut.morph_left() > 0;
-            self.lut.step();
-            if morphing {
-                for c in 0..2 {
-                    self.dc_adj[c] += self.dc_inc[c];
-                    self.ev_adj[c] += self.ev_inc[c];
-                }
+            if self.lut.morph_left() > 0 {
+                self.m_lut_dirty = true;
             }
+            self.lut.step();
         }
         if self.dc_comp {
             for c in 0..2 {
@@ -350,6 +386,16 @@ impl Saturator {
             self.pre = self.pre_t;
             self.bias = self.bias_t;
             self.mix = self.mix_t;
+        }
+
+        if self.dc_comp {
+            if self.on && !self.was_on {
+                self.dc_warm = true; // switching on after a stretch off: the blocker and the oversampler start from a settled state
+            }
+            self.was_on = self.on;
+            if self.on {
+                self.dc_track();
+            }
         }
 
         self.dry.advance();
@@ -378,16 +424,16 @@ impl Saturator {
             self.res.put([inp[0] - bp[0], inp[1] - bp[1]]);
             self.band.put(bp);
             self.blk = self.blk.max(bp[0].abs().max(bp[1].abs()));
+            if self.dc_comp {
+                self.hist[0][self.hist_i] = bp[0];
+                self.hist[1][self.hist_i] = bp[1];
+                self.hist_i = (self.hist_i + 1) % HIST_LEN;
+            }
             let rd_band = self.band.tap(self.lat);
             let rd_res = self.res.tap(self.lat);
             for c in 0..2 {
                 let xin = bp[c] * self.pre + self.bias;
-                if self.dc_comp {
-                    self.hist[c][self.hist_i] = xin;
-                    if c == 1 {
-                        self.hist_i = (self.hist_i + 1) % HIST_LEN;
-                    }
-                }
+                self.xin_abs[c] = xin.abs();
                 let sh = if let Some(k) = self.asym_k {
                     if self.dc_warm {
                         for _ in 0..256 {
@@ -430,6 +476,12 @@ impl Saturator {
         } else {
             self.res.put([0.0, 0.0]);
             cc = dl;
+            self.xin_abs = [inp[0].abs(), inp[1].abs()];
+            if self.dc_comp {
+                self.hist[0][self.hist_i] = inp[0];
+                self.hist[1][self.hist_i] = inp[1];
+                self.hist_i = (self.hist_i + 1) % HIST_LEN;
+            }
         }
 
         ms_step(&mut self.ms, cc[0], cc[1], self.ms_c);
