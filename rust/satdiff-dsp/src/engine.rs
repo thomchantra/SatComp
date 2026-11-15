@@ -84,6 +84,9 @@ pub struct DiffEngine {
     pub scope: Arc<ScopeRing>,
     /// mono output samples for the editor's spectrum / oscilloscope
     pub tap: Arc<TapRing>,
+    /// the colour fx's output as (L+R)/2 and (L-R)/2, for the fx viewport's stereo-field underlay
+    pub fx_mid: Arc<TapRing>,
+    pub fx_side: Arc<TapRing>,
     sc_len: usize,
     sc_n: usize,
     sc_o: f64,
@@ -163,6 +166,8 @@ impl DiffEngine {
             delta_on: false,
             scope: Arc::new(ScopeRing::new()),
             tap: Arc::new(TapRing::new()),
+            fx_mid: Arc::new(TapRing::new()),
+            fx_side: Arc::new(TapRing::new()),
             sc_len: 96,
             sc_n: 0,
             sc_o: 0.0,
@@ -381,6 +386,13 @@ impl DiffEngine {
     }
 
     #[inline]
+    /// the colour fx's output, as mid and side, for the editor
+    fn push_fx(&self, f: [f64; 2]) {
+        self.fx_mid.push(((f[0] + f[1]) * 0.5) as f32);
+        self.fx_side.push(((f[0] - f[1]) * 0.5) as f32);
+    }
+
+    #[inline]
     pub fn tick(&mut self, in_l: f64, in_r: f64) -> (f64, f64) {
         let inp = [in_l, in_r];
         // the segmented meter reads the dry input, before anything touches it
@@ -398,7 +410,13 @@ impl DiffEngine {
 
         // PHASE, then the diffusor when it runs before the saturator
         let r = self.rot.tick(ing);
-        let pre = if self.fx_pos == 0 { self.fx.tick(r) } else { r };
+        let pre = if self.fx_pos == 0 {
+            let f = self.fx.tick(r);
+            self.push_fx(f);
+            f
+        } else {
+            r
+        };
 
         // MORPH detector: follows the level entering the saturator, moves the blend every 32 samples
         if self.morph_det {
@@ -431,6 +449,7 @@ impl DiffEngine {
         ms_step(&mut self.sms, s[0], s[1], self.rms_slow_c);
         if self.fx_pos == 1 {
             s = self.fx.tick(s);
+            self.push_fx(s);
         }
 
         // OUT GAIN (+ the gain-match trim)
