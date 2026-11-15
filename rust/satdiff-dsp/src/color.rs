@@ -13,6 +13,7 @@
 //!   "barber pole" rise / fall) and WIDTH counter-shifts the right channel for a stereo spread. Zero latency.
 
 use crate::diffuse::{Diffusor, MAX_STAGES};
+use crate::filters::FxFilter;
 use crate::params::DiffParams;
 use crate::phase::Rotator;
 use satcomp_dsp::level::one_pole;
@@ -276,6 +277,8 @@ pub struct ColorFx {
     fla: Flanger,
     rm: RingMod,
     fsh: FreqShift,
+    /// HPF / LPF on the wet signal of RINGMOD and FREQ SHIFT (wide-band results: sub and air)
+    flt: FxFilter,
     /// the type that is running and the one the host asks for
     cur: i32,
     want: i32,
@@ -291,7 +294,7 @@ pub struct ColorFx {
 
 impl ColorFx {
     pub fn new(sr: f64) -> Self {
-        let mut f = Self { sr, dif: Diffusor::new(sr), pha: Phaser::new(), fla: Flanger::new(sr), rm: RingMod::new(), fsh: FreqShift::new(sr), cur: FX_DIFFUSOR, want: FX_DIFFUSOR, on: false, gate: 0.0, mix: Smooth::new(1.0), sm_c: 0.0, gate_c: 0.0, p: DiffParams::default() };
+        let mut f = Self { sr, dif: Diffusor::new(sr), pha: Phaser::new(), fla: Flanger::new(sr), rm: RingMod::new(), fsh: FreqShift::new(sr), flt: FxFilter::new(sr), cur: FX_DIFFUSOR, want: FX_DIFFUSOR, on: false, gate: 0.0, mix: Smooth::new(1.0), sm_c: 0.0, gate_c: 0.0, p: DiffParams::default() };
         f.set_sample_rate(sr);
         f
     }
@@ -301,6 +304,7 @@ impl ColorFx {
         self.dif.set_sample_rate(sr);
         self.fla.resize(sr);
         self.fsh.resize(sr);
+        self.flt.set_sample_rate(sr);
         self.sm_c = one_pole(sr, 0.01);
         self.gate_c = one_pole(sr, 0.02);
     }
@@ -311,6 +315,7 @@ impl ColorFx {
         self.pha.reset();
         self.fla.reset();
         self.fsh.reset();
+        self.flt.reset();
     }
 
     fn arm_diffusor(&mut self, snap: bool) {
@@ -344,6 +349,7 @@ impl ColorFx {
         self.rm.freq.t = p.fx_freq.clamp(20.0, top);
         self.rm.amount.t = p.fx_depth.clamp(0.0, 100.0) * 0.01;
         self.rm.shape = p.fx_shape.clamp(0, 3);
+        self.flt.set(p.fx_hp.clamp(20.0, 2000.0), p.fx_lp.clamp(200.0, 20000.0));
         self.fsh.shift.t = p.fx_shift.clamp(-1000.0, 1000.0);
         self.fsh.fb.t = p.fx_fb.clamp(-95.0, 95.0) * 0.01;
         self.fsh.delay.t = p.fx_delay.clamp(0.1, 10.0);
@@ -393,6 +399,7 @@ impl ColorFx {
             FX_FSHIFT => self.fsh.tick(x, self.sr, self.sm_c),
             _ => self.rm.tick(x, self.sr, self.sm_c),
         };
+        let wet = if self.cur == FX_RINGMOD || self.cur == FX_FSHIFT { self.flt.tick(wet) } else { wet };
         [x[0] + (wet[0] - x[0]) * m, x[1] + (wet[1] - x[1]) * m]
     }
 }
@@ -615,5 +622,23 @@ mod tests {
                 assert!(y.iter().all(|v| v.is_finite() && v.abs() < 25.0), "shift {sh} fb {fb}");
             }
         }
+    }
+
+    #[test]
+    fn the_wet_filter_trims_ringmod_and_freq_shift_but_not_the_others() {
+        // a 1 kHz tone ring-modulated by 5 kHz makes 4 kHz and 6 kHz; an LPF at 2 kHz removes both
+        let tone = sine(1000.0, 48000, 0.5);
+        let p = DiffParams { fx_freq: 5000.0, fx_depth: 100.0, ..params(FX_RINGMOD) };
+        let open = render(&p, &tone);
+        let cut = render(&DiffParams { fx_lp: 2000.0, ..p }, &tone);
+        assert!(amp(&open, 4000.0) > 0.2 && amp(&cut, 4000.0) < 0.3 * amp(&open, 4000.0) && amp(&cut, 6000.0) < 0.15 * amp(&open, 6000.0), "{} {}", amp(&open, 4000.0), amp(&cut, 4000.0));
+        // freq shift: +300 Hz on 400 Hz lands at 700 Hz; an HPF at 3 kHz removes it
+        let low = sine(400.0, 48000, 0.5);
+        let q = DiffParams { fx_shift: 300.0, fx_spread: 0.0, ..params(FX_FSHIFT) };
+        assert!(amp(&render(&q, &low), 700.0) > 0.4);
+        assert!(amp(&render(&DiffParams { fx_hp: 3000.0, ..q }, &low), 700.0) < 0.1);
+        // phaser ignores the filter
+        let ph = params(FX_PHASER);
+        assert_eq!(render(&ph, &tone), render(&DiffParams { fx_hp: 1000.0, fx_lp: 2000.0, ..ph }, &tone));
     }
 }

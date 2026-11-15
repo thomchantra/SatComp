@@ -70,6 +70,13 @@ pub struct DiffParams {
     pub fx_shape: i32,
     /// frequency shifter: shift in Hz, negative = down
     pub fx_shift: f64,
+    /// HPF / LPF on the wet signal of RINGMOD and FREQ SHIFT (20 Hz / 20 kHz = off)
+    pub fx_hp: f64,
+    pub fx_lp: f64,
+    /// 24 dB/oct high-pass before OUT GAIN (20 Hz = off) and which of mid / side it cuts
+    pub out_hp: f64,
+    pub out_hp_m: bool,
+    pub out_hp_s: bool,
     /// COLOR MIX: wet / dry of the whole colour fx, 0..100 %
     pub fx_mix: f64,
     /// 0 off, 1 mirror, 2 repeat
@@ -123,6 +130,11 @@ impl Default for DiffParams {
             fx_delay: 2.0,
             fx_shape: 0,
             fx_shift: 0.0,
+            fx_hp: 20.0,
+            fx_lp: 20000.0,
+            out_hp: 20.0,
+            out_hp_m: true,
+            out_hp_s: true,
             fx_mix: 100.0,
             tile: 0,
             morph_dir: 2,

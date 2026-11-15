@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Arc;
 
 /// Highest UI slot number + 1.
-pub const SLOTS: usize = 57;
+pub const SLOTS: usize = 62;
 
 /// (slot number, id, min, max, default) for every parameter.
 pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
@@ -51,6 +51,11 @@ pub const TABLE: &[(usize, &str, f32, f32, f32)] = &[
     (54, "sat_lp_b", 200.0, 20000.0, 20000.0),
     (55, "tone_b", 1000.0, 20000.0, 20000.0),
     (56, "fx_shift", -1000.0, 1000.0, 0.0),
+    (57, "out_hp", 20.0, 2000.0, 20.0),
+    (58, "out_hp_m", 0.0, 1.0, 1.0),
+    (59, "out_hp_s", 0.0, 1.0, 1.0),
+    (60, "fx_hp", 20.0, 2000.0, 20.0),
+    (61, "fx_lp", 200.0, 20000.0, 20000.0),
     (43, "fx_spread", 0.0, 100.0, 50.0),
 ];
 
@@ -175,6 +180,16 @@ pub struct SatDiffParams {
     pub tone_b: FloatParam,
     #[id = "fx_shift"]
     pub fx_shift: FloatParam,
+    #[id = "out_hp"]
+    pub out_hp: FloatParam,
+    #[id = "out_hp_m"]
+    pub out_hp_m: BoolParam,
+    #[id = "out_hp_s"]
+    pub out_hp_s: BoolParam,
+    #[id = "fx_hp"]
+    pub fx_hp: FloatParam,
+    #[id = "fx_lp"]
+    pub fx_lp: FloatParam,
     #[id = "fx_spread"]
     pub fx_spread: FloatParam,
 }
@@ -245,6 +260,11 @@ impl SatDiffParams {
             sat_lp_b: FloatParam::new("Sat LP B", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             tone_b: FloatParam::new("Tone B", 20000.0, FloatRange::Linear { min: 1000.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             fx_shift: FloatParam::new("FX Shift", 0.0, FloatRange::Linear { min: -1000.0, max: 1000.0 }).with_unit(" Hz").with_step_size(0.1),
+            out_hp: FloatParam::new("Out HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
+            out_hp_m: BoolParam::new("Out HP Mid", true),
+            out_hp_s: BoolParam::new("Out HP Side", true),
+            fx_hp: FloatParam::new("FX HP", 20.0, FloatRange::Linear { min: 20.0, max: 2000.0 }).with_unit(" Hz").with_step_size(1.0),
+            fx_lp: FloatParam::new("FX LP", 20000.0, FloatRange::Linear { min: 200.0, max: 20000.0 }).with_unit(" Hz").with_step_size(1.0),
             fx_spread: FloatParam::new("FX Spread", 50.0, FloatRange::Linear { min: 0.0, max: 100.0 }).with_unit(" %").with_step_size(1.0),
         }
     }
@@ -335,7 +355,7 @@ impl SatDiffParams {
             out_gain: self.out_gain.value() as f64, gain_match: self.gain_match.value(), lim_on: self.lim_on.value(),
             bypass: self.bypass.value(), ab: self.ab.value(), phase: self.phase.value() as f64, fx_on: self.fx_on.value(),
             fx_type: self.fx_type.value(), fx_pos: self.fx_pos.value(), fx_freq: self.fx_freq.value() as f64, fx_q: self.fx_q.value() as f64,
-            fx_stages: satdiff_dsp::diffuse::stages_from_pct(self.fx_stages.value() as f64), fx_spread: self.fx_spread.value() as f64, fx_rate: self.fx_rate.value() as f64, fx_depth: self.fx_depth.value() as f64, fx_fb: self.fx_fb.value() as f64, fx_delay: self.fx_delay.value() as f64, fx_shape: self.fx_shape.value(), fx_shift: self.fx_shift.value() as f64, fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),
+            fx_stages: satdiff_dsp::diffuse::stages_from_pct(self.fx_stages.value() as f64), fx_spread: self.fx_spread.value() as f64, fx_rate: self.fx_rate.value() as f64, fx_depth: self.fx_depth.value() as f64, fx_fb: self.fx_fb.value() as f64, fx_delay: self.fx_delay.value() as f64, fx_shape: self.fx_shape.value(), fx_shift: self.fx_shift.value() as f64, fx_hp: self.fx_hp.value() as f64, fx_lp: self.fx_lp.value() as f64, out_hp: self.out_hp.value() as f64, out_hp_m: self.out_hp_m.value(), out_hp_s: self.out_hp_s.value(), fx_mix: self.fx_mix.value() as f64, tile: self.tile.value(), morph_dir: self.morph_dir.value(),
             morph_depth: self.morph_depth.value() as f64, morph_speed: self.morph_speed.value() as f64,
         }
     }
@@ -382,6 +402,11 @@ impl SatDiffParams {
             54 => self.sat_lp_b.as_ptr(),
             55 => self.tone_b.as_ptr(),
             56 => self.fx_shift.as_ptr(),
+            57 => self.out_hp.as_ptr(),
+            58 => self.out_hp_m.as_ptr(),
+            59 => self.out_hp_s.as_ptr(),
+            60 => self.fx_hp.as_ptr(),
+            61 => self.fx_lp.as_ptr(),
             43 => self.fx_spread.as_ptr(),
             _ => return None,
         })

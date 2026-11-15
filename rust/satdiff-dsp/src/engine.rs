@@ -7,6 +7,7 @@
 //! same latency. DELTA monitors what the processed path changed (processed minus the aligned input, before the limiter).
 
 use crate::color::ColorFx;
+use crate::filters::OutHp;
 use crate::follower::Follower;
 use crate::params::DiffParams;
 use crate::phase::Rotator;
@@ -33,6 +34,7 @@ pub struct DiffEngine {
     pub dc_comp: bool,
     rot: Rotator,
     fx: ColorFx,
+    out_hp: OutHp,
     /// MORPH detector (a level follower on the saturator's input): position 0..1 of the blend towards scene B, detector mode only
     det: Follower,
     morph_det: bool,
@@ -126,6 +128,7 @@ impl DiffEngine {
             dc_comp: true,
             rot: Rotator::new(sr),
             fx: ColorFx::new(sr),
+            out_hp: OutHp::new(sr),
             det: Follower::default(),
             morph_det: false,
             morph_m: 0.0,
@@ -240,6 +243,7 @@ impl DiffEngine {
             self.lim.set_sample_rate(sr);
             self.rot.set_sample_rate(sr);
             self.fx.set_sample_rate(sr);
+            self.out_hp.set_sample_rate(sr);
             self.sc_len = ((sr * ScopeRing::BUCKET_S).round() as usize).max(1);
             self.sm_c = one_pole(sr, 0.02);
             self.byp_c = one_pole(sr, 0.01);
@@ -274,6 +278,7 @@ impl DiffEngine {
         }
         self.rot.set(p.phase, self.snap);
         self.fx.set(&p, self.snap);
+        self.out_hp.set(p.out_hp, p.out_hp_m, p.out_hp_s, self.snap);
         if p.fx_pos != self.fx_pos {
             self.fx_pos = p.fx_pos;
             self.fx.reset(); // the filter state belongs to the other side of the saturator
@@ -386,7 +391,7 @@ impl DiffEngine {
     }
 
     #[inline]
-    /// the colour fx's output, as mid and side, for the editor
+    /// the signal entering OUT GAIN (after saturator, colour fx and output HPF), as mid and side, for the editor
     fn push_fx(&self, f: [f64; 2]) {
         self.fx_mid.push(((f[0] + f[1]) * 0.5) as f32);
         self.fx_side.push(((f[0] - f[1]) * 0.5) as f32);
@@ -411,9 +416,7 @@ impl DiffEngine {
         // PHASE, then the diffusor when it runs before the saturator
         let r = self.rot.tick(ing);
         let pre = if self.fx_pos == 0 {
-            let f = self.fx.tick(r);
-            self.push_fx(f);
-            f
+            self.fx.tick(r)
         } else {
             r
         };
@@ -449,8 +452,10 @@ impl DiffEngine {
         ms_step(&mut self.sms, s[0], s[1], self.rms_slow_c);
         if self.fx_pos == 1 {
             s = self.fx.tick(s);
-            self.push_fx(s);
         }
+        // the output high-pass, right before OUT GAIN; the editor's stereo-field view reads what it leaves
+        s = self.out_hp.tick(s);
+        self.push_fx(s);
 
         // OUT GAIN (+ the gain-match trim)
         self.og += (self.og_t - self.og) * self.sm_c;
