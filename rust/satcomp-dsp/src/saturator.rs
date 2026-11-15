@@ -86,6 +86,16 @@ pub struct Saturator {
     /// True until the first saturated sample: a fresh engine (REAPER rebuilds it on every FX enable) must start the
     /// oversampler and DC blocker in their settled state, else the saturator's constant output (bias) leaks as a step.
     dc_warm: bool,
+    /// Shaper-change DC compensation (off by default; see `set_dc_comp`): ring of the recent shaper inputs per channel, the
+    /// offsets taken off the blocker input / the asym high-pass input while the table crossfades, and their per-step increments.
+    dc_comp: bool,
+    hist: [Vec<f64>; 2],
+    hist_i: usize,
+    dc_adj: [f64; 2],
+    ev_adj: [f64; 2],
+    dc_inc: [f64; 2],
+    ev_inc: [f64; 2],
+    adj_dec: f64,
     dry: StereoDelay<64>,
     res: StereoDelay<64>,
     band: StereoDelay<64>,
@@ -102,6 +112,9 @@ pub struct Saturator {
     /// Peak of the shaped band since the owner last cleared it (UI meter).
     pub blk: f64,
 }
+
+/// samples of recent shaper input kept to estimate a shaper's DC on the live signal
+const HIST_LEN: usize = 2048;
 
 impl Default for Saturator {
     fn default() -> Self {
@@ -142,6 +155,14 @@ impl Saturator {
             dcx: [0.0; 2],
             dcy: [0.0; 2],
             dc_warm: true,
+            dc_comp: false,
+            hist: [vec![0.0; HIST_LEN], vec![0.0; HIST_LEN]],
+            hist_i: 0,
+            dc_adj: [0.0; 2],
+            ev_adj: [0.0; 2],
+            dc_inc: [0.0; 2],
+            ev_inc: [0.0; 2],
+            adj_dec: 1.0,
             dry: StereoDelay::new(),
             res: StereoDelay::new(),
             band: StereoDelay::new(),
@@ -155,6 +176,40 @@ impl Saturator {
             ms_c: 0.0,
             ms: 1e-9,
             blk: 0.0,
+        }
+    }
+
+    /// Length of the shaper-table crossfade in `FADE_EVERY`-sample updates (default `FADE_STEPS`, ~10 ms). A longer one turns the
+    /// DC change between two shapers into a ramp the DC blocker can follow instead of a step it rings on.
+    pub fn set_morph_steps(&mut self, n: u32) {
+        self.lut.fade_steps = n.max(1);
+    }
+
+    /// Keep the output free of the thump a shaper change otherwise makes: when the table crossfades, the DC the new shaper adds
+    /// (measured on the recent input) is taken off the DC blocker's and the asym high-pass's input in step with the crossfade,
+    /// then released slowly, so neither filter sees a DC step to ring on.
+    pub fn set_dc_comp(&mut self, on: bool) {
+        self.dc_comp = on;
+    }
+
+    /// DC of the blocker input and of the even part over the recent input, for the table `t`.
+    fn shaper_dc(&self, t: &[f64], periodic: bool, c: usize) -> (f64, f64) {
+        // Hann-weighted mean, oldest sample first: a plain mean of a few periods of a loud low tone is far from its true DC
+        let (mut f_sum, mut e_sum, mut odd_sum, mut wsum) = (0.0, 0.0, 0.0, 0.0);
+        for k in 0..HIST_LEN {
+            let x = self.hist[c][(self.hist_i + k) % HIST_LEN];
+            let w = 0.5 - 0.5 * (2.0 * PI * (k as f64 + 0.5) / HIST_LEN as f64).cos();
+            let f = ShaperLut::eval_table(t, periodic, x);
+            let e = 0.5 * (f + ShaperLut::eval_table(t, periodic, -x));
+            f_sum += w * f;
+            e_sum += w * e;
+            odd_sum += w * (f - e);
+            wsum += w;
+        }
+        if self.asym_k.is_some() {
+            (odd_sum / wsum, e_sum / wsum)
+        } else {
+            (f_sum / wsum, 0.0)
         }
     }
 
@@ -176,7 +231,25 @@ impl Saturator {
     /// table at once (no morph) and disables the per-sample glide.
     pub fn derive(&mut self, p: &SatParams, sr: f64, snap: bool, smoothing: bool) {
         self.lut.fade = smoothing;
-        self.lut.sync(p.shape, &p.curve);
+        let (old, was_morphing) = if self.dc_comp { (Some(self.lut.table.clone()), self.lut.morph_left() > 0) } else { (None, false) };
+        // asym_k decides which DC the estimate looks at: set it before the plan
+        self.asym_k = p.asym.map(|a| (a * 0.01).clamp(0.0, 1.0));
+        if self.lut.sync(p.shape, &p.curve) && smoothing && self.lut.morph_left() > 0 {
+            if let Some(old) = old {
+                // the table now heads for the new target: plan the compensation from where the table is (a crossfade in progress
+                // already moved its own share of the offsets along)
+                let _ = was_morphing;
+                let periodic = self.lut.periodic;
+                let n = self.lut.morph_left() as f64;
+                for c in 0..2 {
+                    let (d0, e0) = self.shaper_dc(&old, periodic, c);
+                    let (d1, e1) = self.shaper_dc(self.lut.target(), periodic, c);
+                    self.dc_inc[c] = (d1 - d0) / n;
+                    self.ev_inc[c] = (e1 - e0) / n;
+                }
+            }
+        }
+        self.adj_dec = 1.0 - 1.0 / (1.0 * sr);
         self.pre_t = (p.drive * 0.01 * 36.0 * LN10_20).exp();
         self.bias_t = p.bias * 0.01;
         self.on = p.drive > 0.0 || p.bias != 0.0;
@@ -253,7 +326,20 @@ impl Saturator {
         self.lut_cnt += 1;
         if self.lut_cnt >= crate::shapers::FADE_EVERY {
             self.lut_cnt = 0;
+            let morphing = self.lut.morph_left() > 0;
             self.lut.step();
+            if morphing {
+                for c in 0..2 {
+                    self.dc_adj[c] += self.dc_inc[c];
+                    self.ev_adj[c] += self.ev_inc[c];
+                }
+            }
+        }
+        if self.dc_comp {
+            for c in 0..2 {
+                self.dc_adj[c] *= self.adj_dec;
+                self.ev_adj[c] *= self.adj_dec;
+            }
         }
         if smoothing {
             let c = self.sm_c;
@@ -296,6 +382,12 @@ impl Saturator {
             let rd_res = self.res.tap(self.lat);
             for c in 0..2 {
                 let xin = bp[c] * self.pre + self.bias;
+                if self.dc_comp {
+                    self.hist[c][self.hist_i] = xin;
+                    if c == 1 {
+                        self.hist_i = (self.hist_i + 1) % HIST_LEN;
+                    }
+                }
                 let sh = if let Some(k) = self.asym_k {
                     if self.dc_warm {
                         for _ in 0..256 {
@@ -309,7 +401,7 @@ impl Saturator {
                             bq(&mut self.evs[c], &self.evc, e);
                         }
                     }
-                    f - e + k * bq(&mut self.evs[c], &self.evc, e)
+                    f - e + k * bq(&mut self.evs[c], &self.evc, e - self.ev_adj[c])
                 } else {
                     if self.dc_warm {
                         for _ in 0..256 {
@@ -318,6 +410,7 @@ impl Saturator {
                     }
                     self.ov[c].process(&self.taps, &self.lut, self.os, xin)
                 };
+                let sh = sh - self.dc_adj[c];
                 if self.dc_warm {
                     self.dcx[c] = sh;
                     self.dcy[c] = 0.0;

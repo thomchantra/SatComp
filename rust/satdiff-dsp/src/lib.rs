@@ -8,3 +8,6 @@ pub mod phase;
 
 pub use engine::DiffEngine;
 pub use params::DiffParams;
+
+/// samples between two steps of the shaper crossfade (the shared `satcomp_dsp::shapers::FADE_EVERY`)
+pub const MORPH_EVERY: u32 = satcomp_dsp::shapers::FADE_EVERY;

@@ -266,6 +266,8 @@ pub struct ShaperLut {
     /// Audio use: morph to a newly built table over `FADE_STEPS` x `FADE_EVERY` samples instead of
     /// swapping it (an instant swap is a step in the output = click). The UI plot leaves this off.
     pub fade: bool,
+    /// Updates one morph takes (each `FADE_EVERY` samples); the default is `FADE_STEPS`.
+    pub fade_steps: u32,
     tgt: Vec<f64>,
     steps: u32,
 }
@@ -276,7 +278,7 @@ pub const FADE_EVERY: u32 = 32;
 
 impl ShaperLut {
     pub fn new(sel: i32) -> Self {
-        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, curve: Curve::linear(), fade: false, tgt: vec![0.0; LUT_LEN], steps: 0 };
+        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, curve: Curve::linear(), fade: false, fade_steps: FADE_STEPS, tgt: vec![0.0; LUT_LEN], steps: 0 };
         l.build(sel);
         l
     }
@@ -292,7 +294,7 @@ impl ShaperLut {
     /// New target is in `tgt`: snap to it, or start the morph when fading and a table already exists.
     fn commit(&mut self, sel: i32) {
         if self.fade && self.sel != -1 {
-            self.steps = FADE_STEPS;
+            self.steps = self.fade_steps.max(1);
         } else {
             self.table.copy_from_slice(&self.tgt);
             self.steps = 0;
@@ -323,27 +325,46 @@ impl ShaperLut {
         self.commit(CUSTOM);
     }
 
-    /// Make the table match `sel` (and `curve` when custom); no-op when already current.
-    pub fn sync(&mut self, sel: i32, curve: &Curve) {
+    /// Make the table match `sel` (and `curve` when custom); no-op when already current. True when a new table was baked.
+    pub fn sync(&mut self, sel: i32, curve: &Curve) -> bool {
         if sel == CUSTOM {
             if self.sel != CUSTOM || self.curve != *curve {
                 self.build_custom(curve);
+                return true;
             }
         } else if self.sel != sel {
             self.build(sel);
+            return true;
         }
+        false
     }
 
+    /// Updates left in the running table crossfade (0 = settled).
+    pub fn morph_left(&self) -> u32 {
+        self.steps
+    }
+
+    /// The table the crossfade is heading for (equal to `table` when settled).
+    pub fn target(&self) -> &[f64] {
+        &self.tgt
+    }
+
+    /// `eval` on any table of this layout.
     #[inline]
-    pub fn eval(&self, mut x: f64) -> f64 {
-        if self.periodic && x.abs() > 6.0 {
+    pub fn eval_table(table: &[f64], periodic: bool, mut x: f64) -> f64 {
+        if periodic && x.abs() > 6.0 {
             x -= 4.0 * (x * 0.25 + 0.5).floor();
         }
         let p = (x.clamp(-7.999, 7.999) + 8.0) * 256.0;
         let i = p.floor();
         let f = p - i;
         let i = i as usize;
-        self.table[i] + (self.table[i + 1] - self.table[i]) * f
+        table[i] + (table[i + 1] - table[i]) * f
+    }
+
+    #[inline]
+    pub fn eval(&self, x: f64) -> f64 {
+        Self::eval_table(&self.table, self.periodic, x)
     }
 }
 

@@ -26,6 +26,10 @@ pub struct DiffEngine {
     snap: bool,
     /// Smooth Drive / Bias / Mix (set false for null tests).
     pub smoothing: bool,
+    /// shaper crossfade time when the shape changes, ms
+    pub morph_ms: f64,
+    /// take the DC a shaper change adds off the DC blocker in step with the crossfade (see `Saturator::set_dc_comp`)
+    pub dc_comp: bool,
     rot: Rotator,
     fx: Diffusor,
     /// where the fx currently runs (0 before the saturator, 1 after)
@@ -94,6 +98,8 @@ impl DiffEngine {
             first_set: true,
             snap: true,
             smoothing: true,
+            morph_ms: 30.0,
+            dc_comp: true,
             rot: Rotator::new(sr),
             fx: Diffusor::new(sr),
             fx_pos: 0,
@@ -198,6 +204,8 @@ impl DiffEngine {
             sp.curve.tile = p.tile.clamp(0, 2) as u8;
             sp.os = sp.os.max(2);
         }
+        self.sat.set_dc_comp(self.dc_comp);
+        self.sat.set_morph_steps(((self.morph_ms * 0.001 * sr / crate::MORPH_EVERY as f64).round() as u32).max(1));
         self.sat.derive(&sp, sr, self.snap, self.smoothing);
         self.rot.set(p.phase, self.snap);
         // only the diffusor exists so far: the other fx types behave as off
@@ -603,5 +611,66 @@ mod tests {
         let d = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(p, q)| (p - q).abs() as f64).sum::<f64>() / a.len() as f64;
         assert!(d(&off, &mir) > 0.02 && d(&off, &rep) > 0.02 && d(&mir, &rep) > 0.02, "{} {} {}", d(&off, &mir), d(&off, &rep), d(&mir, &rep));
         assert!(mir.iter().chain(&rep).all(|v| v.is_finite() && v.abs() < 4.0));
+    }
+
+    /// Slow (below 20 Hz) deviation, after the crossfade, of a render that changes shape mid-stream from the same shape
+    /// rendered all the way through, relative to its rms.
+    fn shape_switch_error(from: DiffParams, to: DiffParams, comp: bool) -> f64 {
+        let n = 48000;
+        let sw = 24000;
+        let x: Vec<f32> = (0..n).map(|i| (0.5 * (2.0 * PI * 110.0 * i as f64 / SR).sin()) as f32).collect();
+        let render = |a: &DiffParams, b: &DiffParams| {
+            let mut e = DiffEngine::new(SR);
+            e.dc_comp = comp;
+            e.set_params(a);
+            let (mut l, mut r) = (x.clone(), x.clone());
+            let mut i = 0;
+            while i < n {
+                if i == sw {
+                    e.set_params(b);
+                }
+                let m = (i + 64).min(n);
+                e.process(&mut l[i..m], &mut r[i..m]);
+                i = m;
+            }
+            (l, e.latency() as usize)
+        };
+        let (y, lat) = render(&from, &to);
+        let (yb, _) = render(&to, &to);
+        let c = 1.0 - (-2.0 * PI * 20.0 / SR).exp();
+        let after = sw + lat + (0.03 * SR) as usize + 100;
+        let (mut lp, mut worst) = (0.0f64, 0.0f64);
+        for i in sw..n - 100 {
+            lp += ((y[i] - yb[i]) as f64 - lp) * c;
+            if i > after {
+                worst = worst.max(lp.abs());
+            }
+        }
+        let rms = ((sw..sw + 9600).map(|i| (yb[i] as f64).powi(2)).sum::<f64>() / 9600.0).sqrt().max(1e-6);
+        worst / rms
+    }
+
+    #[test]
+    fn changing_the_shape_does_not_thump_the_output() {
+        // pairs whose DC differs a lot (Tube, Crossover, Rectify, Diode, Asym Fold) with and without bias
+        let mut gain_total = 0.0;
+        let mut off_total = 0.0;
+        for (a, b) in [(0, 10), (7, 10), (10, 13), (12, 10), (1, 12), (13, 7), (4, 10)] {
+            for bias in [0.0, 25.0] {
+                let pa = DiffParams { shape: a, drive: 40.0, bias, ..DiffParams::default() };
+                let pb = DiffParams { shape: b, ..pa };
+                let on = shape_switch_error(pa, pb, true);
+                let off = shape_switch_error(pa, pb, false);
+                assert!(on < 0.2, "{a} -> {b} bias {bias}: error {on} (without compensation {off})");
+                on_off(&mut gain_total, &mut off_total, on, off);
+            }
+        }
+        // overall the compensation must clearly beat leaving the blocker to ring
+        assert!(gain_total < 0.5 * off_total, "with {gain_total} vs without {off_total}");
+    }
+
+    fn on_off(on_sum: &mut f64, off_sum: &mut f64, on: f64, off: f64) {
+        *on_sum += on;
+        *off_sum += off;
     }
 }
