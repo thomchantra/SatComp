@@ -1345,7 +1345,12 @@ fn main() {
             println!("audio: {} ({:.1} s, {} Hz), block {block}, {secs} s measured after a 3 s warm-up, one thread, flush-to-zero on\n", a[2], wav.0.len() as f64 / wav.2, wav.2);
             println!("| case | copies | median us/block | p99 us/block | CPU % of one core (median, per copy) | p99 % of the block budget | out RMS dBFS | out peak dBFS |");
             println!("|---|---|---|---|---|---|---|---|");
+            // PLUGBENCH_CASE=text: only the cases whose label contains it (to repeat one measurement)
+            let only = std::env::var("PLUGBENCH_CASE").ok();
             for c in suite() {
+                if only.as_ref().map_or(false, |o| !c.label.contains(o.as_str())) {
+                    continue;
+                }
                 for &n in &[1usize, 16] {
                     let s = run_case(&c, n, &wav, block, secs);
                     println!("| {} | {} | {:.1} | {:.1} | {:.2} | {:.2} | {:.1} | {:.1} |", c.label, n, s.median_us, s.p99_us, s.median_us / s.budget_us * 100.0, s.p99_us / s.budget_us * 100.0, s.out_rms_db, s.out_peak_db);
