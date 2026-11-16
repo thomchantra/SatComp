@@ -567,7 +567,9 @@ const ABOUT_TEXT: &[&[&str]] = &[
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
-const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &[
+const CHANGELOG: &[(&str, &[&str])] = &[
+    ("v0.1.1", &["The draw view takes 20 points (was 10) and gets an EVEN tool next to ODD: it mirrors the drawn half across the Y axis.", "Buttons and switches light up under the pointer, and the header has a redrawn icon with the version next to the name.", "CPU use at the default settings is about a third of before: faster oversampling filters in every band's saturator."]),
+    ("v0.1", &[
     "First release: four bands (LO, ML, MH, HI) with three crossovers (12, 24, 48 or 96 dB), a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.",
     "Compressor mode per band: DWNWARD, UPWARD (lifts what is below the threshold, up to RANGE) or UP/DWN (both). The band handles show the lift as a bar above and the reduction below.",
     "Saturator per band: DRIVE, BIAS and ASYM, HP and LP, SAT GAIN with auto-match, custom curves with a symmetry tool, and a post-saturator level meter.",

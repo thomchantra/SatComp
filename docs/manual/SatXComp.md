@@ -1,11 +1,11 @@
 ---
 title: SatXComp
-version: 0.1.0
+version: 0.1.1
 tagline: 4-band compressor with a waveshaping saturator on every band
 screenshot: ../screenshot-satxcomp.png
 ---
 
-# SatXComp 0.1.0
+# SatXComp 0.1.1
 
 A 4-band compressor with a waveshaping saturator on every band and a 5-band EQ. Split the signal, drive each band to taste, then squash it. For surgical baking.
 

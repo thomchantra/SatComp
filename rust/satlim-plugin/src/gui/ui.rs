@@ -466,6 +466,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
+    ("v0.1.1", &["The draw view takes 20 points (was 10) and gets an EVEN tool next to ODD: it mirrors the drawn half across the Y axis.", "Buttons and switches light up under the pointer, and the header has a redrawn icon with the version next to the name.", "The saturator and the limiter's oversampling filters are faster, so it uses less CPU with the same sound."]),
     ("v0.1", &["First version: the SatComp saturator, an oversampled clipper (CLIP, x1 to x8) and a true-peak brickwall limiter with a transient scope.", "L.AHEAD off gives a zero-latency limiter. OUT GAIN sits after the limiter on purpose.", "The limiter and the TRU.PK readout detect true peaks at 8x, with L.AHEAD on or off, so inter-sample peaks of a clipped or folded signal are caught. Bypass is a plain bypass."]),
 ];
 

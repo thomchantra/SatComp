@@ -1,11 +1,11 @@
 ---
 title: SatLim
-version: 0.1.0
+version: 0.1.1
 tagline: 2-stage clipper / limiter with waveshaping saturator
 screenshot: ../screenshot-satlim.png
 ---
 
-# SatLim 0.1.0
+# SatLim 0.1.1
 
 A 2-stage clipper and limiter with a waveshaping saturator. When you need to nuke it from orbit.
 

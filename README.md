@@ -4,7 +4,7 @@ Three saturator-based dynamics plug-ins in one black-and-white (or any colour yo
 
 | Plug-in | Version | What |
 |---|---|---|
-| [**SatComp**](#satcomp) | 0.5.2 | waveshaping saturator, compressor and a 2-stage 3-band EQ |
+| [**SatComp**](#satcomp) | 0.5.3 | waveshaping saturator, compressor and a 2-stage 3-band EQ |
 | [**SatXComp**](#satxcomp) | 0.1.0 | 4-band multiband compressor with a saturator per band and a 5-band EQ |
 | [**SatLim**](#satlim) | 0.1.0 | saturator into an oversampled clipper and a true-peak brickwall limiter |
 

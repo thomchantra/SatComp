@@ -6,7 +6,7 @@ Internal record of what exists, at which version, and when it got there. Update 
 
 | | SatComp | SatXComp | SatLim |
 |---|---|---|---|
-| Version | 0.5.2 | 0.1.0 | 0.1.0 |
+| Version | 0.5.3 | 0.1.1 | 0.1.1 |
 | Crates | `satcomp-dsp` (shared blocks), `satcomp-plugin` | `satxcomp-dsp`, `satxcomp-plugin` | `satlim-dsp`, `satlim-plugin` |
 | Chain | saturator, compressor, two 3-band EQ stages (pre / post compressor) + tilt, sidechain, output limiter | 4-band split > per band sat > comp > comp mix/gain, 5-band post EQ, limiter, sidechain | sat (x1-x8) > clip > true-peak limiter > out gain |
 | VST3 class id | `TrtSatCompPlugin` | `thomchantraSatXC` | `thomchantraSatLm` |

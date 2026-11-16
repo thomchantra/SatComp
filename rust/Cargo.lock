@@ -2276,7 +2276,7 @@ dependencies = [
 
 [[package]]
 name = "satcomp"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "include_dir",
  "nih_plug",
@@ -2291,11 +2291,11 @@ dependencies = [
 
 [[package]]
 name = "satcomp-dsp"
-version = "0.5.2"
+version = "0.5.3"
 
 [[package]]
 name = "satcomp-ui"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "nih_plug",
  "nih_plug_egui",
@@ -2328,7 +2328,7 @@ dependencies = [
 
 [[package]]
 name = "satlim"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "include_dir",
  "nih_plug",
@@ -2344,14 +2344,14 @@ dependencies = [
 
 [[package]]
 name = "satlim-dsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "satcomp-dsp",
 ]
 
 [[package]]
 name = "satxcomp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "include_dir",
  "nih_plug",
@@ -2367,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "satxcomp-dsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "satcomp-dsp",
 ]

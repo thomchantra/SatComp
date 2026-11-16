@@ -1,11 +1,11 @@
 ---
 title: SatComp
-version: 0.5.2
+version: 0.5.3
 tagline: waveshaping saturator with compressor and 2-stage 3-band EQ
 screenshot: ../screenshot.png
 ---
 
-# SatComp 0.5.2
+# SatComp 0.5.3
 
 A waveshaping saturator with a compressor and a 2-stage 3-band EQ. Give the compressor more spice to squash. Made with bricking intentions.
 
