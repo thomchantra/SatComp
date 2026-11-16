@@ -101,6 +101,13 @@ fn variants() -> Vec<(&'static str, XParams)> {
     v.push(("auto crossover glide", p));
     v.push(("auto crossover + slopes", p));
     v.push(("auto drive on/off", p));
+    let mut p = base;
+    for b in p.bands.iter_mut() {
+        b.thresh = -45.0;
+        b.ratio = 10.0;
+        b.release = 60.0;
+    }
+    v.push(("compressing hard (-45 dB, 10:1)", p));
     v
 }
 
