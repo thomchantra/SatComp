@@ -43,6 +43,13 @@ fn automated(name: &str, k: usize, p: &mut XParams) -> bool {
         p.x1 = 100.0 + 200.0 * ((k / 37) % 5) as f64;
         p.x2 = 600.0 + 700.0 * ((k / 37) % 3) as f64;
     }
+    if name.ends_with("drive on/off") && k % 53 == 0 {
+        // drive switched on and off while the music plays (the band-limiter's tail, then a restart from idle), crossover moving too
+        let on = (k / 53) % 2 == 0;
+        p.bands[1].drive = if on { 60.0 } else { 0.0 };
+        p.bands[2].drive = if on { 0.0 } else { 40.0 };
+        p.bands[2].bias = if on { 0.0 } else { 10.0 };
+    }
     if name.ends_with("slopes") && k % 151 == 0 {
         let j = (k / 151) as i32;
         p.x1_slope = j % 4;
@@ -93,6 +100,7 @@ fn variants() -> Vec<(&'static str, XParams)> {
     p.bands[2].drive = 30.0;
     v.push(("auto crossover glide", p));
     v.push(("auto crossover + slopes", p));
+    v.push(("auto drive on/off", p));
     v
 }
 

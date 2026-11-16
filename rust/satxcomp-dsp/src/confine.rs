@@ -63,6 +63,20 @@ impl Confine {
         }
     }
 
+    /// True when every filter state has decayed to nothing: with a zero input the output is zero too, so `tick` can be skipped.
+    pub fn is_quiet(&self) -> bool {
+        self.st.iter().all(|s| s.iter().all(|c| c[0].abs() + c[1].abs() < 1e-12))
+    }
+
+    /// While the filter is skipped (quiet, input zero) nothing advances the coefficient glide: jump to the target, so that the
+    /// first sample after the band starts adding content already has the right filter. Only valid when `is_quiet()`.
+    pub fn snap_to_target(&mut self) {
+        self.cur = self.tgt;
+        self.delta = [[0.0; 5]; N];
+        self.ramping = false;
+        self.refresh_active();
+    }
+
     /// Per host block: ramp the coefficients towards the targets over `n` samples.
     pub fn begin_block(&mut self, n: usize) {
         let rn = 1.0 / n.max(1) as f64;

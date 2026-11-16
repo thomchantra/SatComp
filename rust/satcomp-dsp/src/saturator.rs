@@ -270,6 +270,11 @@ impl Saturator {
         self.dc_warm = true;
     }
 
+    /// Whether the shaper is doing anything (DRIVE or BIAS non-zero): when not, `tick_split` returns the clean delayed input twice.
+    pub fn is_on(&self) -> bool {
+        self.on
+    }
+
     /// PDC latency of the oversampler, samples.
     pub fn latency(&self) -> usize {
         self.lat
