@@ -2,22 +2,20 @@
 title: SatXComp
 version: 0.1.1
 tagline: 4-band compressor with a waveshaping saturator on every band
-screenshot: ../screenshot-satxcomp.png
+screenshot: ../screenshots/satxcomp.png
 ---
 
 # SatXComp 0.1.1
 
 A 4-band compressor with a waveshaping saturator on every band and a 5-band EQ. Split the signal, drive each band to taste, then squash it. For surgical baking.
 
-![SatXComp](../screenshot-satxcomp.png)
+<!--hero:satxcomp-->
 
 ## 1. The idea
 
 The signal is split into four bands (LO, ML, MH, HI) by three crossovers. Every band has its own **saturator** and **compressor**, and the bands sum back together before the EQ, the output stage and a true-peak limiter.
 
-```
-IN > [4-band split] > per band: SAT > COMP > mix / gain > [sum] > 5-band EQ > MIX > OUT GAIN > LIM > OUT
-```
+<!--flow:satxcomp-->
 
 The saturator only adds harmonics inside its own band, so driving the lows hard does not smear the highs. The compressor can reduce gain above the threshold, lift gain below it, or both.
 
@@ -66,7 +64,7 @@ Select a band with its tab; the saturator and compressor cells show that band.
 | SAT MIX | blend between clean and saturated band |
 | SAT GAIN | level after the saturator. Click the **SAT** readout in the plot corner to auto-match: it measures for 3 seconds and sets the SAT GAIN that cancels the loudness change. Click again to cancel. |
 
-**Custom curve.** Click the pencil icon in the plot corner to draw your own transfer curve (up to 10 points). The symmetry tool draws one half and mirrors the other, which keeps the curve odd and DC-free. Each band keeps its own custom curve.
+**Custom curve.** Click the pencil icon in the plot corner to draw your own transfer curve (up to 20 points). The ODD and EVEN tools draw one half and mirror it, point-symmetric (ODD, which keeps the curve DC-free) or across the Y axis (EVEN). Each band keeps its own custom curve.
 
 ## 5. Compressor (per band)
 

@@ -2,22 +2,20 @@
 title: SatLim
 version: 0.1.1
 tagline: 2-stage clipper / limiter with waveshaping saturator
-screenshot: ../screenshot-satlim.png
+screenshot: ../screenshots/satlim.png
 ---
 
 # SatLim 0.1.1
 
 A 2-stage clipper and limiter with a waveshaping saturator. When you need to nuke it from orbit.
 
-![SatLim](../screenshot-satlim.png)
+<!--hero:satlim-->
 
 ## 1. The idea
 
 SatLim chews the signal in three steps: a saturator, a hard clipper that bricks the peaks, and a true-peak limiter that catches what the clipper leaves behind.
 
-```
-IN > SAT (x1-x8) > lift to the ceiling > CLIP > LIMITER > OUT GAIN > OUT
-```
+<!--flow:satlim-->
 
 - **THRESHOLD** is the input level that lands on the ceiling. The signal is lifted by `CEILING - THRESHOLD` dB, so lowering the threshold pushes harder into the clipper and limiter.
 - **CLIP** clamps the peaks at the ceiling (oversampled) before the limiter sees them. The more clip, the less the limiter has to do, and the more the transients get bricked.
@@ -57,7 +55,7 @@ IN > SAT (x1-x8) > lift to the ceiling > CLIP > LIMITER > OUT GAIN > OUT
 | DRIVE, BIAS, ASYM, HP, LP, TONE, SAT MIX | the same as in SatComp: push, offset, even-order amount, band split, tone, wet/dry |
 | SAT GAIN | level after the saturator. Click the **SAT** readout to auto-match it. |
 
-**Custom curve.** Click the pencil icon to draw your own transfer curve (up to 10 points), with a symmetry tool for odd curves.
+**Custom curve.** Click the pencil icon to draw your own transfer curve (up to 20 points), with ODD and EVEN tools that draw one half and mirror it.
 
 ## 5. Scope and meters
 
