@@ -451,3 +451,55 @@ fn the_logo_and_the_title_light_up_under_the_pointer() {
     assert_ne!(idle, title, "the title should get a highlight under the pointer");
     assert_ne!(logo, title);
 }
+
+/// The draw view's tools sit at the plot's top right (plot 10, 208, 130 x 156): pencil 84, odd 98, even 112, close 126 (12 px wide, y 210).
+const PENCIL_OPEN: (f32, f32) = (132.0, 216.0);
+
+/// A rig on the Custom shaper (the test host does not apply the draw view's own write, which would close the view again).
+fn custom_rig() -> Rig {
+    use nih_plug::prelude::{IntParam, IntRange};
+    Rig::with_params(|p| p.shape = IntParam::new("Shape", 14, IntRange::Linear { min: 0, max: 14 }))
+}
+
+#[test]
+fn the_even_tool_mirrors_the_drawn_half_across_the_y_axis() {
+    let mut r = custom_rig();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(PENCIL_OPEN.0 - 6.0, PENCIL_OPEN.1); // opens the draw view (odd tool: the start curve is the straight line)
+    r.click(118.0, 216.0); // even tool: the drawn half (1, 1) now mirrors to (-1, 1)
+    let flat = satcomp_dsp::shapers::Curve::from_points(&r.params.custom_curve.lock());
+    assert!((flat.eval(1.0) - 1.0).abs() < 1e-6 && (flat.eval(-1.0) - 1.0).abs() < 1e-6, "{:?}", flat.pts());
+    // the end point (1, 1) is at the plot's top right: pull it down to y = -0.5; its mirror image follows
+    r.drag(130.0, 222.0, 130.0, 317.0);
+    let c = satcomp_dsp::shapers::Curve::from_points(&r.params.custom_curve.lock());
+    assert!((c.eval(1.0) + 0.5).abs() < 0.05 && (c.eval(-1.0) + 0.5).abs() < 0.05, "f(1) = {}, f(-1) = {}", c.eval(1.0), c.eval(-1.0));
+    // a point added on the left half lands on the right as well, and the curve stays even
+    r.click(50.0, 300.0);
+    let c = satcomp_dsp::shapers::Curve::from_points(&r.params.custom_curve.lock());
+    assert!(c.n >= 4, "the new point and its mirror image: {:?}", c.pts());
+    assert!((0..=20).all(|i| (c.eval(i as f64 * 0.05) - c.eval(-i as f64 * 0.05)).abs() < 0.02), "an even curve must stay even: {:?}", c.pts());
+    // back to odd: the drawn half is kept and point-mirrored
+    r.click(104.0, 216.0);
+    let o = satcomp_dsp::shapers::Curve::from_points(&r.params.custom_curve.lock());
+    assert!(o.is_odd(), "{:?}", o.pts());
+    assert!((o.eval(1.0) + 0.5).abs() < 0.05 && (o.eval(-1.0) - 0.5).abs() < 0.05, "f(1) = {}, f(-1) = {}", o.eval(1.0), o.eval(-1.0));
+}
+
+#[test]
+fn the_free_pencil_takes_twenty_points() {
+    let mut r = custom_rig();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.click(PENCIL_OPEN.0 - 6.0, PENCIL_OPEN.1);
+    r.click(90.0, 216.0); // pencil tool
+    // points sit more than 6 px apart (a click closer than that grabs the point instead of adding one)
+    for i in 0..30 {
+        r.click(22.0 + (i % 15) as f32 * 7.5 + if i < 15 { 0.0 } else { 3.0 }, if i < 15 { 235.0 } else { 300.0 }); // the rows differ in x too (MIN_GAP)
+    }
+    let n = r.params.custom_curve.lock().len();
+    assert_eq!(n, satcomp_dsp::shapers::MAX_PTS, "points after 30 clicks");
+    assert_eq!(n, 20);
+}

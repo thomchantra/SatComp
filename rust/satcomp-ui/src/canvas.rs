@@ -209,6 +209,8 @@ impl<'a> Canvas<'a> {
         let sz = match self.font {
             1 => 12.0,
             2 => 14.0,
+            4 => 18.5, // header title (cap height 11.3 units: 17 px at 150 %)
+            5 => 10.0, // header version (digits 6 units high)
             _ => 18.0,
         } * self.s * FONT_SCALE * FONT_TUNE[self.face].0;
         FontId::new(sz.max(5.0), font_family(self.face))
@@ -232,6 +234,103 @@ impl<'a> Canvas<'a> {
             self.fid(),
             self.col,
         );
+    }
+
+    /// Vertical extent of the ink of `ch` in the current font, in units relative to the `y` that `text` is given (so the y that
+    /// puts a flat-topped capital's middle on a line is `line - (top + bottom) / 2`). Every font has its own ascent and cap
+    /// height, so the header measures instead of assuming.
+    pub fn ink_span(&self, ch: char) -> (f32, f32) {
+        let g = self.p.layout_no_wrap(ch.to_string(), self.fid(), self.col);
+        let lift = (TEXT_LIFT_EM - FONT_TUNE[self.face].1) * self.fid().size;
+        match g.rows.first().and_then(|r| r.glyphs.first()) {
+            Some(gl) if !gl.uv_rect.is_nothing() => {
+                let top = gl.pos.y + gl.uv_rect.offset.y - lift;
+                (top / self.s, (top + gl.uv_rect.size.y) / self.s)
+            }
+            _ => (0.0, 8.0),
+        }
+    }
+
+    /// Header lockup text: the plug-in name in the title font with the middle of its capitals on `yc`, then the version in the
+    /// small font, dimmed, its digits standing on the title's baseline. `hover` draws it inverted on a plate `plate_h` high
+    /// (the plate starts at `x - 3`). The version is left out when name and version together would be wider than `max_w`
+    /// (the widest fonts next to a neighbouring button). Returns the lockup's width without the plate's margins.
+    pub fn header_title(&mut self, x: f32, yc: f32, plate_h: f32, name: &str, version: &str, max_w: f32, hover: bool) -> f32 {
+        let keep = self.font;
+        let version = if self.header_title_w(name, version, max_w) > self.header_title_w(name, "", max_w) { version } else { "" };
+        self.font = 4;
+        let nw = self.text_w(name);
+        let (t, b) = self.ink_span('T');
+        let ny = yc - (t + b) * 0.5;
+        let base = ny + b; // the title's baseline
+        self.font = 5;
+        let gap = 4.0;
+        let vw = if version.is_empty() { 0.0 } else { self.text_w(version) };
+        let (_, vb) = self.ink_span('1');
+        let vy = base - vb;
+        let total = nw + if version.is_empty() { 0.0 } else { gap + vw };
+        let mix = |a: [f32; 3], b: [f32; 3], t: f32| rgb([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+        if hover {
+            self.setc(false);
+            self.fill(x - 3.0, yc - plate_h * 0.5, total + 6.0, plate_h);
+        }
+        self.font = 4;
+        if hover { self.setbg() } else { self.setc(false) }
+        self.text(x, ny, name);
+        if !version.is_empty() {
+            self.font = 5;
+            // dimmed: halfway between the text colour and the plate behind it
+            self.col = if hover { mix(self.bk, self.fg, 0.4) } else { mix(self.bk, self.fg, 0.5) };
+            self.text(x + nw + gap, vy, version);
+        }
+        self.font = keep;
+        self.setc(false);
+        total
+    }
+
+    /// Width `header_title` takes (for the hit area): the version only counts when it fits in `max_w` next to the name.
+    pub fn header_title_w(&mut self, name: &str, version: &str, max_w: f32) -> f32 {
+        let keep = self.font;
+        self.font = 4;
+        let nw = self.text_w(name);
+        self.font = 5;
+        let vw = if version.is_empty() { 0.0 } else { 4.0 + self.text_w(version) };
+        self.font = keep;
+        if nw + vw > max_w { nw } else { nw + vw }
+    }
+
+    /// The plug-in icon, drawn in the current colour inside the 20 x 20 plate whose top left is (x, y): an inner square with
+    /// corner brackets and diagonals, per plug-in (0 SatComp, 1 SatXComp, 2 SatLim, 3 SatDiff).
+    pub fn logo_art(&self, kind: u8, x: f32, y: f32) {
+        self.boxr(x + 6.0, y + 6.0, 8.0, 8.0);
+        let l = |a: f32, b: f32, c: f32, d: f32| self.line(x + a, y + b, x + c, y + d);
+        // bracket at corner (cx, cy), arms of 5.5 towards the plate's centre
+        let br = |cx: f32, cy: f32| {
+            let (dx, dy) = (if cx < 10.0 { 1.0 } else { -1.0 }, if cy < 10.0 { 1.0 } else { -1.0 });
+            l(cx - 0.5 * dx, cy, cx + 5.5 * dx, cy);
+            l(cx, cy - 0.5 * dy, cx, cy + 5.5 * dy);
+        };
+        match kind {
+            0 | 1 => {
+                br(17.0, 3.0);
+                br(3.0, 17.0);
+                l(3.0, 17.0, 7.0, 13.0);
+                l(17.0, 3.0, 13.0, 7.0);
+                if kind == 1 {
+                    l(3.0, 3.0, 7.0, 7.0);
+                    l(17.0, 17.0, 13.0, 13.0);
+                }
+            }
+            2 => {
+                for (cx, cy) in [(3.0, 3.0), (17.0, 3.0), (3.0, 17.0), (17.0, 17.0)] {
+                    br(cx, cy);
+                }
+            }
+            _ => {
+                l(3.0, 17.0, 7.0, 13.0);
+                l(17.0, 3.0, 13.0, 7.0);
+            }
+        }
     }
 
     pub fn textc(&self, x: f32, y: f32, w: f32, s: &str) {

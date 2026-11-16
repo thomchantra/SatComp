@@ -723,7 +723,7 @@ impl<'a> Gui<'a> {
 
     /// header logo: left click = next colour scheme, right click = scheme dropdown
     fn logo(&mut self, x: f32, y: f32) {
-        let hv = self.hit(x - 3.0, y - 3.0, 27.0, 27.0);
+        let hv = self.hit(x, y, 20.0, 20.0);
         if hv && self.press && self.act == 0 {
             // single click = next scheme (after the double-click window), double click = light/dark
             if self.logo_pend >= 0.0 && self.now - self.logo_pend < 0.3 {
@@ -750,21 +750,14 @@ impl<'a> Gui<'a> {
         self.setc(false);
         // hovering inverts the icon (a plate in the UI colour, or back to the outline in light mode): it is clickable
         if self.light != hv {
-            // light mode inverts the icon: UI-coloured plate, BG-coloured glyph
-            self.cv.fill(x - 3.0, y - 3.0, 27.0, 27.0);
+            self.cv.fill(x, y, 20.0, 20.0);
             self.cv.setbg();
         } else {
-            self.cv.boxr(x - 3.0, y - 3.0, 27.0, 27.0);
+            self.cv.boxr(x, y, 20.0, 20.0);
             self.setc(false);
         }
-        self.cv.boxr(x + 6.0, y + 6.0, 9.0, 9.0);
-        let l = |c: &Canvas, a: f32, b: f32, cc: f32, d: f32| c.line(x + a, y + b, x + cc, y + d);
-        // four corner brackets round the inner square
-        for (sx, sy) in [(0.5f32, 0.5f32), (20.5, 0.5), (0.5, 20.5), (20.5, 20.5)] {
-            let (dx, dy) = (if sx < 10.0 { 1.0 } else { -1.0 }, if sy < 10.0 { 1.0 } else { -1.0 });
-            l(&self.cv, sx, sy, sx + 7.0 * dx, sy);
-            l(&self.cv, sx, sy, sx, sy + 7.0 * dy);
-        }
+        self.cv.logo_art(3, x, y);
+        self.setc(false);
     }
 
 
@@ -2763,22 +2756,19 @@ impl<'a> Gui<'a> {
 
         // ---------- header row: logo, title, size, BYPASS
         self.set_dk(1.0);
-        self.logo(13.0, 5.0);
+        self.logo(10.0, 6.0);
         self.setc(false);
-        self.cv.set_font(2);
-        let title = format!("SATDIFF {}", version_short());
-        let tw = self.cv.text_w(&title);
-        if self.hit(42.0, 5.0, tw + 4.0, 21.0) && self.press && self.act == 0 {
+        // title: the name large with the version dimmed on its baseline, both centred on the icon (see Canvas::header_title)
+        let ver = version_short();
+        let tw = self.cv.header_title_w("SATDIFF", &ver, 154.0);
+        let over = self.hit(31.0, 6.0, tw + 6.0, 20.0);
+        if over && self.press && self.act == 0 {
             self.app.about = if self.app.about == 0 { 1 } else { 0 };
             self.app.about_scroll = 0;
             self.press = false;
         }
-        // hovering highlights the title (a UI-coloured rectangle behind it, the text in the background colour): it opens About
-        if self.hit(42.0, 5.0, tw + 4.0, 21.0) {
-            self.cv.fill(42.0, 8.0, tw + 4.0, 15.0);
-            self.cv.setbg();
-        }
-        self.cv.text(44.0, 12.0, &title);
+        // hovering highlights the lockup (a UI-coloured plate behind it, the text in the background colour): it opens About
+        self.cv.header_title(34.0, 16.0, 20.0, "SATDIFF", &ver, 154.0, over);
         self.setc(false);
         let label = format!("{:.0}%", self.cur_scale() * 100.0);
         if self.hbtn(192.0, 6.0, 46.0, 20.0, &label, 0) {

@@ -213,11 +213,19 @@ impl<'a> Gui<'a> {
                     self.sc_set(shift, bits, nx);
                 }
             }
+            // a click-to-cycle switch: the pointer over it fills the cell
+            let hv = self.hit(cx, y, w, h);
             self.setc(false);
-            self.cv.boxr(cx, y, w, h);
+            if hv {
+                self.cv.fill(cx, y, w, h);
+                self.cv.setbg();
+            } else {
+                self.cv.boxr(cx, y, w, h);
+            }
             self.cv.set_font(1);
             self.cv.text(cx + 4.0, y + 5.0, lbl);
             self.cv.textr(cx, y + 5.0, w - 4.0, names[cur]);
+            self.setc(false);
             cx += w - 1.0;
         }
         // WIN and CEIL: horizontal drag sliders over their cell, stepped

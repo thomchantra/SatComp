@@ -446,10 +446,14 @@ pub trait Widgets<'c> {
     fn btn(&mut self, x: f32, y: f32, w: f32, h: f32, s: &str, lit: u8) -> bool {
         let hv = self.hit(x, y, w, h);
         let clicked = hv && self.kit().press && self.kit().act == 0;
-        if lit > 0 {
+        // hovering fills the button (a lit one gets an inner outline instead, so it still reads as on)
+        if lit > 0 || hv {
             self.setc(lit > 1);
             self.cv().fill(x, y, w, h);
             self.cv().setbg();
+            if lit > 0 && hv {
+                self.cv().boxr(x + 1.0, y + 1.0, w - 2.0, h - 2.0);
+            }
         } else {
             self.setc(false);
             self.cv().boxr(x, y, w, h);
@@ -459,6 +463,16 @@ pub trait Widgets<'c> {
         cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, s);
         self.setc(false);
         clicked
+    }
+
+    /// Colour for what is drawn over a `btn` rectangle by hand (an icon on an empty-labelled button): the background colour
+    /// while the pointer fills it, else the UI colour.
+    fn over_btn(&mut self, x: f32, y: f32, w: f32, h: f32, lit: bool) {
+        if lit || self.hit(x, y, w, h) {
+            self.cv().setbg();
+        } else {
+            self.setc(false);
+        }
     }
 
     /// 12x12 close cross (draw view corner); bright on hover.
@@ -481,6 +495,22 @@ pub trait Widgets<'c> {
             self.cv().line(x + w[0].0, y + w[0].1, x + w[1].0, y + w[1].1);
         }
         self.cv().fill(x + 5.0, y + 5.0, 2.0, 2.0);
+        self.set_dk(prev);
+        self.setc(false);
+    }
+
+    /// 12x12 even glyph: a U-shaped curve with a dashed centre line (the curve is mirrored across the Y axis).
+    fn even_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
+        let prev = self.kit().dk;
+        self.set_dk(prev * if on || hover { 1.0 } else { 0.6 });
+        self.setc(on);
+        let pts = [(0.0, 1.0), (2.0, 6.0), (4.0, 9.0), (6.0, 10.0), (8.0, 9.0), (10.0, 6.0), (12.0, 1.0)];
+        for w in pts.windows(2) {
+            self.cv().line(x + w[0].0, y + w[0].1, x + w[1].0, y + w[1].1);
+        }
+        for k in [0.0, 4.0, 8.0] {
+            self.cv().fill(x + 6.0, y + k, 1.0, 2.0);
+        }
         self.set_dk(prev);
         self.setc(false);
     }

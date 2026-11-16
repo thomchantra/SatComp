@@ -23,7 +23,7 @@ pub fn asym_from(v: &[f32]) -> [f64; SHAPER_COUNT] {
 pub const CUSTOM: i32 = 14;
 
 /// Max points of the custom curve the SatComp-family editors let you draw, including the two fixed-x end points.
-pub const MAX_PTS: usize = 10;
+pub const MAX_PTS: usize = 20;
 /// Points a `Curve` can hold (SatDiff's editor uses all of them: 30 free, 15 per half in the odd / even views).
 pub const PT_CAP: usize = 30;
 /// Largest segment bend.
