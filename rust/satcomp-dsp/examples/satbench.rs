@@ -29,12 +29,14 @@ struct V {
     dc_comp: bool,
     /// drive / bias are moved every few blocks (the glide and the DC tracker run)
     moving: bool,
+    /// the shaper changes every few dozen blocks (odd and asymmetric ones, morphing between the tables)
+    shapes: bool,
 }
 
 fn variants() -> Vec<V> {
     let base = SatParams { drive: 30.0, asym: Some(100.0), steep: true, ..SatParams::default() };
     let mut v = Vec::new();
-    let mut add = |name: &str, p: SatParams, dc: bool, moving: bool| v.push(V { name: name.to_string(), p, dc_comp: dc, moving });
+    let mut add = |name: &str, p: SatParams, dc: bool, moving: bool| v.push(V { name: name.to_string(), p, dc_comp: dc, moving, shapes: false });
     for os in 0..=3 {
         add(&format!("asym 100, tube, x{}", [1, 2, 4, 8][os as usize]), SatParams { os, ..base }, false, false);
     }
@@ -51,6 +53,10 @@ fn variants() -> Vec<V> {
     add("x1 + dc_comp (SatDiff), still", base, true, false);
     add("x1 + dc_comp, drive moving", base, true, true);
     add("x4 + dc_comp, drive moving", SatParams { os: 2, ..base }, true, true);
+    for (os, nm) in [(0, "x1"), (2, "x4")] {
+        v.push(V { name: format!("{nm}, shape switching (odd <-> tube), still drive"), p: SatParams { os, ..base }, dc_comp: false, moving: false, shapes: true });
+    }
+    v.push(V { name: "x1, shape switching + dc_comp".to_string(), p: base, dc_comp: true, moving: false, shapes: true });
     v
 }
 
@@ -103,6 +109,10 @@ fn main() {
             if v.moving && k % 3 == 0 {
                 p.drive = 30.0 + 20.0 * (((k / 3) as f64) * 0.7).sin();
                 p.bias = 10.0 * (((k / 3) as f64) * 0.3).cos();
+                s.derive(&p, sr, false, true);
+            }
+            if v.shapes && k % 41 == 0 {
+                p.shape = [0, 1, 0, 3, 8, 4, 0, 6, 12, 2][(k / 41) % 10];
                 s.derive(&p, sr, false, true);
             }
             s.begin_block();
