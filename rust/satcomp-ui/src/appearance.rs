@@ -359,6 +359,9 @@ pub type RealInput = (bool, bool, bool, i32, f32, f32);
 pub struct AppState {
     /// About page: 0 closed, 1 about, 2 changelog, 3 appearance
     pub about: u8,
+    /// the tab the page was last left on (1 about, 2 changelog, 3 preferences): clicking the title again returns to it. Lives for
+    /// the editor session only
+    pub about_last: u8,
     /// first visible row of the About / Changelog text box
     pub about_scroll: usize,
     /// first visible scheme row in the Appearance list
@@ -378,8 +381,24 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Click on the plug-in title: close the page, or open it on the tab it was left on (About the first time). `pal` is the
+    /// current scheme, which the Preferences list scrolls to.
+    pub fn toggle_about(&mut self, pal: usize) {
+        if self.about != 0 {
+            self.about_last = self.about;
+            self.about = 0;
+        } else {
+            self.about = self.about_last.clamp(1, 3);
+            if self.about == 3 {
+                self.ap_scroll = pal.saturating_sub(2);
+                self.has_global = load_defaults().is_some();
+            }
+        }
+        self.about_scroll = 0;
+    }
+
     pub fn new() -> Self {
-        Self { about: 0, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), font_open: false, def_menu: 0, has_global: load_defaults().is_some(), themes: load_themes().into_iter().filter(|t| builtin_by_name(&t.name).is_none()).collect(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
+        Self { about: 0, about_last: 1, about_scroll: 0, ap_scroll: 0, del_arm: -10.0, note: (-10.0, ""), font_open: false, def_menu: 0, has_global: load_defaults().is_some(), themes: load_themes().into_iter().filter(|t| builtin_by_name(&t.name).is_none()).collect(), edit: None, real_in: (false, false, false, 0, -1000.0, -1000.0) }
     }
 
     /// The egui clock restarted (editor reopened): re-base stored timestamps.
@@ -679,6 +698,7 @@ pub trait AppearanceUi<'c>: Widgets<'c> {
         let (cx0, cw0) = if narrow { (r.x + 3.0 * tw, r.w - 3.0 * tw) } else { (r.x + r.w - 62.0, 62.0) };
         if self.btn(cx0, ty, cw0, 16.0, if narrow { "" } else { "X CLOSE" }, 0) {
             let a = self.app();
+            a.about_last = a.about.max(1);
             a.about = 0;
             a.about_scroll = 0;
         }

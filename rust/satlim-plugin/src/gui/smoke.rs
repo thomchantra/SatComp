@@ -503,3 +503,34 @@ fn the_free_pencil_takes_twenty_points() {
     assert_eq!(n, satcomp_dsp::shapers::MAX_PTS, "points after 30 clicks");
     assert_eq!(n, 20);
 }
+
+#[test]
+fn the_title_reopens_the_page_on_the_tab_it_was_left_on() {
+    let mut r = Rig::new();
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    r.feed = false;
+    // the pointer parked on the page below the title, two frames so hover states settle
+    let park = |r: &mut Rig| {
+        for _ in 0..2 {
+            r.frame(vec![Event::PointerMoved(Rig::at(300.0, 400.0))]);
+        }
+        r.last
+    };
+    r.click(60.0, 16.0); // title: opens About (the first time)
+    let about = park(&mut r);
+    r.click(160.0, 40.0); // PREFERENCES tab
+    let prefs = park(&mut r);
+    assert_ne!(about, prefs, "the tab did not change");
+    r.click(60.0, 16.0); // title: closes
+    assert_ne!(park(&mut r), prefs);
+    r.click(60.0, 16.0); // title again: back on PREFERENCES, not About
+    assert_eq!(park(&mut r), prefs, "reopened on another tab than the one it was left on");
+    r.click(260.0, 40.0); // CHANGELOG tab
+    let log = park(&mut r);
+    assert_ne!(log, prefs);
+    r.click(60.0, 16.0);
+    r.click(60.0, 16.0);
+    assert_eq!(park(&mut r), log, "reopened on another tab than the changelog");
+}

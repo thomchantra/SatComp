@@ -2903,8 +2903,8 @@ impl<'a> Gui<'a> {
         let tw = self.cv.header_title_w("SATXCOMP", &ver, 114.0);
         let over = self.hit(31.0, 6.0, tw + 6.0, 20.0);
         if over && self.kit.press && self.kit.act == 0 {
-            self.app.about = if self.app.about == 0 { 1 } else { 0 };
-            self.app.about_scroll = 0;
+            let pal = self.pal;
+            self.app.toggle_about(pal); // reopens on the tab it was left on
             self.kit.press = false;
         }
         // hovering highlights the lockup (a UI-coloured plate behind it, the text in the background colour): it opens About
