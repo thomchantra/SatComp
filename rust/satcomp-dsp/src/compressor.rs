@@ -32,6 +32,13 @@ impl GainComputer {
         Self { thr: p.thresh, knw: p.knee, cslope: 1.0 - inv_r, kc0, kc1, kc2 }
     }
 
+    /// Linear detector level at or below which `gr` is exactly 0 (the foot of the knee, or the threshold without one), never below
+    /// the 1e-6 the detector level is clamped to.
+    pub fn level_floor(&self) -> f64 {
+        let foot = if self.knw > 0.001 { self.thr - self.knw * 0.5 } else { self.thr };
+        (foot / DB_AMP).exp().max(0.000001)
+    }
+
     #[inline]
     pub fn gr(&self, x: f64) -> f64 {
         let d = x - self.thr;
@@ -130,6 +137,8 @@ pub struct CompOut {
 #[derive(Default)]
 pub struct Compressor {
     gc: GainComputer,
+    /// detector level (linear) at or below which the gain computer returns exactly 0 dB (the foot of the knee): the `ln` is skipped
+    lv_floor: f64,
     a_att: f64,
     auto_rel: bool,
     a_rel_f: f64,
@@ -182,6 +191,7 @@ impl Compressor {
         self.down = p.down;
         self.up_range = p.up_range.max(0.0);
         self.gc = GainComputer::from_params(p);
+        self.lv_floor = self.gc.level_floor();
         let spd = 4f64.powf((p.speed - 50.0) / 50.0);
         self.a_att = 1.0 - (-1.0 / (sr * (p.attack * 0.001 * spd).max(0.00001))).exp();
         self.auto_rel = p.release >= 1990.0;
@@ -254,7 +264,7 @@ impl Compressor {
 
         let mut tg = [0.0f64; 2];
         for c in 0..2 {
-            tg[c] = self.gc.gr(DB_AMP * lv[c].max(0.000001).ln());
+            tg[c] = if lv[c] <= self.lv_floor { 0.0 } else { self.gc.gr(DB_AMP * lv[c].max(0.000001).ln()) };
         }
         let mut g = [0.0f64; 2];
         for c in 0..2 {
@@ -285,7 +295,9 @@ impl Compressor {
             g = self.grf;
         }
 
-        let mut y = [sig[0] * ((lift[0] - g[0]) * LN10_20).exp(), sig[1] * ((lift[1] - g[1]) * LN10_20).exp()];
+        // exp(0) is exactly 1: no gain change, no `exp`
+        let gain = |e: f64| if e == 0.0 { 1.0 } else { (e * LN10_20).exp() };
+        let mut y = [sig[0] * gain(lift[0] - g[0]), sig[1] * gain(lift[1] - g[1])];
         if self.gdist > 0.0 {
             for c in 0..2 {
                 let dd = self.gdist * (g[c] * 0.0833333).min(1.0);
