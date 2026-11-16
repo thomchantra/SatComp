@@ -379,15 +379,25 @@ pub struct ShaperLut {
     pub fade_steps: u32,
     tgt: Vec<f64>,
     steps: u32,
+    /// `table` is odd (f(-x) = -f(x) to `ODD_TOL`); only maintained while no morph is running
+    odd: bool,
 }
 
 /// Table morph: `FADE_STEPS` updates, one every `FADE_EVERY` samples (~10 ms at 48 kHz).
 pub const FADE_STEPS: u32 = 16;
 pub const FADE_EVERY: u32 = 32;
 
+/// Largest even part (f(x) + f(-x)) / 2 a table may have and still count as odd.
+pub const ODD_TOL: f64 = 1e-12;
+
+fn table_is_odd(t: &[f64]) -> bool {
+    let n = t.len();
+    (0..n / 2).all(|i| (0.5 * (t[i] + t[n - 1 - i])).abs() < ODD_TOL)
+}
+
 impl ShaperLut {
     pub fn new(sel: i32) -> Self {
-        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, tile: 0, curve: Curve::linear(), fade: false, fade_steps: FADE_STEPS, tgt: vec![0.0; LUT_LEN], steps: 0 };
+        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, tile: 0, curve: Curve::linear(), fade: false, fade_steps: FADE_STEPS, tgt: vec![0.0; LUT_LEN], steps: 0, odd: false };
         l.build(sel);
         l
     }
@@ -415,8 +425,14 @@ impl ShaperLut {
         } else {
             self.table.copy_from_slice(&self.tgt);
             self.steps = 0;
+            self.odd = table_is_odd(&self.table);
         }
         self.sel = sel;
+    }
+
+    /// The table is odd (no even part, so a shaper's even-part path has nothing to do). False while a morph is running.
+    pub fn is_odd(&self) -> bool {
+        self.steps == 0 && self.odd
     }
 
     /// Advance the morph by one step (call every `FADE_EVERY` samples; cheap no-op when idle).
@@ -429,6 +445,9 @@ impl ShaperLut {
             *v += (t - *v) * k;
         }
         self.steps -= 1;
+        if self.steps == 0 {
+            self.odd = table_is_odd(&self.table);
+        }
     }
 
     /// Bake the custom curve into the table (flat outside +-1, like a hard clip).

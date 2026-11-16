@@ -103,6 +103,8 @@ pub struct Saturator {
     m_periodic: bool,
     m_lut_dirty: bool,
     was_on: bool,
+    /// per block: the shaper is odd and the even-part filters have rung out, so `process_fe`'s even chain would add nothing
+    even_skip: bool,
     dry: StereoDelay<64>,
     res: StereoDelay<64>,
     band: StereoDelay<64>,
@@ -180,6 +182,7 @@ impl Saturator {
             m_periodic: false,
             m_lut_dirty: false,
             was_on: false,
+            even_skip: false,
             dry: StereoDelay::new(),
             res: StereoDelay::new(),
             band: StereoDelay::new(),
@@ -352,6 +355,9 @@ impl Saturator {
     /// Per host block.
     pub fn begin_block(&mut self) {
         self.gain_t = (self.out_db * LN10_20).exp();
+        // an odd shaper (7 of the 15 factory ones) has no even part: skip its even-part oversampling chain once the filters of the
+        // previous one have rung out (until then the even part carries on exactly as before)
+        self.even_skip = self.asym_k.is_some() && self.lut.is_odd() && self.ove[0].down_quiet(1e-12) && self.ove[1].down_quiet(1e-12);
     }
 
     /// One stereo sample in -> shaped stereo sample out (after SAT OUT), delayed by `latency()`.
@@ -451,7 +457,11 @@ impl Saturator {
                             self.ov[c].process_fe(&self.taps, &self.lut, self.os, xin, &mut self.ove[c]);
                         }
                     }
-                    let (f, e) = self.ov[c].process_fe(&self.taps, &self.lut, self.os, xin, &mut self.ove[c]);
+                    let (f, e) = if self.even_skip && !self.dc_warm {
+                        (self.ov[c].process(&self.taps, &self.lut, self.os, xin), 0.0)
+                    } else {
+                        self.ov[c].process_fe(&self.taps, &self.lut, self.os, xin, &mut self.ove[c])
+                    };
                     if self.dc_warm {
                         // settle the even-part high-pass on its constant input (output 0)
                         for _ in 0..16384 {

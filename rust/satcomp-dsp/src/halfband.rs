@@ -54,6 +54,11 @@ impl<const K: usize, const N: usize> Default for Hb<K, N> {
 }
 
 impl<const K: usize, const N: usize> Hb<K, N> {
+    /// The down-filter histories are all (nearly) zero: with a zero input the output is zero too.
+    fn down_quiet(&self, tol: f64) -> bool {
+        self.db.iter().chain(self.da.iter()).all(|v| v.abs() < tol)
+    }
+
     /// Symmetric FIR over `win` (K samples, oldest first) with the first K / 2 taps `h`.
     #[inline(always)]
     fn fir(win: &[f64], h: &[f64]) -> f64 {
@@ -135,6 +140,12 @@ impl Default for Taps {
 }
 
 impl Oversampler {
+    /// Every down-filter history is below `tol`: for an oversampler that only carries the even part (`eb` of `process_fe`) this
+    /// means it has rung out and can be skipped while its input is zero.
+    pub fn down_quiet(&self, tol: f64) -> bool {
+        self.a.down_quiet(tol) && self.b.down_quiet(tol) && self.c.down_quiet(tol)
+    }
+
     pub fn clear(&mut self) {
         *self = Self::default();
     }
