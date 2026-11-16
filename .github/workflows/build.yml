@@ -21,7 +21,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libx11-xcb-dev libxcb-icccm4-dev libxcb-dri2-0-dev libgl1-mesa-dev libx11-dev libxcursor-dev libasound2-dev
       - name: Tests
         working-directory: rust
-        run: cargo test --locked
+        run: cargo test --locked --no-fail-fast
 
   # which plug-ins this run bundles: a plain v* tag (and branch / PR builds) = every plug-in that exists in the workspace,
   # a <plugin>-v* tag = just that plug-in
