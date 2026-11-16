@@ -88,6 +88,16 @@ pub(crate) fn fill(out: &mut [Coef], kind: Kind, f: f64, slope: usize, repeat: u
     }
 }
 
+/// Number of leading sections of a chain that are not the identity, in the current OR the target coefficients (a glide moves a
+/// section between the two). The padding behind them (`fill` pads every chain to `MAX_SEC`) passes the signal through
+/// unchanged and its state is zero, so running only this many sections gives the same audio for a fraction of the work.
+pub(crate) fn active_len(cur: &[Coef], tgt: &[Coef]) -> usize {
+    (0..cur.len()).rev().find(|&i| cur[i] != IDENTITY || tgt[i] != IDENTITY).map_or(0, |i| i + 1)
+}
+
+/// chain slots: the 3 low-pass and 3 high-pass chains (`2 * k` low-pass, `2 * k + 1` high-pass), then the 3 all-pass chains
+const NCH: usize = 2 * NS + N_AP;
+
 struct Core {
     slopes: [usize; NS],
     cur: [Coef; N],
@@ -98,6 +108,8 @@ struct Core {
     sign_cur: [f64; NB],
     sign_tgt: [f64; NB],
     sign_delta: [f64; NB],
+    /// running length of each chain (`active_len`), refreshed whenever the coefficients are set or moved
+    act: [usize; NCH],
 }
 
 impl Core {
@@ -112,6 +124,27 @@ impl Core {
             sign_cur: [1.0; NB],
             sign_tgt: [1.0; NB],
             sign_delta: [0.0; NB],
+            act: [0; NCH],
+        }
+    }
+
+    fn chain_range(ch: usize) -> (usize, usize) {
+        if ch < 2 * NS {
+            (ch * MAX_SEC, MAX_SEC)
+        } else {
+            (AP0 + (ch - 2 * NS) * AP_SEC, AP_SEC)
+        }
+    }
+
+    /// Recompute the running length of every chain; sections that fell out of use start from a clean state when they come back.
+    fn refresh_active(&mut self) {
+        for ch in 0..NCH {
+            let (base, len) = Self::chain_range(ch);
+            let a = active_len(&self.cur[base..base + len], &self.tgt[base..base + len]);
+            for f in base + a..base + len {
+                self.st[f] = [[0.0; 2]; 2];
+            }
+            self.act[ch] = a;
         }
     }
 
@@ -136,6 +169,7 @@ impl Core {
             self.sign_delta = [0.0; NB];
             self.ramping = false;
         }
+        self.refresh_active();
     }
 
     /// Per host block: ramp towards the targets over `n` samples.
@@ -166,6 +200,7 @@ impl Core {
             }
         }
         self.ramping = moving;
+        self.refresh_active();
     }
 
     #[inline]
@@ -185,26 +220,30 @@ impl Core {
     #[inline]
     fn tick(&mut self, x: [f64; 2]) -> [[f64; 2]; NB] {
         if self.ramping {
-            for f in 0..N {
-                for i in 0..5 {
-                    self.cur[f][i] += self.delta[f][i];
+            for ch in 0..NCH {
+                let (base, _) = Self::chain_range(ch);
+                for f in base..base + self.act[ch] {
+                    for i in 0..5 {
+                        self.cur[f][i] += self.delta[f][i];
+                    }
                 }
             }
             for b in 0..NB {
                 self.sign_cur[b] += self.sign_delta[b];
             }
         }
+        let a = self.act;
         let mut out = [[0.0f64; 2]; NB];
         for c in 0..2 {
-            let low = self.chain(lp_at(0), MAX_SEC, c, x[c]);
-            let rest1 = self.chain(hp_at(0), MAX_SEC, c, x[c]);
-            let ml = self.chain(lp_at(1), MAX_SEC, c, rest1);
-            let rest2 = self.chain(hp_at(1), MAX_SEC, c, rest1);
-            let mh = self.chain(lp_at(2), MAX_SEC, c, rest2);
-            let high = self.chain(hp_at(2), MAX_SEC, c, rest2);
-            let low = self.chain(AP0, AP_SEC, c, low);
-            out[0][c] = self.chain(AP0 + AP_SEC, AP_SEC, c, low);
-            out[1][c] = self.chain(AP0 + 2 * AP_SEC, AP_SEC, c, ml);
+            let low = self.chain(lp_at(0), a[0], c, x[c]);
+            let rest1 = self.chain(hp_at(0), a[1], c, x[c]);
+            let ml = self.chain(lp_at(1), a[2], c, rest1);
+            let rest2 = self.chain(hp_at(1), a[3], c, rest1);
+            let mh = self.chain(lp_at(2), a[4], c, rest2);
+            let high = self.chain(hp_at(2), a[5], c, rest2);
+            let low = self.chain(AP0, a[6], c, low);
+            out[0][c] = self.chain(AP0 + AP_SEC, a[7], c, low);
+            out[1][c] = self.chain(AP0 + 2 * AP_SEC, a[8], c, ml);
             out[2][c] = mh;
             out[3][c] = high;
         }
@@ -212,7 +251,6 @@ impl Core {
     }
 }
 
-/// Samples of input history replayed through a freshly built crossover so it starts warm.
 const HIST: usize = 4096;
 /// Length of the crossfade when a slope changes (about 10 ms at 48 kHz).
 const FADE: usize = 512;

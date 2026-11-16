@@ -5,7 +5,7 @@
 //! around the filter untouched, so the bands still sum flat and the crossover needs no second copy. The lowest band has no
 //! low edge and the highest no high edge.
 
-use crate::xover::{fill, Kind, MAX_SEC};
+use crate::xover::{active_len, fill, Kind, MAX_SEC};
 use satcomp_dsp::biquad::{bq, Coef, IDENTITY};
 
 const N: usize = 2 * MAX_SEC;
@@ -19,6 +19,8 @@ pub struct Confine {
     delta: [Coef; N],
     st: [[[f64; 2]; 2]; N],
     ramping: bool,
+    /// running length of the low-pass chain and of the high-pass chain (`active_len`)
+    act: [usize; 2],
 }
 
 impl Default for Confine {
@@ -29,7 +31,7 @@ impl Default for Confine {
 
 impl Confine {
     pub fn new() -> Self {
-        Self { cur: [IDENTITY; N], tgt: [IDENTITY; N], delta: [[0.0; 5]; N], st: [[[0.0; 2]; 2]; N], ramping: false }
+        Self { cur: [IDENTITY; N], tgt: [IDENTITY; N], delta: [[0.0; 5]; N], st: [[[0.0; 2]; 2]; N], ramping: false, act: [0; 2] }
     }
 
     /// `lo` = the band's low edge (high-pass), `hi` = its high edge (low-pass). Glides unless `snap`.
@@ -46,6 +48,18 @@ impl Confine {
             self.cur = self.tgt;
             self.delta = [[0.0; 5]; N];
             self.ramping = false;
+        }
+        self.refresh_active();
+    }
+
+    /// Recompute the running length of both chains; a section that fell out of use starts from a clean state when it comes back.
+    fn refresh_active(&mut self) {
+        for (k, base) in [0, MAX_SEC].into_iter().enumerate() {
+            let a = active_len(&self.cur[base..base + MAX_SEC], &self.tgt[base..base + MAX_SEC]);
+            for f in base + a..base + MAX_SEC {
+                self.st[f] = [[0.0; 2]; 2];
+            }
+            self.act[k] = a;
         }
     }
 
@@ -67,12 +81,14 @@ impl Confine {
             }
         }
         self.ramping = moving;
+        self.refresh_active();
     }
 
     #[inline]
     pub fn tick(&mut self, x: [f64; 2]) -> [f64; 2] {
+        let (lp_n, hp_n) = (self.act[0], self.act[1]);
         if self.ramping {
-            for f in 0..N {
+            for f in (0..lp_n).chain(MAX_SEC..MAX_SEC + hp_n) {
                 for i in 0..5 {
                     self.cur[f][i] += self.delta[f][i];
                 }
@@ -80,7 +96,7 @@ impl Confine {
         }
         let mut y = x;
         for c in 0..2 {
-            for f in 0..N {
+            for f in (0..lp_n).chain(MAX_SEC..MAX_SEC + hp_n) {
                 y[c] = bq(&mut self.st[f][c], &self.cur[f], y[c]);
             }
         }
