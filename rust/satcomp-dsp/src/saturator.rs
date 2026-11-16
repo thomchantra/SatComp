@@ -126,8 +126,12 @@ pub struct Saturator {
 
 /// samples of recent shaper input kept to estimate a shaper's DC on the live signal
 const HIST_LEN: usize = 512;
-/// samples between two looks at whether the shaper's DC moved
-const DC_EVERY: u32 = 16;
+/// samples between two looks at whether the shaper's DC moved (a multiple of `DC_STRIDE`, so the decimated points are the same ones
+/// at every look)
+const DC_EVERY: u32 = 32;
+/// the DC of the shaper is estimated on every `DC_STRIDE`-th sample of the history: only the DIFFERENCE between the old and the new
+/// parameters is used, taken over the same points, so the decimation costs next to no accuracy and divides the work
+const DC_STRIDE: usize = 2;
 
 impl Default for Saturator {
     fn default() -> Self {
@@ -218,7 +222,7 @@ impl Saturator {
     /// Hann-weighted, oldest sample first. Only differences of it are used, so its leakage from loud low tones cancels.
     fn shaper_dc(&self, t: &[f64], periodic: bool, pre: f64, bias: f64, c: usize) -> (f64, f64) {
         let (mut f_sum, mut e_sum, mut odd_sum, mut wsum) = (0.0, 0.0, 0.0, 0.0);
-        for k in 0..HIST_LEN {
+        for k in (0..HIST_LEN).step_by(DC_STRIDE) {
             let x = self.hist[c][(self.hist_i + k) % HIST_LEN] * pre + bias;
             let w = self.hann[k];
             let f = ShaperLut::eval_table(t, periodic, x);
