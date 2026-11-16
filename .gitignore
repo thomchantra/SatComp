@@ -5,7 +5,9 @@ docs/referenceJSFX/
 docs/crashlogs/
 docs/internal/
 /Presets/
-!docs/screenshot.png
+!docs/screenshots/*.png
+docs/manual/.build/
 docs/feedbacknotes/
 wavtest/
 screencaps/
+vst/

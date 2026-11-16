@@ -137,7 +137,7 @@ Install for REAPER: copy the bundles to `~/Library/Audio/Plug-Ins/VST3/` and `..
   `v*` tag zips both and attaches them to a GitHub release. **The Windows build and the first CI run are untested**;
   check them (and load the DLL bundle in a Windows DAW) before announcing it.
 - **Release convention (from 0.5.1):** write `docs/releases/<tag>.md` first (fixed / new / notes / compare link), update the in-plugin
-  `CHANGELOG`, README, this file and `docs/screenshot.png`, bump the crate versions, push `main`, then push the annotated tag.
+  `CHANGELOG`, README, this file and `docs/screenshots/*.png`, bump the crate versions, push `main`, then push the annotated tag.
   The release job uses that file as the release body; `.github/workflows/release-notes.yml` re-applies the files to existing
   releases when they change (or via manual dispatch). Verify the release page (assets and description) afterwards.
 - **Several plug-ins, one repo (decided 2026-11-11):** each plug-in has its own version in its `rust/<name>-plugin/Cargo.toml`
