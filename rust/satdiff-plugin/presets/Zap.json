@@ -1,0 +1,75 @@
+{
+  "format": "satdiff-preset",
+  "version": 1,
+  "name": "Zap",
+  "params": {
+    "ab": 0.0,
+    "bias": 19.0,
+    "bias_b": 0.0,
+    "drive": 3.0,
+    "drive_b": 0.0,
+    "fx_delay": 2.0,
+    "fx_depth": 50.0,
+    "fx_fb": 0.0,
+    "fx_freq": 6724.0,
+    "fx_hp": 20.0,
+    "fx_lp": 20000.0,
+    "fx_mix": 100.0,
+    "fx_on": 1.0,
+    "fx_pos": 0.0,
+    "fx_q": 1.95,
+    "fx_rate": 0.5,
+    "fx_shape": 0.0,
+    "fx_shift": 0.0,
+    "fx_spread": 43.0,
+    "fx_stages": 54.0,
+    "fx_type": 0.0,
+    "gain_match": 0.0,
+    "in_gain": 0.0,
+    "lim_on": 1.0,
+    "morph_depth": 0.0,
+    "morph_dir": 2.0,
+    "morph_speed": 50.0,
+    "os": 0.0,
+    "out_gain": -2.2,
+    "out_hp": 20.0,
+    "out_hp_m": 1.0,
+    "out_hp_s": 1.0,
+    "phase": 0.0,
+    "sat_hp": 70.0,
+    "sat_hp_b": 20.0,
+    "sat_lp": 20000.0,
+    "sat_lp_b": 20000.0,
+    "sat_mix": 100.0,
+    "shape": 14.0,
+    "shape_b": 0.0,
+    "tile": 1.0,
+    "tile_b": 0.0,
+    "tone": 20000.0,
+    "tone_b": 20000.0
+  },
+  "curve": [
+    [
+      -1.0,
+      -1.0
+    ],
+    [
+      -0.2676,
+      0.6665
+    ],
+    [
+      0.2676,
+      -0.6665
+    ],
+    [
+      1.0,
+      1.0
+    ]
+  ],
+  "curve_ext": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+  ]
+}

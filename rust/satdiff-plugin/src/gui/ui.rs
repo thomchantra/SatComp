@@ -551,8 +551,11 @@ impl<'a> DerefMut for Gui<'a> {
 
 /// About page copy (docs/abouttextcopy.md). Each inner slice is one paragraph, each string one source line.
 const ABOUT_TEXT: &[&[&str]] = &[
-    &["Waveshaping saturator with a drawable curve and phase tools (alpha)", "Phase rotator and diffusor are coming in the next builds."],
+    &["A waveshaper saturator with phase coloration effects.", "Dedicated to sweet saturated sounds :>"],
     &["Use tube with low drive for warm saturation, opt for destruction with tri-fold, or annihilate with a custom asymmetric waveshape.", "[Click] the top-right pencil icon to enter custom draw mode.", "[Click] the lower-right SAT value to auto-match the gain."],
+    &["Draw up to 30 points and drag the hollow handles to bend a segment. Pick LINEAR or CURVE, and mirror the curve odd or even with the tools at the top right of the plot. TILE folds or repeats the curve so BIAS walks through copies of it."],
+    &["A | B holds two complete saturators, each with its own shape, drive, bias, filters and tone. MORPH blends them: XFADE is a static crossfade, A>B and B>A let the input level move it, and SPEED sets how fast it follows."],
+    &["PHASE rotates the signal before the saturator. The colour slot adds a diffusor, phaser, flanger, ring mod or frequency shifter before (PRE-SAT) or after (POST-SAT) the saturator, and COLOR MIX sets how much of it you hear."],
     &["LIMIT is a true-peak output limiter. GAIN MATCH trims the output back to the input level."],
     &["Transient/GR meter: solid = limiter gain reduction."],
     &["[Double-click] slider resets the parameter to its default value", "[Click] GR meter cycles its range", "[Click] clip meter resets the readout", "[Left/Right-click] top-left icon cycles the colour theme", "[Double-click] top-left icon switches between dark and light mode"],
@@ -560,7 +563,7 @@ const ABOUT_TEXT: &[&[&str]] = &[
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
 const CHANGELOG: &[(&str, &[&str])] = &[
-    ("v0.1", &["First build: the SatComp saturator without the compressor and EQ, OUT GAIN, GAIN MATCH and an optional true-peak limiter.", "The phase rotator and the diffusor follow."]),
+    ("v0.1", &["First version: a waveshaper saturator with two scenes (A | B) and MORPH, a drawable curve with handles, TILE, a phase rotator and a colour slot (diffusor, phaser, flanger, ring mod, frequency shifter).", "Output HPF, a true-peak limiter and GAIN MATCH come with it."]),
 ];
 
 /// Crate version for the header: "0.4" for 0.4.0, "0.4.1" for a patch release.
@@ -2760,7 +2763,7 @@ impl<'a> Gui<'a> {
         self.setc(false);
         // title: the name large with the version dimmed on its baseline, both centred on the icon (see Canvas::header_title)
         let ver = version_short();
-        let tw = self.cv.header_title_w("SATDIFF", &ver, 154.0);
+        let tw = self.cv.header_title_w("SATDIFF", &ver, 152.0);
         let over = self.hit(31.0, 6.0, tw + 6.0, 20.0);
         if over && self.press && self.act == 0 {
             self.app.about = if self.app.about == 0 { 1 } else { 0 };
@@ -2768,13 +2771,14 @@ impl<'a> Gui<'a> {
             self.press = false;
         }
         // hovering highlights the lockup (a UI-coloured plate behind it, the text in the background colour): it opens About
-        self.cv.header_title(34.0, 16.0, 20.0, "SATDIFF", &ver, 154.0, over);
+        self.cv.header_title(34.0, 16.0, 20.0, "SATDIFF", &ver, 152.0, over);
         self.setc(false);
         let label = format!("{:.0}%", self.cur_scale() * 100.0);
-        if self.hbtn(192.0, 6.0, 46.0, 20.0, &label, 0) {
+        // right edge on 236 like the preset arrows and the shape selector below it
+        if self.hbtn(190.0, 6.0, 46.0, 20.0, &label, 0) {
             let cur = SIZES.iter().position(|v| (v - self.cur_scale()).abs() < 0.13).unwrap_or(0);
             let items = SIZES.iter().map(|v| format!("{:.0}%", v * 100.0)).collect();
-            self.open_menu(MenuKind::Size, 192.0, 26.0, items, cur);
+            self.open_menu(MenuKind::Size, 190.0, 26.0, items, cur);
         }
         if self.hbtn(244.0, 6.0, 62.0, 20.0, "BYPASS", byp as u8) {
             self.click_set(26, if byp { 0.0 } else { 1.0 });
