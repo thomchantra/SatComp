@@ -98,6 +98,9 @@ pub struct SatCompParams {
     /// Packed scope view settings (see gui/ui/scope.rs); UI-only, saved with the project.
     #[persist = "scope-v3"]
     pub scope: Arc<AtomicI32>,
+    /// Packed compressor-plot view: floor and ceiling steps (see gui/ui/ccurve.rs); UI-only, saved with the project.
+    #[persist = "ccurve-v1"]
+    pub ccurve: Arc<AtomicI32>,
     /// Name of the last loaded/saved preset (display only).
     #[persist = "preset-name"]
     pub preset_name: Arc<parking_lot::Mutex<String>>,
@@ -261,6 +264,7 @@ impl SatCompParams {
             light: Arc::new(AtomicBool::new(d.as_ref().map(|d| d.light).unwrap_or(false))),
             font: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.face_index()).unwrap_or(0))),
             scope: Arc::new(AtomicI32::new((5 << 4) | (2 << 8))),
+            ccurve: Arc::new(AtomicI32::new(6 | (2 << 4))),
             custom_theme: Arc::new(parking_lot::Mutex::new(d.as_ref().map(|d| d.theme.clone()).unwrap_or_default())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),
@@ -365,6 +369,7 @@ impl SatCompParams {
             light: Arc::new(AtomicBool::new(d.as_ref().map(|d| d.light).unwrap_or(false))),
             font: Arc::new(AtomicI32::new(d.as_ref().map(|d| d.face_index()).unwrap_or(0))),
             scope: Arc::new(AtomicI32::new((5 << 4) | (2 << 8))),
+            ccurve: Arc::new(AtomicI32::new(6 | (2 << 4))),
             custom_theme: Arc::new(parking_lot::Mutex::new(d.as_ref().map(|d| d.theme.clone()).unwrap_or_default())),
             preset_name: Arc::new(parking_lot::Mutex::new(String::new())),
             custom_curve: Arc::new(parking_lot::Mutex::new(vec![(-1.0, -1.0), (1.0, 1.0)])),

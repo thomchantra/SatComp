@@ -57,6 +57,7 @@ pub enum Dlg {
     Saved(String),
 }
 
+mod ccurve;
 mod scope;
 
 pub struct State {
@@ -64,6 +65,10 @@ pub struct State {
     pub kit: Kit,
     /// packed scope settings (see scope.rs)
     scope_cfg: i32,
+    /// packed compressor-plot view (see ccurve.rs): floor and ceiling of both axes
+    cc_cfg: i32,
+    /// compressor-plot floor / ceiling label drag start: (mouse y, start step)
+    cc_drag: (f32, usize),
     /// steady scope scrolling: eased read position (bucket index) and the time of the last frame
     scope_clk: satcomp_ui::scroll::ScrollClock,
     /// animation values from the audio thread, replayed in audio time (see satcomp-ui/src/meter.rs)
@@ -245,6 +250,8 @@ impl State {
             light,
             face,
             scope_cfg: params.scope.load(Ordering::Relaxed),
+            cc_cfg: params.ccurve.load(Ordering::Relaxed),
+            cc_drag: (0.0, 0),
             scope_clk: Default::default(),
             meter: satcomp_ui::meter::MeterReader::new(vec![satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::State]),
             meter_t: 0.0,
@@ -341,6 +348,7 @@ impl State {
         self.light = light;
         self.face = (params.font.load(Ordering::Relaxed).max(0) as usize).min(satcomp_ui::canvas::FONT_NAMES.len() - 1);
         self.scope_cfg = params.scope.load(Ordering::Relaxed);
+        self.cc_cfg = params.ccurve.load(Ordering::Relaxed);
         self.restore_custom(params);
     }
 
@@ -1305,129 +1313,6 @@ impl<'a> Gui<'a> {
         if self.btn(cx, y, x + 266.0 - cx, h, "SOLO", if solo { 2 } else { 0 }) {
             self.env.shared.sc_solo.store(!solo, Ordering::Relaxed);
         }
-    }
-
-    fn draw_ccurve(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let gc = GainComputer::from_params(&self.env.dsp.comp());
-        let hv = self.hit(x, y, w, h);
-        let thr = self.sget(8);
-        if self.act == 120 && self.down {
-            let xin = -48.0 + (self.mx - x) / (w - 1.0) * 48.0;
-            let yo = -48.0 + (1.0 - (self.my - y) / (h - 1.0)) * 48.0;
-            self.setv(8, (xin + yo) * 0.5);
-        }
-        if self.act == 121 && self.down {
-            let yo = (-48.0 + (1.0 - (self.my - y) / (h - 1.0)) * 48.0).max(thr).min(0.0);
-            if thr < -0.3 {
-                self.setv(9, -thr / (yo - thr).max(0.05));
-            }
-        }
-        let thr = self.sget(8);
-        let gc = if self.act == 120 || self.act == 121 {
-            self.refresh_dsp();
-            GainComputer::from_params(&self.env.dsp.comp())
-        } else {
-            gc
-        };
-        let hxt = x + (thr + 48.0) / 48.0 * (w - 1.0);
-        let hyt = y + (1.0 - (thr + 48.0) / 48.0) * (h - 1.0);
-        let hxr = x + w - 5.0;
-        let hyr = y + (1.0 - (-(gc.gr(0.0) as f32) + 48.0) / 48.0) * (h - 1.0);
-        if hv && self.press && self.act == 0 {
-            if (self.mx - hxr).abs() <= 6.0 && (self.my - hyr).abs() <= 6.0 {
-                if self.dbl(121) {
-                    let d = self.meta[9].def;
-                    self.click_set(9, d);
-                } else {
-                    self.act = 121;
-                    self.vt1 = 9;
-                    self.vt2 = 0;
-                }
-                self.press = false;
-            } else if (self.mx - hxt).abs() <= 6.0 && (self.my - hyt).abs() <= 6.0 {
-                if self.dbl(120) {
-                    let d = self.meta[8].def;
-                    self.click_set(8, d);
-                } else {
-                    self.act = 120;
-                    self.vt1 = 8;
-                    self.vt2 = 0;
-                }
-                self.press = false;
-            }
-        }
-        self.setc(false);
-        self.cv.boxr(x, y, w, h);
-        let vz = self.mval(1);
-        let lvl = (8.6858896 * vz.max(0.000001).ln()).clamp(-48.0, 0.0);
-        self.setc(true);
-        for i in 0..(w - 2.0) as i32 {
-            let xin = -48.0 + 48.0 * i as f32 / (w - 3.0);
-            if xin <= lvl {
-                let py = y + (1.0 - (xin - gc.gr(xin as f64) as f32 + 48.0) / 48.0) * (h - 1.0);
-                self.cv.fill(x + 1.0 + i as f32, py, 1.0, y + h - 1.0 - py);
-            }
-        }
-        self.setc(false);
-        for i in 0..(w / 3.0).floor() as i32 {
-            self.cv.fill(x + i as f32 * 3.0 + 1.0, y + h - 1.0 - ((i * 3) as f32 * (h - 1.0) / (w - 1.0)).floor(), 1.0, 1.0);
-        }
-        let n = 96;
-        let (mut lx, mut ly) = (0.0, 0.0);
-        for i in 0..=n {
-            let xin = -48.0 + 48.0 * i as f32 / n as f32;
-            let yout = xin - gc.gr(xin as f64) as f32;
-            let px = x + (i as f32 / n as f32) * (w - 1.0);
-            let py = y + (1.0 - (yout + 48.0) / 48.0) * (h - 1.0);
-            if i > 0 {
-                self.cv.line(lx, ly, px, py);
-            }
-            lx = px;
-            ly = py;
-        }
-        if lvl > -47.9 {
-            let px = x + (lvl + 48.0) / 48.0 * (w - 1.0);
-            let py = y + (1.0 - (lvl - gc.gr(lvl as f64) as f32 + 48.0) / 48.0) * (h - 1.0);
-            self.cv.fill(px - 1.0, py - 1.0, 3.0, 3.0);
-        }
-        let tx = x + (thr + 48.0) / 48.0 * (w - 1.0);
-        self.cv.fill(tx, y + h - 4.0, 1.0, 3.0);
-        // sidechain: the plot's x axis is the KEY level. Markers on the side edges show the main signal: left = level
-        // entering the compressor, right = level after the gain reduction (the gap between them is the GR).
-        let sc_mode = self.sget(63) > 0.5;
-        let mn = self.mval(2);
-        let mn_db = (8.6858896 * mn.max(0.000001).ln()).clamp(-48.0, 0.0);
-        if sc_mode && mn_db > -47.9 {
-            let gr_now = if lvl > -47.9 { gc.gr(lvl as f64) as f32 } else { 0.0 };
-            let yin = y + (1.0 - (mn_db + 48.0) / 48.0) * (h - 1.0);
-            let yout = y + (1.0 - ((mn_db - gr_now).max(-48.0) + 48.0) / 48.0) * (h - 1.0);
-            self.cv.tri((x + 1.0, yin - 3.0), (x + 1.0, yin + 4.0), (x + 6.0, yin + 0.5));
-            self.cv.tri((x + w - 2.0, yout - 3.0), (x + w - 2.0, yout + 4.0), (x + w - 7.0, yout + 0.5));
-        }
-        // handles
-        self.setc(self.act == 120);
-        self.cv.disc(hxt, hyt, 3.5);
-        self.setc(self.act == 121);
-        self.cv.fill(hxr - 3.0, hyr - 3.0, 7.0, 7.0);
-        self.setc(false);
-        self.cv.set_font(1);
-        if self.rd_tick {
-            self.rd_lvl = lvl;
-            self.rd_ghr = if lvl > -47.9 { gc.gr(lvl as f64) as f32 } else { 0.0 };
-        }
-        let s = if sc_mode {
-            let mn = if mn_db > -47.9 { format!("{:+05.1}", mn_db) } else { "-----".to_string() };
-            if self.rd_lvl > -47.9 {
-                format!("SC {:+05.1}  IN {}  GR {:04.1}dB", self.rd_lvl, mn, self.rd_ghr)
-            } else {
-                format!("SC -----  IN {}  GR 00.0dB", mn)
-            }
-        } else if self.rd_lvl > -47.9 {
-            format!("LVL {:+05.1}  OUT {:+05.1}  GR {:04.1}dB", self.rd_lvl, self.rd_lvl - self.rd_ghr, self.rd_ghr)
-        } else {
-            "LVL -----  OUT -----  GR 00.0dB".to_string()
-        };
-        self.cv.text(x + 3.0, y + 2.0, &s);
     }
 
     // ------------------------------------------------------------------ EQ page

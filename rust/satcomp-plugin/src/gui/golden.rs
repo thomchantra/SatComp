@@ -273,6 +273,11 @@ fn script() -> Vec<(String, u64)> {
 
     // compressor plot interaction
     r.drag("ccurve_drag", 200.0, 120.0, 100.0, 4);
+    // range labels in the lower right: wheel the floor, drag the ceiling up, double-click the floor back to its default
+    r.wheel("ccurve_floor_wheel", 385.0, 174.0, 20.0);
+    r.drag("ccurve_ceil_drag", 325.0, 174.0, 150.0, 4);
+    r.click("ccurve_floor_dbl_a", 385.0, 174.0);
+    r.click("ccurve_floor_dbl_b", 385.0, 174.0);
 
     // EQ page
     r.click("eq_on", 387.0, 42.0);
