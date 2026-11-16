@@ -30,7 +30,7 @@ PDF with your default viewer (xdg-open).
 Your settings and presets
 -------------------------
   Presets:  ~/.config/@NAME@/Presets
-  Themes:   ~/.config/SatComp/themes.json   (shared by SatComp, SatXComp and SatLim)
+  Themes:   ~/.config/SatComp/themes.json   (shared by all the plug-ins)
 
 Uninstall: delete the files you copied.
 

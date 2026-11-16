@@ -20,7 +20,7 @@ This zip contains two plug-in formats. Install the one your host uses (or both):
 Your settings and presets
 -------------------------
   Presets:  %APPDATA%\@NAME@\Presets
-  Themes:   %APPDATA%\SatComp\themes.json   (shared by SatComp, SatXComp and SatLim)
+  Themes:   %APPDATA%\SatComp\themes.json   (shared by all the plug-ins)
 
 Uninstall: delete the folder or file you copied.
 

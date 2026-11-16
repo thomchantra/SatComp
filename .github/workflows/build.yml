@@ -43,6 +43,7 @@ jobs:
               list='["satcomp"'
               [ -d rust/satxcomp-plugin ] && list="$list,\"satxcomp\""
               [ -d rust/satlim-plugin ] && list="$list,\"satlim\""
+              [ -d rust/satdiff-plugin ] && list="$list,\"satdiff\""
               [ -d rust/sateq-plugin ] && list="$list,\"sateq\""
               list="$list]"
               ;;
@@ -88,7 +89,7 @@ jobs:
         run: |
           # zip name = <Display>-<plug-in version from its Cargo.toml>-<platform>; the plug-in's own version, not the tag
           plugin="${{ matrix.plugin }}"
-          case "$plugin" in satcomp) disp=SatComp ;; satxcomp) disp=SatXComp ;; satlim) disp=SatLim ;; sateq) disp=SatEQ ;; esac
+          case "$plugin" in satcomp) disp=SatComp ;; satxcomp) disp=SatXComp ;; satlim) disp=SatLim ;; satdiff) disp=SatDiff ;; sateq) disp=SatEQ ;; esac
           ver=$(grep -m1 '^version' "rust/${plugin}-plugin/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
           # zip layout mirrors the install folders: VST3/<plugin>.vst3, CLAP/<plugin>.clap, INSTALL.txt, LICENSE (+ the manual on the macOS job)
           mkdir -p dist/VST3 dist/CLAP
@@ -114,9 +115,35 @@ jobs:
             *.zip
             *.pdf
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
+  # the all-in-one files of a whole-suite release (a plain v* tag): one zip per platform with every plug-in and manual, and a
+  # macOS installer (.pkg, all users). Built from the per-plug-in zips of the bundle job by docs/install/make-suite.sh.
+  suite:
+    if: startsWith(github.ref_name, 'v') && startsWith(github.ref, 'refs/tags/')
     needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-latest, name: macOS-universal }
+          - { runner: ubuntu-latest, name: Windows-x64 }
+          - { runner: ubuntu-latest, name: Linux-x64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: zips
+          merge-multiple: true
+      - name: Suite
+        run: docs/install/make-suite.sh "${{ matrix.name }}" "${GITHUB_REF_NAME}" zips out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: suite-${{ matrix.name }}
+          path: out/*
+
+  release:
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !cancelled() && needs.bundle.result == 'success' && (needs.suite.result == 'success' || needs.suite.result == 'skipped') }}
+    needs: [bundle, suite]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -130,6 +157,7 @@ jobs:
         with:
           files: |
             artifacts/*.zip
+            artifacts/*.pkg
             artifacts/*.pdf
           # notes come from docs/releases/<tag>.md (falls back to generated notes when there is no file)
           body_path: ${{ hashFiles(format('docs/releases/{0}.md', github.ref_name)) != '' && format('docs/releases/{0}.md', github.ref_name) || '' }}

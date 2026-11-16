@@ -1,0 +1,43 @@
+SatComp suite @VER@ - installation (Linux, experimental)
+========================================================
+
+This Linux build is new and lightly tested. Known issue: the meters and the scope can stutter on some
+systems. Feedback is very welcome (see "Got issues?" below).
+
+This zip holds all four plug-ins (SatComp, SatXComp, SatLim, SatDiff) as VST3 and CLAP, plus their
+manuals (PDF). The VST3s are FOLDERS, not single files.
+
+Easiest: the install script
+---------------------------
+1. Unzip the download and open a terminal in the unzipped folder.
+2. Run:   bash install.sh
+   It copies every plug-in, both formats, into your home folder (~/.vst3 and ~/.clap). Add --system
+   to install for all users instead (it asks for your password). bash install.sh --uninstall removes them.
+3. Rescan plug-ins in your host (REAPER: Options > Preferences > Plug-ins > VST/CLAP > Re-scan)
+   or restart it.
+
+By hand
+-------
+~/.vst3 and ~/.clap are HIDDEN folders. In your file manager press Ctrl+H to show hidden files, and
+create the folder if it does not exist yet.
+  VST3: copy the .vst3 folders from  VST3/  into  ~/.vst3/   (all users: /usr/local/lib/vst3/)
+  CLAP: copy the .clap files from  CLAP/  into  ~/.clap/    (all users: /usr/local/lib/clap/)
+
+Needs an X11 session (the window is drawn through X11 and OpenGL). The manual button opens the PDF
+with your default viewer (xdg-open).
+
+Your settings and presets
+-------------------------
+  Presets:  ~/.config/<plug-in name>/Presets
+  Themes:   ~/.config/SatComp/themes.json   (shared by all the plug-ins)
+
+Got issues?
+-----------
+Found a bug, or something sounds or looks odd? Please submit a bug report on GitHub:
+  https://github.com/thomchantra/SatComp/issues
+Say which plug-in and version, your host (DAW) and operating system, and what you did. A screenshot
+or a short description of how to reproduce it helps a lot.
+
+Enjoying it? You can support the project here: https://ko-fi.com/thomchantra
+
+Licence: GPL-3.0-or-later, see LICENSE.
