@@ -1,6 +1,6 @@
 # SatComp
 
-Saturator-infused plug-ins in one black-and-white (or any colour you like) monospace UI: a compressor, a 4-band compressor, a clipper / limiter and a phase diffusor. Made with bricking intentions.
+A waveshaping-saturator-infused plug-ins suite: a compressor, a 4-band compressor, a clipper / limiter and a phase diffusor. Made with bricking intentions.
 
 | Plug-in | Version | What |
 |---|---|---|

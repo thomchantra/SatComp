@@ -23,7 +23,7 @@ The saturator only adds harmonics inside its own band, so driving the lows hard 
 
 | Area | What it does |
 |---|---|
-| Header | logo (themes), preset bar, window scale, SIDECHAIN, EQ page switch, LIM meter |
+| Header | logo (themes), preset bar, window scale (a dropdown), SIDECHAIN, EQ page switch, LIM meter |
 | Spectrum viewport | live spectrum of the output over the dry signal, crossover lines, one handle per band |
 | Band tabs | LO / ML / MH / HI: select a band, switch it on or off, DELTA and SOLO for the selected band |
 | Saturator (left) | shaper, DRIVE, BIAS, ASYM, TONE, HP, LP, SAT MIX, SAT GAIN and the transfer plot |
@@ -150,7 +150,6 @@ Found a bug or have an idea? Open an issue on GitHub. Thank you for using SatXCo
 
 ## Notes to check (delete before the PDF)
 
-- Window scale: the cell next to the preset bar is the scale; confirm it is click-to-cycle.
 - EQ filter types and the EQ's MIX / tilt wording.
 - "Click it to cycle its range (3, 6, 12, 18 dB)" for the gain meter.
 - The routing hint "input 3/4" is the usual host convention; confirm for REAPER.
