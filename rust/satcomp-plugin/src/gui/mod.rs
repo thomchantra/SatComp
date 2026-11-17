@@ -56,7 +56,7 @@ pub(crate) fn run_frame(
         st.fill_dummy();
     }
     let (pr, sr): (&SatCompParams, &Shared) = if editing { (&*dp, &*ds) } else { (params, shared) };
-    let env = Env { params: pr, setter, shared: sr, dsp: pr.to_dsp() };
+    let env = Env { params: pr, setter, shared: sr, dsp: if editing { pr.to_dsp() } else { st.live_dsp(pr) } };
     let mut g = Gui { s: st, cv, env };
     g.frame();
     ctx.request_repaint_after(Duration::from_millis(16));

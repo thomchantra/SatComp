@@ -21,7 +21,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libx11-xcb-dev libxcb-icccm4-dev libxcb-dri2-0-dev libgl1-mesa-dev libx11-dev libxcursor-dev libasound2-dev
       - name: Tests
         working-directory: rust
-        run: cargo test --locked
+        run: cargo test --locked --no-fail-fast
 
   # which plug-ins this run bundles: a plain v* tag (and branch / PR builds) = every plug-in that exists in the workspace,
   # a <plugin>-v* tag = just that plug-in
@@ -43,6 +43,7 @@ jobs:
               list='["satcomp"'
               [ -d rust/satxcomp-plugin ] && list="$list,\"satxcomp\""
               [ -d rust/satlim-plugin ] && list="$list,\"satlim\""
+              [ -d rust/satdiff-plugin ] && list="$list,\"satdiff\""
               [ -d rust/sateq-plugin ] && list="$list,\"sateq\""
               list="$list]"
               ;;
@@ -88,7 +89,7 @@ jobs:
         run: |
           # zip name = <Display>-<plug-in version from its Cargo.toml>-<platform>; the plug-in's own version, not the tag
           plugin="${{ matrix.plugin }}"
-          case "$plugin" in satcomp) disp=SatComp ;; satxcomp) disp=SatXComp ;; satlim) disp=SatLim ;; sateq) disp=SatEQ ;; esac
+          case "$plugin" in satcomp) disp=SatComp ;; satxcomp) disp=SatXComp ;; satlim) disp=SatLim ;; satdiff) disp=SatDiff ;; sateq) disp=SatEQ ;; esac
           ver=$(grep -m1 '^version' "rust/${plugin}-plugin/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
           # zip layout mirrors the install folders: VST3/<plugin>.vst3, CLAP/<plugin>.clap, INSTALL.txt, LICENSE (+ the manual on the macOS job)
           mkdir -p dist/VST3 dist/CLAP
@@ -114,9 +115,43 @@ jobs:
             *.zip
             *.pdf
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
+  # the all-in-one files of a whole-suite release (a plain v* tag): one zip per platform with every plug-in and the joint manual,
+  # the joint manual PDF on its own, and a macOS installer (.pkg, all users). Built from the per-plug-in zips of the bundle job by docs/install/make-suite.sh.
+  suite:
+    # every build except a single-plug-in tag, so the suite files can be checked from a branch / PR run before tagging
+    if: ${{ !startsWith(github.ref_name, 'satxcomp-v') && !startsWith(github.ref_name, 'satlim-v') && !startsWith(github.ref_name, 'sateq-v') }}
     needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-latest, name: macOS-universal }
+          - { runner: ubuntu-latest, name: Windows-x64 }
+          - { runner: ubuntu-latest, name: Linux-x64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: zips
+          merge-multiple: true
+      - name: Joint-manual tool (pdfunite)
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then brew install poppler; else sudo apt-get install -y poppler-utils; fi
+      - name: Suite
+        run: |
+          # the suite is versioned like SatComp: the release tag on a tag build, else SatComp's version with -dev
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then ver="$GITHUB_REF_NAME"
+          else ver="v$(grep -m1 '^version' rust/satcomp-plugin/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')-dev"; fi
+          docs/install/make-suite.sh "${{ matrix.name }}" "$ver" zips out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: suite-${{ matrix.name }}
+          path: out/*
+
+  release:
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !cancelled() && needs.bundle.result == 'success' && (needs.suite.result == 'success' || needs.suite.result == 'skipped') }}
+    needs: [bundle, suite]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -126,10 +161,18 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      # a whole-suite release (plain v* tag) attaches only the suite files: 3 zips, the macOS .pkg and the joint manual.
+      # A <plugin>-v* tag has no suite files, so its own zip is kept.
+      - name: Keep only the suite files on a suite release
+        run: |
+          if ls artifacts/SatComp-Suite-* >/dev/null 2>&1; then
+            find artifacts -maxdepth 1 -type f ! -name 'SatComp-Suite-*' -delete
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/*.zip
+            artifacts/*.pkg
             artifacts/*.pdf
           # notes come from docs/releases/<tag>.md (falls back to generated notes when there is no file)
           body_path: ${{ hashFiles(format('docs/releases/{0}.md', github.ref_name)) != '' && format('docs/releases/{0}.md', github.ref_name) || '' }}

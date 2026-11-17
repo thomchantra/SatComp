@@ -48,6 +48,8 @@ pub struct LimEngine {
     /// monitor what the clipper + limiter removed (UI -> audio)
     pub delta_on: bool,
     pub scope: Arc<ScopeRing>,
+    /// animation values per 2 ms bucket for the editor (see `MeterRing`): 0 saturator input peak
+    pub meter: Arc<satcomp_dsp::MeterRing>,
     sc_len: usize,
     sc_n: usize,
     sc_o: f64,
@@ -113,6 +115,7 @@ impl LimEngine {
             os: 0,
             delta_on: false,
             scope: Arc::new(ScopeRing::new()),
+            meter: Arc::new(satcomp_dsp::MeterRing::new()),
             sc_len: 96,
             sc_n: 0,
             sc_o: 0.0,
@@ -334,6 +337,8 @@ impl LimEngine {
         self.sc_n += 1;
         if self.sc_n >= self.sc_len {
             self.scope.push3(self.sc_o as f32, self.sc_m as f32, self.sc_p as f32);
+            self.meter.push([self.sat.bk as f32, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            self.sat.bk = 0.0;
             self.sc_o = 0.0;
             self.sc_m = 0.0;
             self.sc_p = 0.0;
@@ -598,5 +603,17 @@ mod tests {
             }
             assert_eq!((saw_lim, saw_clip), (want_lim, want_clip), "clip {clip}");
         }
+    }
+
+    #[test]
+    fn meter_buckets_carry_the_saturator_input_peak() {
+        let mut p = LimParams::default();
+        p.drive = 30.0;
+        let x: Vec<f32> = (0..24000).map(|i| 0.5 * (2.0 * std::f64::consts::PI * 300.0 * i as f64 / SR).sin() as f32).collect();
+        let (_, e) = run(&p, &x);
+        let n = e.meter.head();
+        assert!(n > 200);
+        let peak = (n - 100..n).map(|i| e.meter.get(i)[0]).fold(0.0f32, f32::max);
+        assert!(peak > 0.2 && peak < 0.8, "{peak}");
     }
 }

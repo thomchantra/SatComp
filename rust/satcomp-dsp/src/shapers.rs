@@ -22,8 +22,12 @@ pub fn asym_from(v: &[f32]) -> [f64; SHAPER_COUNT] {
 /// Shaper index of the user-drawn curve.
 pub const CUSTOM: i32 = 14;
 
-/// Max points of the custom curve, including the two fixed-x end points.
-pub const MAX_PTS: usize = 10;
+/// Max points of the custom curve the SatComp-family editors let you draw, including the two fixed-x end points.
+pub const MAX_PTS: usize = 20;
+/// Points a `Curve` can hold (SatDiff's editor uses all of them: 30 free, 15 per half in the odd / even views).
+pub const PT_CAP: usize = 30;
+/// Largest segment bend.
+pub const MAX_BEND: f32 = 2.0;
 /// Minimum x distance between neighbouring points.
 pub const MIN_GAP: f32 = 0.02;
 
@@ -32,7 +36,15 @@ pub const MIN_GAP: f32 = 0.02;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Curve {
     pub n: usize,
-    pub p: [(f32, f32); MAX_PTS],
+    pub p: [(f32, f32); PT_CAP],
+    /// Curve handles: `bend[k]` lifts the middle of segment k (from `p[k]` to `p[k + 1]`) by that much, as a parabola that is zero
+    /// at both points. 0 everywhere = the plain curve.
+    pub bend: [f32; PT_CAP],
+    /// Segments between the points are straight lines (plus their bend) instead of the smooth monotone cubic.
+    pub linear: bool,
+    /// What happens beyond x = +-1: 0 = flat (a hard clip), 1 = mirror (ping-pong, always continuous), 2 = repeat (the curve
+    /// restarts, seams like Wrap). Set by the plug-in that has a TILE control; every constructor leaves it 0.
+    pub tile: u8,
 }
 
 impl Default for Curve {
@@ -43,10 +55,10 @@ impl Default for Curve {
 
 impl Curve {
     pub fn linear() -> Self {
-        let mut p = [(0.0, 0.0); MAX_PTS];
+        let mut p = [(0.0, 0.0); PT_CAP];
         p[0] = (-1.0, -1.0);
         p[1] = (1.0, 1.0);
-        Self { n: 2, p }
+        Self { n: 2, p, bend: [0.0; PT_CAP], linear: false, tile: 0 }
     }
 
     pub fn pts(&self) -> &[(f32, f32)] {
@@ -54,15 +66,45 @@ impl Curve {
     }
 
     /// Sanitising constructor (persisted/preset data is untrusted): sorts, clamps, enforces end points
-    /// and the gap, truncates to MAX_PTS. Falls back to linear if fewer than 2 points.
+    /// and the gap, truncates to `PT_CAP`. Falls back to linear if fewer than 2 points.
     pub fn from_points(pts: &[(f32, f32)]) -> Self {
-        // No heap allocation: this runs on the audio thread every block (a malloc there can stall behind the UI).
-        const CAP: usize = 32;
-        let mut v = [(0.0f32, 0.0f32); CAP];
+        let v: Vec<(f32, f32, f32)> = pts.iter().map(|&(x, y)| (x, y, 0.0)).collect();
+        Self::sanitise(&v, false)
+    }
+
+    /// Points plus the bend of the segment that starts at each of them (the last one's is ignored).
+    pub fn from_points_bends(pts: &[(f32, f32)], bends: &[f32], linear: bool) -> Self {
+        let v: Vec<(f32, f32, f32)> = pts.iter().enumerate().map(|(i, &(x, y))| (x, y, bends.get(i).copied().unwrap_or(0.0))).collect();
+        Self::sanitise(&v, linear)
+    }
+
+    /// From the persisted pair: the points and `ext` = `[linear, bend of segment 0, bend of segment 1, ...]` (empty = plain curve).
+    pub fn from_parts(pts: &[(f32, f32)], ext: &[f32]) -> Self {
+        match ext.split_first() {
+            Some((lin, bends)) => Self::from_points_bends(pts, bends, *lin > 0.5),
+            None => Self::from_points(pts),
+        }
+    }
+
+    /// The `ext` vector for `from_parts` (empty when the curve has neither handles nor linear segments).
+    pub fn ext(&self) -> Vec<f32> {
+        let bends = &self.bend[..self.n - 1];
+        if !self.linear && bends.iter().all(|b| *b == 0.0) {
+            return Vec::new();
+        }
+        let mut v = vec![if self.linear { 1.0 } else { 0.0 }];
+        v.extend_from_slice(bends);
+        v
+    }
+
+    fn sanitise(pts: &[(f32, f32, f32)], linear: bool) -> Self {
+        // No heap allocation in the hot part: this runs on the audio thread every block (a malloc there can stall behind the UI).
+        const CAP: usize = PT_CAP + 2;
+        let mut v = [(0.0f32, 0.0f32, 0.0f32); CAP];
         let mut n = 0;
-        for &(x, y) in pts {
+        for &(x, y, b) in pts {
             if n < CAP && x.is_finite() && y.is_finite() {
-                v[n] = (x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0));
+                v[n] = (x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0), if b.is_finite() { b.clamp(-MAX_BEND, MAX_BEND) } else { 0.0 });
                 n += 1;
             }
         }
@@ -70,18 +112,21 @@ impl Curve {
             return Self::linear();
         }
         let v = &mut v[..n];
-        v.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut c = Self::linear();
+        c.linear = linear;
         c.p[0] = (-1.0, v[0].1);
+        c.bend[0] = v[0].2;
         // interior points only, kept inside the gap-padded range
         let mut cnt = 1;
         let mut lo = -1.0 + MIN_GAP;
-        for &(x, y) in &v[1..n - 1] {
-            if cnt + 1 >= MAX_PTS {
+        for &(x, y, b) in &v[1..n - 1] {
+            if cnt + 1 >= PT_CAP {
                 break;
             }
             if x >= lo && x <= 1.0 - MIN_GAP {
                 c.p[cnt] = (x, y);
+                c.bend[cnt] = b;
                 cnt += 1;
                 lo = x + MIN_GAP;
             }
@@ -89,6 +134,15 @@ impl Curve {
         c.p[cnt] = (1.0, v[n - 1].1);
         c.n = cnt + 1;
         c
+    }
+
+    /// The right half as drawn in the odd / even views: the points with x > 0 and, for each, the bend of the segment that ends
+    /// at it (the first one is the segment across the centre).
+    pub fn right_half(&self) -> (Vec<(f32, f32)>, Vec<f32>) {
+        let pts: Vec<(f32, f32)> = self.pts().iter().cloned().filter(|p| p.0 > 0.0).collect();
+        let first = self.n - pts.len();
+        let bends = (0..pts.len()).map(|j| if first + j >= 1 { self.bend[first + j - 1] } else { 0.0 }).collect();
+        (pts, bends)
     }
 
     /// True when the curve is (nearly) odd, `f(-x) = -f(x)`: the symmetry tool can edit it without changing it.
@@ -102,6 +156,11 @@ impl Curve {
     /// The right half of the curve's odd part: points at the |x| of its interior points (at most `MAX_PTS / 2 - 1`) and at
     /// x = 1, with y = (f(x) - f(-x)) / 2. Feed it to `from_odd_half`.
     pub fn odd_half(&self) -> Vec<(f32, f32)> {
+        self.odd_half_n(MAX_PTS)
+    }
+
+    /// `odd_half` for an editor that allows `max_pts` points in the whole curve (so at most `max_pts / 2 - 1` interior ones per half).
+    pub fn odd_half_n(&self, max_pts: usize) -> Vec<(f32, f32)> {
         let mut xs: Vec<f32> = self.pts().iter().filter(|p| p.0 > -1.0 && p.0 < 1.0).map(|p| p.0.abs()).filter(|x| *x >= MIN_GAP).collect();
         xs.sort_by(|a, b| a.total_cmp(b));
         let mut keep: Vec<f32> = Vec::new();
@@ -110,21 +169,69 @@ impl Curve {
                 keep.push(x);
             }
         }
-        keep.truncate(MAX_PTS / 2 - 1);
+        keep.truncate(max_pts.min(PT_CAP) / 2 - 1);
         keep.push(1.0);
         keep.into_iter().map(|x| (x, ((self.eval(x as f64) - self.eval(-x as f64)) * 0.5) as f32)).collect()
     }
 
     /// The full odd curve of a right half (x > 0, ending at x = 1): the left half is the point-mirror image.
     pub fn from_odd_half(h: &[(f32, f32)]) -> Self {
-        let mut v: Vec<(f32, f32)> = h.iter().rev().map(|&(x, y)| (-x, -y)).collect();
-        v.extend_from_slice(h);
-        Self::from_points(&v)
+        Self::from_half(h, &[], false, false)
     }
 
-    /// Value of the monotone cubic (Fritsch-Carlson) through the points; flat beyond the ends.
-    /// Never overshoots between points, so the transfer curve stays single-valued and tame.
+    /// The full curve of a right half: odd (`even` false: the left half is the point mirror) or even (Y mirror). `hb[j]` bends the
+    /// half's segment j, the one that ends at `h[j]` (segment 0 crosses the centre: kept for an even curve, 0 for an odd one, whose
+    /// middle must pass through the origin); the mirrored segments get the mirrored bend (odd: -c, even: +c).
+    pub fn from_half(h: &[(f32, f32)], hb: &[f32], even: bool, linear: bool) -> Self {
+        let nh = h.len();
+        let (my, mb) = if even { (1.0, 1.0) } else { (-1.0, -1.0) };
+        let bend = |j: usize| hb.get(j).copied().unwrap_or(0.0);
+        let mut v: Vec<(f32, f32, f32)> = Vec::with_capacity(2 * nh);
+        for j in (0..nh).rev() {
+            // the point -h[j] starts the segment that ends at -h[j - 1] (the centre one for j = 0)
+            let b = if j == 0 { if even { bend(0) } else { 0.0 } } else { mb * bend(j) };
+            v.push((-h[j].0, my * h[j].1, b));
+        }
+        for j in 0..nh {
+            v.push((h[j].0, h[j].1, if j + 1 < nh { bend(j + 1) } else { 0.0 }));
+        }
+        Self::sanitise(&v, linear)
+    }
+
+    /// The right half of the curve's even part: like `odd_half` with y = (f(x) + f(-x)) / 2. Feed it to `from_even_half`.
+    pub fn even_half(&self) -> Vec<(f32, f32)> {
+        self.even_half_n(MAX_PTS)
+    }
+
+    pub fn even_half_n(&self, max_pts: usize) -> Vec<(f32, f32)> {
+        self.odd_half_n(max_pts).into_iter().map(|(x, _)| (x, ((self.eval(x as f64) + self.eval(-x as f64)) * 0.5) as f32)).collect()
+    }
+
+    /// The full even curve of a right half (x > 0, ending at x = 1): the left half is the Y-mirror image, `f(-x) = f(x)`.
+    pub fn from_even_half(h: &[(f32, f32)]) -> Self {
+        Self::from_half(h, &[], true, false)
+    }
+
+    /// `eval` with the tile mode applied: the input is folded (mirror) or wrapped (repeat) back into [-1, 1] first.
+    pub fn eval_tiled(&self, x: f64) -> f64 {
+        self.eval(tile_x(self.tile, x))
+    }
+
+    /// Value of the curve: the monotone cubic (Fritsch-Carlson) through the points, or straight segments when `linear`, plus each
+    /// segment's bend; flat beyond the ends. Without bends it never overshoots between points, so the transfer curve stays
+    /// single-valued and tame; the result is kept inside [-1, 1].
     pub fn eval(&self, x: f64) -> f64 {
+        self.eval_with(x, true)
+    }
+
+    /// The handle of segment `k`: its x (the middle of the segment) and the y of the curve there without the bend. The handle
+    /// sits at that y plus `bend[k]`, and the curve passes through it.
+    pub fn handle_base(&self, k: usize) -> (f32, f32) {
+        let xm = 0.5 * (self.p[k].0 + self.p[k + 1].0);
+        (xm, self.eval_with(xm as f64, false) as f32)
+    }
+
+    fn eval_with(&self, x: f64, bends: bool) -> f64 {
         let pts = self.pts();
         let n = pts.len();
         let xs = |i: usize| pts[i].0 as f64;
@@ -159,11 +266,38 @@ impl Curve {
         let h = xs(k + 1) - xs(k);
         let t = (x - xs(k)) / h;
         let (t2, t3) = (t * t, t * t * t);
-        (2.0 * t3 - 3.0 * t2 + 1.0) * ys(k)
-            + (t3 - 2.0 * t2 + t) * h * tangent(k)
-            + (-2.0 * t3 + 3.0 * t2) * ys(k + 1)
-            + (t3 - t2) * h * tangent(k + 1)
+        let base = if self.linear {
+            ys(k) + (ys(k + 1) - ys(k)) * t
+        } else {
+            (2.0 * t3 - 3.0 * t2 + 1.0) * ys(k) + (t3 - 2.0 * t2 + t) * h * tangent(k) + (-2.0 * t3 + 3.0 * t2) * ys(k + 1) + (t3 - t2) * h * tangent(k + 1)
+        };
+        if bends && self.bend[k] != 0.0 {
+            (base + 4.0 * self.bend[k] as f64 * t * (1.0 - t)).clamp(-1.0, 1.0)
+        } else {
+            base
+        }
     }
+}
+
+/// The input folded (tile 1, mirror / ping-pong) or wrapped (tile 2, repeat) back into [-1, 1]; unchanged for tile 0.
+pub fn tile_x(tile: u8, x: f64) -> f64 {
+    match tile {
+        1 => {
+            let u = (x + 1.0).rem_euclid(4.0);
+            if u < 2.0 {
+                u - 1.0
+            } else {
+                3.0 - u
+            }
+        }
+        2 => (x + 1.0).rem_euclid(2.0) - 1.0,
+        _ => x,
+    }
+}
+
+/// Whether TILE means anything for this shaper: the periodic ones (Tri Fold, Sine Fold, Wrap, Asym Fold) already tile themselves.
+pub fn tile_applies(sel: i32) -> bool {
+    !is_periodic(sel)
 }
 
 fn th(x: f64) -> f64 {
@@ -234,43 +368,71 @@ pub struct ShaperLut {
     pub table: Vec<f64>,
     pub periodic: bool,
     pub sel: i32,
+    /// Tile mode the table was baked with (factory shapers; a custom curve carries its own in `curve.tile`).
+    pub tile: u8,
     /// Curve the table was last baked from (only meaningful while `sel == CUSTOM`).
     pub curve: Curve,
     /// Audio use: morph to a newly built table over `FADE_STEPS` x `FADE_EVERY` samples instead of
     /// swapping it (an instant swap is a step in the output = click). The UI plot leaves this off.
     pub fade: bool,
+    /// Updates one morph takes (each `FADE_EVERY` samples); the default is `FADE_STEPS`.
+    pub fade_steps: u32,
     tgt: Vec<f64>,
     steps: u32,
+    /// `table` is odd (f(-x) = -f(x) to `ODD_TOL`); only maintained while no morph is running
+    odd: bool,
 }
 
 /// Table morph: `FADE_STEPS` updates, one every `FADE_EVERY` samples (~10 ms at 48 kHz).
 pub const FADE_STEPS: u32 = 16;
 pub const FADE_EVERY: u32 = 32;
 
+/// Largest even part (f(x) + f(-x)) / 2 a table may have and still count as odd.
+pub const ODD_TOL: f64 = 1e-12;
+
+fn table_is_odd(t: &[f64]) -> bool {
+    let n = t.len();
+    (0..n / 2).all(|i| (0.5 * (t[i] + t[n - 1 - i])).abs() < ODD_TOL)
+}
+
 impl ShaperLut {
     pub fn new(sel: i32) -> Self {
-        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, curve: Curve::linear(), fade: false, tgt: vec![0.0; LUT_LEN], steps: 0 };
+        let mut l = Self { table: vec![0.0; LUT_LEN], periodic: false, sel: -1, tile: 0, curve: Curve::linear(), fade: false, fade_steps: FADE_STEPS, tgt: vec![0.0; LUT_LEN], steps: 0, odd: false };
         l.build(sel);
         l
     }
 
     pub fn build(&mut self, sel: i32) {
+        self.build_tiled(sel, 0);
+    }
+
+    /// A factory shaper with its [-1, 1] stretch tiled (see `tile_x`); tile 0 is the plain shaper.
+    pub fn build_tiled(&mut self, sel: i32, tile: u8) {
+        let tile = if tile_applies(sel) { tile } else { 0 };
         for (i, v) in self.tgt.iter_mut().enumerate() {
-            *v = shaper(sel, i as f64 / 256.0 - 8.0);
+            *v = shaper(sel, tile_x(tile, i as f64 / 256.0 - 8.0));
         }
-        self.periodic = is_periodic(sel);
+        // a tiled table is periodic (4 is a multiple of both tile periods), so inputs past the table are range-reduced
+        self.periodic = is_periodic(sel) || tile != 0;
+        self.tile = tile;
         self.commit(sel);
     }
 
     /// New target is in `tgt`: snap to it, or start the morph when fading and a table already exists.
     fn commit(&mut self, sel: i32) {
         if self.fade && self.sel != -1 {
-            self.steps = FADE_STEPS;
+            self.steps = self.fade_steps.max(1);
         } else {
             self.table.copy_from_slice(&self.tgt);
             self.steps = 0;
+            self.odd = table_is_odd(&self.table);
         }
         self.sel = sel;
+    }
+
+    /// The table is odd (no even part, so a shaper's even-part path has nothing to do). False while a morph is running.
+    pub fn is_odd(&self) -> bool {
+        self.steps == 0 && self.odd
     }
 
     /// Advance the morph by one step (call every `FADE_EVERY` samples; cheap no-op when idle).
@@ -283,39 +445,66 @@ impl ShaperLut {
             *v += (t - *v) * k;
         }
         self.steps -= 1;
+        if self.steps == 0 {
+            self.odd = table_is_odd(&self.table);
+        }
     }
 
     /// Bake the custom curve into the table (flat outside +-1, like a hard clip).
     pub fn build_custom(&mut self, curve: &Curve) {
         for (i, v) in self.tgt.iter_mut().enumerate() {
-            *v = curve.eval(i as f64 / 256.0 - 8.0);
+            *v = curve.eval_tiled(i as f64 / 256.0 - 8.0);
         }
-        self.periodic = false;
+        // a tiled curve is periodic (4 is a multiple of both tile periods), so inputs past the table are range-reduced
+        self.periodic = curve.tile != 0;
         self.curve = *curve;
+        self.tile = curve.tile;
         self.commit(CUSTOM);
     }
 
-    /// Make the table match `sel` (and `curve` when custom); no-op when already current.
-    pub fn sync(&mut self, sel: i32, curve: &Curve) {
+    /// Make the table match `sel` (and `curve` when custom); no-op when already current. True when a new table was baked.
+    pub fn sync(&mut self, sel: i32, curve: &Curve) -> bool {
         if sel == CUSTOM {
             if self.sel != CUSTOM || self.curve != *curve {
                 self.build_custom(curve);
+                return true;
             }
-        } else if self.sel != sel {
-            self.build(sel);
+        } else {
+            let tile = if tile_applies(sel) { curve.tile } else { 0 };
+            if self.sel != sel || self.tile != tile {
+                self.build_tiled(sel, tile);
+                return true;
+            }
         }
+        false
     }
 
+    /// Updates left in the running table crossfade (0 = settled).
+    pub fn morph_left(&self) -> u32 {
+        self.steps
+    }
+
+    /// The table the crossfade is heading for (equal to `table` when settled).
+    pub fn target(&self) -> &[f64] {
+        &self.tgt
+    }
+
+    /// `eval` on any table of this layout.
     #[inline]
-    pub fn eval(&self, mut x: f64) -> f64 {
-        if self.periodic && x.abs() > 6.0 {
+    pub fn eval_table(table: &[f64], periodic: bool, mut x: f64) -> f64 {
+        if periodic && x.abs() > 6.0 {
             x -= 4.0 * (x * 0.25 + 0.5).floor();
         }
         let p = (x.clamp(-7.999, 7.999) + 8.0) * 256.0;
         let i = p.floor();
         let f = p - i;
         let i = i as usize;
-        self.table[i] + (self.table[i + 1] - self.table[i]) * f
+        table[i] + (table[i + 1] - table[i]) * f
+    }
+
+    #[inline]
+    pub fn eval(&self, x: f64) -> f64 {
+        Self::eval_table(&self.table, self.periodic, x)
     }
 }
 
@@ -374,7 +563,7 @@ mod tests {
         assert_eq!(Curve::from_points(&[]), Curve::linear());
         assert_eq!(Curve::from_points(&[(0.0, 0.0)]), Curve::linear());
         let many: Vec<(f32, f32)> = (0..30).map(|i| (-1.0 + i as f32 / 14.5, 0.5)).collect();
-        assert_eq!(Curve::from_points(&many).n, MAX_PTS);
+        assert_eq!(Curve::from_points(&many).n, PT_CAP);
         let c = Curve::from_points(&[(0.5, 2.0), (f32::NAN, 0.0), (-3.0, -2.0), (0.5, 0.1)]);
         assert_eq!((c.p[0].0, c.p[0].1), (-1.0, -1.0)); // clamped end y
         assert!(c.pts().windows(2).all(|w| w[1].0 - w[0].0 >= MIN_GAP - 1e-6));
@@ -435,5 +624,85 @@ mod tests {
         assert!((odd.eval(1.0) - 0.8).abs() < 1e-6 && (odd.eval(-1.0) + 0.8).abs() < 1e-6);
         assert!(Curve::linear().is_odd());
         assert_eq!(Curve::from_odd_half(&Curve::linear().odd_half()).pts(), Curve::linear().pts());
+    }
+
+    #[test]
+    fn tile_mirrors_or_repeats_a_drawn_curve_beyond_plus_minus_one() {
+        // identity curve: mirror folds like a triangle wave, repeat wraps like a sawtooth, none clips flat
+        let mut c = Curve::from_points(&[(-1.0, -1.0), (0.0, 0.0), (1.0, 1.0)]);
+        let at = |c: &Curve, x: f64| {
+            let mut l = ShaperLut::new(0);
+            l.build_custom(c);
+            l.eval(x)
+        };
+        assert!((at(&c, 1.5) - 1.0).abs() < 1e-3);
+        c.tile = 1;
+        for (x, want) in [(0.5, 0.5), (1.5, 0.5), (2.0, 0.0), (2.5, -0.5), (3.0, -1.0), (-1.5, -0.5), (-2.5, 0.5), (5.5, 0.5), (9.0, 1.0)] {
+            assert!((at(&c, x) - want).abs() < 2e-3, "mirror at {x}: {}", at(&c, x));
+        }
+        c.tile = 2;
+        for (x, want) in [(0.5, 0.5), (1.5, -0.5), (2.5, 0.5), (-1.5, 0.5), (-2.5, -0.5), (7.5, -0.5), (9.5, -0.5)] {
+            assert!((at(&c, x) - want).abs() < 2e-3, "repeat at {x}: {}", at(&c, x));
+        }
+        // a mirrored curve is continuous across the seam, a repeated one jumps
+        c.tile = 1;
+        assert!((at(&c, 1.01) - at(&c, 0.99)).abs() < 0.05);
+        c.tile = 2;
+        assert!((at(&c, 1.01) - at(&c, 0.99)).abs() > 1.5);
+    }
+
+    #[test]
+    fn handles_bend_a_segment_and_pass_through_themselves() {
+        let mut c = Curve::from_points(&[(-1.0, -1.0), (0.0, 0.0), (1.0, 1.0)]);
+        assert_eq!(c.ext(), Vec::<f32>::new());
+        let (xm, base) = c.handle_base(1);
+        assert!((xm - 0.5).abs() < 1e-6 && (base - 0.5).abs() < 1e-3);
+        c.bend[1] = 0.3;
+        assert!((c.eval(0.5) - (base as f64 + 0.3)).abs() < 1e-3, "the curve passes through the handle");
+        // zero at both points: the neighbours and the knots are untouched
+        assert!((c.eval(0.0)).abs() < 1e-9 && (c.eval(1.0) - 1.0).abs() < 1e-9 && (c.eval(-0.5) - Curve::linear().eval(-0.5)).abs() < 0.05);
+        // never outside [-1, 1]
+        c.bend[1] = MAX_BEND;
+        assert!((0..=200).all(|i| c.eval(i as f64 / 200.0).abs() <= 1.0));
+        // linear mode: straight segments
+        let mut l = Curve::from_points(&[(-1.0, -1.0), (-0.2, -0.9), (0.4, 0.3), (1.0, 0.6)]);
+        l.linear = true;
+        assert!((l.eval(0.1) - (-0.9 + (0.3 + 0.9) * (0.3 / 0.6))).abs() < 1e-6);
+        // persisted pair round-trips, a plain curve stores nothing extra
+        l.bend[1] = -0.25;
+        let r = Curve::from_parts(&l.pts().to_vec(), &l.ext());
+        assert_eq!(r, l);
+        assert!(Curve::from_points(&[(-1.0, -1.0), (1.0, 1.0)]).ext().is_empty());
+    }
+
+    #[test]
+    fn mirrored_halves_carry_their_bends() {
+        let h = [(0.3, 0.4), (0.7, 0.8), (1.0, 0.9)];
+        let hb = [0.0, 0.2, -0.1];
+        let odd = Curve::from_half(&h, &hb, false, false);
+        let even = Curve::from_half(&h, &hb, true, false);
+        for i in 0..=40 {
+            let x = i as f64 / 40.0;
+            assert!((odd.eval(-x) + odd.eval(x)).abs() < 1e-5, "odd at {x}");
+            assert!((even.eval(-x) - even.eval(x)).abs() < 1e-5, "even at {x}");
+        }
+        // the bend really is in there, and the half reads back
+        let plain = Curve::from_half(&h, &[], false, false);
+        assert!((odd.eval(0.5) - plain.eval(0.5)).abs() > 0.01);
+        let (rp, rb) = odd.right_half();
+        assert_eq!(rp, h.to_vec());
+        assert_eq!(rb, vec![0.0, 0.2, -0.1]);
+        // an even curve keeps a bent middle segment
+        let eb = Curve::from_half(&h, &[0.15, 0.0, 0.0], true, false);
+        assert!(eb.eval(0.0) > Curve::from_half(&h, &[], true, false).eval(0.0) + 0.1);
+    }
+
+    #[test]
+    fn thirty_points_fit() {
+        let many: Vec<(f32, f32)> = (0..30).map(|i| (-1.0 + 2.0 * i as f32 / 29.0, ((i as f32) * 0.7).sin() * 0.5)).collect();
+        let c = Curve::from_points(&many);
+        assert_eq!(c.n, 30);
+        let even = Curve::from_even_half(&(1..=15).map(|i| (i as f32 / 15.0, 0.2)).collect::<Vec<_>>());
+        assert_eq!(even.n, 30);
     }
 }

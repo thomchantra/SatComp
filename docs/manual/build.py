@@ -7,6 +7,8 @@ The section "## Notes to check ..." is the author's review list and is dropped f
 """
 import pathlib, re, sys
 import markdown
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import figures
 from weasyprint import HTML
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -42,6 +44,7 @@ th { background: #fff; color: #000; text-align: left; padding: 1mm 2mm; }
 td { border: 1px solid #555; padding: 1mm 2mm; vertical-align: top; }
 tr { page-break-inside: avoid; }
 td:first-child { white-space: nowrap; font-weight: 700; }
+.hero, .flow { position: relative; margin: 4mm 0 5mm; page-break-inside: avoid; }
 .tagline { color: #bbb; margin: -2mm 0 4mm; }
 """
 
@@ -54,6 +57,7 @@ def build(md_path):
     meta, body = split_front(md_path.read_text())
     body = re.split(r"\n## Notes to check", body)[0]
     html = markdown.markdown(body, extensions=["tables", "fenced_code"])
+    html = figures.expand(html)
     # the tagline goes right under the first heading
     html = html.replace("</h1>", "</h1>\n<p class='tagline'>%s</p>" % meta.get("tagline", ""), 1)
     css = CSS % {"f": FONTS.as_uri(), "title": meta["title"], "version": "v" + meta["version"]}
@@ -62,6 +66,6 @@ def build(md_path):
     print("wrote", out.name)
 
 if __name__ == "__main__":
-    names = sys.argv[1:] or ["SatComp", "SatXComp", "SatLim"]
+    names = sys.argv[1:] or ["SatComp", "SatXComp", "SatLim", "SatDiff"]
     for n in names:
         build(HERE / (n + ".md"))

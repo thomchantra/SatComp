@@ -516,7 +516,9 @@ fn four_band_tabs_and_the_third_crossover_line() {
 /// draws free, the symmetry tool folds a lopsided curve back onto its odd part, the cross closes the view.
 #[test]
 fn draw_view_has_a_symmetry_tool_and_a_free_tool() {
-    let mut r = Rig::new();
+    use nih_plug::prelude::{IntParam, IntRange};
+    // on the Custom shaper (the test host does not apply the draw view's own write, which would close the view again)
+    let mut r = Rig::with_params(|p| p.lo_shape = IntParam::new("Lo Shape", 14, IntRange::Linear { min: 0, max: 14 }));
     for _ in 0..4 {
         r.frame(vec![]);
     }
@@ -530,7 +532,7 @@ fn draw_view_has_a_symmetry_tool_and_a_free_tool() {
     let c = r.params.curve_snapshot(0);
     assert_eq!(c.n, 4, "a mirrored pair must appear: {:?}", c.pts());
     assert!(odd(&r) < 1e-6, "symmetry tool keeps the curve odd: {}", odd(&r));
-    r.click(114.0, 272.0); // pencil tool: free draw
+    r.click(86.0, 272.0); // pencil tool: free draw
     r.click(59.0, 331.0); // a lone point on the left half, at about (-0.25, -0.1)
     let n_free = r.params.curve_snapshot(0).n;
     assert_eq!(n_free, 5, "free draw adds a single point");
@@ -538,6 +540,16 @@ fn draw_view_has_a_symmetry_tool_and_a_free_tool() {
     r.click(100.0, 272.0); // symmetry tool: folds onto the odd part
     assert!(odd(&r) < 1e-6, "folded back onto its odd part: {}", odd(&r));
     let n_fold = r.params.curve_snapshot(0).n;
+    r.click(114.0, 272.0); // even tool: the drawn half is mirrored across the Y axis instead
+    let ev = |r: &Rig| {
+        let c = r.params.curve_snapshot(0);
+        (0..=10).map(|i| (c.eval(i as f64 * 0.1) - c.eval(-(i as f64) * 0.1)).abs()).fold(0.0, f64::max)
+    };
+    assert!(ev(&r) < 1e-6, "the even tool keeps the curve even: {}", ev(&r));
+    assert!(odd(&r) > 0.02, "and no longer odd: {}", odd(&r));
+    r.click(100.0, 272.0); // odd tool again
+    assert!(odd(&r) < 1e-6);
+    assert_eq!(r.params.curve_snapshot(0).n, n_fold);
     r.click(128.0, 272.0); // cross: closes the view
     r.click(99.0, 300.0);
     assert_eq!(r.params.curve_snapshot(0).n, n_fold, "a closed view must not edit the curve");

@@ -8,13 +8,24 @@
 use crate::canvas::Canvas;
 use nih_plug::prelude::{GuiContext, ParamPtr};
 
+/// Bipolar-log taper: `|v|` in 0..max -> 0..1, fine near zero (the knee sits at 1 % of max), coarse towards the ends.
+fn bipolar_fwd(a: f32, max: f32) -> f32 {
+    let c = max * 0.01;
+    (1.0 + a / c).ln() / (1.0 + max / c).ln()
+}
+
+fn bipolar_inv(u: f32, max: f32) -> f32 {
+    let c = max * 0.01;
+    c * ((u * (1.0 + max / c).ln()).exp() - 1.0)
+}
+
 /// Value range and drag behaviour of one parameter slot.
 #[derive(Clone, Copy, Default)]
 pub struct Meta {
     pub min: f32,
     pub max: f32,
     pub def: f32,
-    /// 0 linear, 1 log, 2 sqrt
+    /// 0 linear, 1 log, 2 sqrt, 3 bipolar log (symmetric around 0, the centre of travel; `min` = -`max`)
     pub mode: u8,
     /// bit 0: snap to min near the start of travel, bit 1: snap to max near the end
     pub snap: u8,
@@ -25,6 +36,11 @@ pub struct Meta {
 pub struct Kit {
     pub meta: Vec<Meta>,
     pub touched: Vec<bool>,
+    /// per slot: the value the editor last asked for and when (kit time); NaN = none. While it is fresh the editor shows it instead
+    /// of the parameter: a host applies a UI write only inside a later audio callback (nih-plug does not set the value locally
+    /// while audio runs), a delay of one or more host blocks, up to ~100 ms with PulseAudio, and a slider that only moves when the
+    /// host's answer arrives lags behind the mouse.
+    pub pend: Vec<(f32, f64)>,
     /// the widget being dragged: 1..99 = slot number (vertical drag), >= 100 = viewport drags owned by the page
     pub act: i32,
     pub act_t: f32,
@@ -47,11 +63,32 @@ pub struct Kit {
     pub dk: f32,
 }
 
+/// how long a written value is shown in place of the parameter (the host answers within a few blocks; this covers PulseAudio's
+/// 100 ms plus a slow frame, and is short enough that an automation move right after is not hidden for long)
+const PENDING_S: f64 = 0.6;
+
 impl Kit {
+    /// The value the editor wrote to slot `n` within the last `PENDING_S` seconds, if any.
+    pub fn pending(&self, n: usize) -> Option<f32> {
+        let (v, t) = *self.pend.get(n)?;
+        // (a clock that went backwards, the editor was reopened, counts as expired)
+        if v.is_finite() && self.now >= t && self.now - t < PENDING_S {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Whether any slot has a fresh written value (the viewports then take their snapshot from a parameter set that includes it).
+    pub fn any_pending(&self) -> bool {
+        (0..self.pend.len()).any(|n| self.pending(n).is_some())
+    }
+
     pub fn new(slots: usize) -> Self {
         Self {
             meta: vec![Meta::default(); slots],
             touched: vec![false; slots],
+            pend: vec![(f32::NAN, 0.0); slots],
             act: 0,
             act_t: 0.0,
             last_my: 0.0,
@@ -117,6 +154,9 @@ pub trait Widgets<'c> {
 
     // ------------------------------------------------------------------ params (slot-number addressing)
     fn sget(&self, n: usize) -> f32 {
+        if let Some(v) = self.kit_ref().pending(n) {
+            return v;
+        }
         match self.param_ptr(n) {
             Some(p) => {
                 let m = self.kit_ref().meta[n];
@@ -134,6 +174,8 @@ pub trait Widgets<'c> {
             let m = self.kit().meta[n];
             let norm = ((v - m.min) / (m.max - m.min)).clamp(0.0, 1.0);
             let first = !self.kit().touched[n];
+            let now = self.kit().now;
+            self.kit().pend[n] = (v.clamp(m.min, m.max), now);
             unsafe {
                 if first {
                     self.host().raw_begin_set_parameter(p);
@@ -178,6 +220,7 @@ pub trait Widgets<'c> {
         let t = match m.mode {
             1 => (v.max(m.min) / m.min).ln() / (m.max / m.min).ln(),
             2 => ((v - m.min).max(0.0) / (m.max - m.min)).sqrt(),
+            3 => 0.5 + 0.5 * v.signum() * bipolar_fwd(v.abs(), m.max),
             _ => (v - m.min) / (m.max - m.min),
         };
         t.clamp(0.0, 1.0)
@@ -194,6 +237,11 @@ pub trait Widgets<'c> {
         let mut v = match m.mode {
             1 => m.min * (t * (m.max / m.min).ln()).exp(),
             2 => m.min + (m.max - m.min) * t * t,
+            // a small dead zone at the centre of travel lands exactly on 0
+            3 => {
+                let u = (t - 0.5) * 2.0;
+                if u.abs() < 0.01 { 0.0 } else { u.signum() * bipolar_inv(u.abs(), m.max) }
+            }
             _ => m.min + (m.max - m.min) * t,
         };
         if m.step > 0.0 {
@@ -398,10 +446,14 @@ pub trait Widgets<'c> {
     fn btn(&mut self, x: f32, y: f32, w: f32, h: f32, s: &str, lit: u8) -> bool {
         let hv = self.hit(x, y, w, h);
         let clicked = hv && self.kit().press && self.kit().act == 0;
-        if lit > 0 {
+        // hovering fills the button (a lit one gets an inner outline instead, so it still reads as on)
+        if lit > 0 || hv {
             self.setc(lit > 1);
             self.cv().fill(x, y, w, h);
             self.cv().setbg();
+            if lit > 0 && hv {
+                self.cv().boxr(x + 1.0, y + 1.0, w - 2.0, h - 2.0);
+            }
         } else {
             self.setc(false);
             self.cv().boxr(x, y, w, h);
@@ -411,6 +463,16 @@ pub trait Widgets<'c> {
         cv.textc(x, y + ((h - 8.0) * 0.5).floor(), w, s);
         self.setc(false);
         clicked
+    }
+
+    /// Colour for what is drawn over a `btn` rectangle by hand (an icon on an empty-labelled button): the background colour
+    /// while the pointer fills it, else the UI colour.
+    fn over_btn(&mut self, x: f32, y: f32, w: f32, h: f32, lit: bool) {
+        if lit || self.hit(x, y, w, h) {
+            self.cv().setbg();
+        } else {
+            self.setc(false);
+        }
     }
 
     /// 12x12 close cross (draw view corner); bright on hover.
@@ -433,6 +495,22 @@ pub trait Widgets<'c> {
             self.cv().line(x + w[0].0, y + w[0].1, x + w[1].0, y + w[1].1);
         }
         self.cv().fill(x + 5.0, y + 5.0, 2.0, 2.0);
+        self.set_dk(prev);
+        self.setc(false);
+    }
+
+    /// 12x12 even glyph: a U-shaped curve with a dashed centre line (the curve is mirrored across the Y axis).
+    fn even_glyph(&mut self, x: f32, y: f32, on: bool, hover: bool) {
+        let prev = self.kit().dk;
+        self.set_dk(prev * if on || hover { 1.0 } else { 0.6 });
+        self.setc(on);
+        let pts = [(0.0, 1.0), (2.0, 6.0), (4.0, 9.0), (6.0, 10.0), (8.0, 9.0), (10.0, 6.0), (12.0, 1.0)];
+        for w in pts.windows(2) {
+            self.cv().line(x + w[0].0, y + w[0].1, x + w[1].0, y + w[1].1);
+        }
+        for k in [0.0, 4.0, 8.0] {
+            self.cv().fill(x + 6.0, y + k, 1.0, 2.0);
+        }
         self.set_dk(prev);
         self.setc(false);
     }
@@ -468,3 +546,30 @@ pub trait Widgets<'c> {
         }
     }
 }
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    #[test]
+    fn a_written_value_is_shown_until_it_expires_and_a_new_clock_expires_it() {
+        let mut k = Kit::new(4);
+        k.now = 10.0;
+        assert_eq!(k.pending(1), None);
+        k.pend[1] = (3.5, 10.0);
+        assert_eq!(k.pending(1), Some(3.5));
+        k.now = 10.5;
+        assert_eq!(k.pending(1), Some(3.5), "still fresh");
+        k.now = 10.7;
+        assert_eq!(k.pending(1), None, "expired: the parameter shows again");
+        // a restarted egui clock must not keep it alive
+        k.now = 2.0;
+        assert_eq!(k.pending(1), None);
+        assert_eq!(k.pending(99), None, "unknown slot");
+        // a fresh write after the first
+        k.pend[1] = (4.0, 2.0);
+        k.now = 2.1;
+        assert_eq!(k.pending(1), Some(4.0));
+    }
+}
+

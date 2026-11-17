@@ -106,6 +106,9 @@ pub struct XEngine {
     pub tap_dry: Arc<TapRing>,
     pub tap_on: bool,
     pub scope: Arc<ScopeRing>,
+    /// animation values per 2 ms bucket for the editor (see `MeterRing`): 0..NB-1 each band's saturator input peak, NB the gain
+    /// difference in dB (output stage vs input, smoothed)
+    pub meter: Arc<satcomp_dsp::MeterRing>,
     sc_o: f64,
     sc_p: f64,
     sc_n: u32,
@@ -193,6 +196,7 @@ impl XEngine {
             tap_dry: Arc::new(TapRing::new()),
             tap_on: false,
             scope: Arc::new(ScopeRing::new()),
+            meter: Arc::new(satcomp_dsp::MeterRing::new()),
             sc_o: 0.0,
             sc_p: 0.0,
             sc_n: 0,
@@ -524,6 +528,13 @@ impl XEngine {
         self.sc_n += 1;
         if self.sc_n >= self.sc_len {
             self.scope.push(self.sc_o as f32, self.sc_p as f32);
+            let mut m = [0.0f32; satcomp_dsp::MeterRing::CH];
+            for b in 0..NB {
+                m[b] = self.strips[b].sat.bk as f32;
+                self.strips[b].sat.bk = 0.0;
+            }
+            m[NB] = (DB_POW * (self.pms.max(1e-12) / self.ims.max(1e-12)).ln()) as f32;
+            self.meter.push(m);
             self.sc_o = 0.0;
             self.sc_p = 0.0;
             self.sc_n = 0;
@@ -1036,5 +1047,23 @@ mod tests {
         let y = &y[48000..];
         let (f1, h5, h7) = (bin(y, 50.0), bin(y, 250.0), bin(y, 350.0));
         assert!(h5 < f1 * 0.035 && h7 < f1 * 0.01, "fund {f1} h5 {h5} h7 {h7}");
+    }
+
+    #[test]
+    fn meter_buckets_carry_each_bands_saturator_peak_and_the_difference() {
+        let tone: Vec<f64> = (0..24000).map(|i| 0.4 * (2.0 * PI * 50.0 * i as f64 / SR).sin()).collect();
+        let mut e = XEngine::new(SR);
+        let mut p = XParams::default();
+        for b in p.bands.iter_mut() {
+            b.drive = 25.0;
+        }
+        e.set_params(&p);
+        run(&mut e, &tone);
+        let n = e.meter.head();
+        assert!(n > 200, "{n} buckets");
+        let peak = |c: usize| (n - 100..n).map(|i| e.meter.get(i)[c]).fold(0.0f32, f32::max);
+        assert!((peak(0) - 0.4).abs() < 0.08, "low band: {}", peak(0));
+        assert!(peak(1) < 0.02 && peak(2) < 0.02 && peak(3) < 0.02, "other bands quiet");
+        assert!(e.meter.get(n - 1)[NB].is_finite());
     }
 }

@@ -199,10 +199,15 @@ pub struct State {
     curve_edit: bool,
     /// draw view tool: true = symmetry (odd: the right half is drawn, the left follows as f(-x) = -f(x)), false = free draw
     sym_mode: bool,
+    /// with symmetry: true = even (Y mirror, `f(-x) = f(x)`), false = odd (point mirror)
+    even: bool,
     /// waveform scope settings, packed (see scope.rs); view-drag anchor (mx, my, window step, ceiling step)
     scope_cfg: i32,
     /// steady scope scrolling: eased read position (bucket index) and the time of the last frame
-    scope_pos: f64,
+    scope_clk: satcomp_ui::scroll::ScrollClock,
+    /// animation values from the audio thread, replayed in audio time (see satcomp-ui/src/meter.rs)
+    meter: satcomp_ui::meter::MeterReader,
+    meter_t: f64,
     scope_t: f64,
     scope_drag: (f32, f32, usize, usize),
     /// ASYM drag anchor: (mouse y, value 0..1) at the press
@@ -359,8 +364,11 @@ impl State {
             eq_sel: 0,
             curve_edit: false,
             sym_mode: true,
+            even: false,
             scope_cfg: params.scope.load(Ordering::Relaxed),
-            scope_pos: 0.0,
+            scope_clk: Default::default(),
+            meter: satcomp_ui::meter::MeterReader::new(vec![satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::Peak(0.15), satcomp_ui::meter::Kind::State]),
+            meter_t: 0.0,
             scope_t: 0.0,
             scope_drag: (0.0, 0.0, 0, 0),
             asym_drag: (0.0, 0.0),
@@ -423,6 +431,7 @@ impl State {
             // the egui clock restarts when the editor window is reopened: re-base every stored timestamp
             self.rd_last = now;
             self.scope_t = now;
+            self.meter_t = now;
             self.hl_l_t = now;
             self.hl_r_t = now;
             self.gr_hold_t = [now; NB];
@@ -480,6 +489,9 @@ impl State {
         }
         d.tap_out.w.store(satcomp_dsp::TapRing::LEN * 3, Relaxed);
         d.tap_dry.w.store(satcomp_dsp::TapRing::LEN * 3, Relaxed);
+        for _ in 0..16 {
+            d.meter.push([0.3, 0.3, 0.3, 0.3, 2.0, 0.0]);
+        }
     }
 }
 
@@ -555,7 +567,9 @@ const ABOUT_TEXT: &[&[&str]] = &[
 ];
 
 /// Changelog, newest first. Keep each entry to two short sentences or fewer.
-const CHANGELOG: &[(&str, &[&str])] = &[("v0.1", &[
+const CHANGELOG: &[(&str, &[&str])] = &[
+    ("v0.1.1", &["The draw view takes 20 points (was 10) and gets an EVEN tool next to ODD: it mirrors the drawn half across the Y axis.", "Buttons and switches light up under the pointer, and the header has a redrawn icon with the version next to the name.", "CPU use at the default settings is about a third of before: faster oversampling filters in every band's saturator."]),
+    ("v0.1", &[
     "First release: four bands (LO, ML, MH, HI) with three crossovers (12, 24, 48 or 96 dB), a waveshaper and compressor per band, sidechain with solo, a 5-band post EQ and presets.",
     "Compressor mode per band: DWNWARD, UPWARD (lifts what is below the threshold, up to RANGE) or UP/DWN (both). The band handles show the lift as a bar above and the reduction below.",
     "Saturator per band: DRIVE, BIAS and ASYM, HP and LP, SAT GAIN with auto-match, custom curves with a symmetry tool, and a post-saturator level meter.",
@@ -1043,7 +1057,7 @@ impl<'a> Gui<'a> {
         if self.btn(152.0, y, 26.0, h, "", 0) {
             self.pending = 2;
         }
-        self.setc(false);
+        self.over_btn(152.0, y, 26.0, h, false);
         self.cv.boxr(160.0, y + 3.0, 10.0, 10.0);
         self.cv.fill(163.0, y + 3.0, 4.0, 3.0);
         self.cv.boxr(162.0, y + 8.0, 6.0, 5.0);
@@ -1074,7 +1088,7 @@ impl<'a> Gui<'a> {
             if self.btn(x, y, 25.0, h, "", 0) {
                 self.step_preset(dir);
             }
-            self.setc(false);
+            self.over_btn(x, y, 25.0, h, false);
             let (cx, cy) = (x + 12.5, y + h * 0.5);
             if dir < 0 {
                 self.cv.tri((cx + 2.0, cy - 3.0), (cx + 2.0, cy + 3.0), (cx - 2.0, cy));
@@ -1107,7 +1121,7 @@ impl<'a> Gui<'a> {
     // ------------------------------------------------------------------ header
     /// plug-in icon: click = next colour scheme, double click = light / dark, right click = scheme dropdown
     fn logo(&mut self, x: f32, y: f32) {
-        let hv = self.hit(x - 3.0, y - 3.0, 27.0, 27.0);
+        let hv = self.hit(x, y, 20.0, 20.0);
         if hv && self.kit.press && self.kit.act == 0 {
             // single click = next scheme (after the double-click window), double click = light/dark
             if self.logo_pend >= 0.0 && self.kit.now - self.logo_pend < 0.3 {
@@ -1133,23 +1147,14 @@ impl<'a> Gui<'a> {
         self.setc(false);
         // hovering inverts the icon (a plate in the UI colour, or back to the outline in light mode): it is clickable
         if self.light != hv {
-            self.cv.fill(x - 3.0, y - 3.0, 27.0, 27.0);
+            self.cv.fill(x, y, 20.0, 20.0);
             self.cv.setbg();
         } else {
-            self.cv.boxr(x - 3.0, y - 3.0, 27.0, 27.0);
+            self.cv.boxr(x, y, 20.0, 20.0);
             self.setc(false);
         }
-        self.cv.boxr(x + 6.0, y + 6.0, 9.0, 9.0);
-        let l = |c: &Canvas, a: f32, b: f32, cc: f32, d: f32| c.line(x + a, y + b, x + cc, y + d);
-        l(&self.cv, 12.5, 0.5, 20.5, 0.5);
-        l(&self.cv, 20.5, 0.5, 20.5, 7.5);
-        l(&self.cv, 8.5, 20.5, 0.5, 20.5);
-        l(&self.cv, 0.5, 20.5, 0.5, 13.5);
-        l(&self.cv, 6.5, 14.5, 0.5, 20.5);
-        l(&self.cv, 14.5, 6.5, 20.5, 0.5);
-        // second diagonal: the X of SatXComp
-        l(&self.cv, 6.5, 6.5, 0.5, 0.5);
-        l(&self.cv, 14.5, 14.5, 20.5, 20.5);
+        self.cv.logo_art(1, x, y);
+        self.setc(false);
     }
 
     fn out_meter(&mut self, x: f32, y: f32, w: f32, h: f32) {
@@ -1392,7 +1397,7 @@ impl<'a> Gui<'a> {
         let s = format!("{:+.1}dB", self.rd_diff);
         self.cv.textc(x, y + (h * 0.4 + 1.0).floor(), w, &s);
         let cx = x + (w * 0.5).floor();
-        let d = self.env.shared.diff_disp.load(Ordering::Relaxed).clamp(-12.0, 12.0) / 12.0;
+        let d = self.mval(NB).clamp(-12.0, 12.0) / 12.0;
         let bw = (d.abs() * (w * 0.5 - 3.0)).floor();
         if d >= 0.0 {
             self.cv.fill(cx, y + h - 4.0, bw, 2.0);
@@ -1728,7 +1733,7 @@ impl<'a> Gui<'a> {
         let mut b_out = [0.0f32; NB];
         for b in 0..NB {
             let on = self.sget(band_base(b) + ON) > 0.5;
-            b_in[b] = lvf(sh.sat_vz[b].load(Ordering::Relaxed));
+            b_in[b] = lvf(self.mval(b));
             b_out[b] = if on { (lvf(self.vu[b]) - self.gr_disp[b] / 48.0).max(0.0) } else { b_in[b] };
         }
         let inl = b_in.iter().cloned().fold(0.0, f32::max);
@@ -2018,6 +2023,7 @@ impl<'a> Gui<'a> {
                 self.click_set(o + SHAPE, CUSTOM as f32);
                 // symmetry is the default tool, unless the stored curve is lopsided: opening must not alter it
                 self.sym_mode = self.env.params.curve_snapshot(b).is_odd();
+                self.even = false;
             }
             self.kit.press = false;
         }
@@ -2060,7 +2066,7 @@ impl<'a> Gui<'a> {
             self.draw_curve_edit(x, y, w, h);
             return;
         }
-        let pk = sh.sat_vz[b].load(Ordering::Relaxed).min(1.0);
+        let pk = self.mval(b).min(1.0);
         let n = 64;
         let (mut lx, mut ly) = (0.0, 0.0);
         for i in 0..=n {
@@ -2115,21 +2121,34 @@ impl<'a> Gui<'a> {
         let b = self.sel();
         let mut c = self.env.params.curve_snapshot(b);
         let before = c;
-        // tool icons left of the close cross: free draw (pencil), symmetry
-        let (pen_x, sym_x) = (x + w - 28.0, x + w - 42.0);
-        let (hp, hs) = (self.hit(pen_x, y + 2.0, 12.0, 12.0), self.hit(sym_x, y + 2.0, 12.0, 12.0));
+        // tool icons left of the close cross: free draw (pencil), odd (point mirror), even (Y mirror)
+        let (pen_x, sym_x, ev_x) = (x + w - 56.0, x + w - 42.0, x + w - 28.0);
+        let (hp, hs, he) = (self.hit(pen_x, y + 2.0, 12.0, 12.0), self.hit(sym_x, y + 2.0, 12.0, 12.0), self.hit(ev_x, y + 2.0, 12.0, 12.0));
         if self.kit.press && self.kit.act == 0 {
+            // the right half as drawn (x > 0): switching between the two mirrors reinterprets it
+            let half: Vec<(f32, f32)> = {
+                let h: Vec<(f32, f32)> = c.pts().iter().cloned().filter(|p| p.0 > 0.0).collect();
+                if h.is_empty() { vec![(1.0, 1.0)] } else { h }
+            };
             if hp && self.sym_mode {
                 self.sym_mode = false;
                 self.kit.press = false;
-            } else if hs && !self.sym_mode {
-                // free -> symmetric keeps the odd part of the curve (what a symmetric curve can hold)
-                c = Curve::from_odd_half(&c.odd_half());
+            } else if hs && (!self.sym_mode || self.even) {
+                // free -> odd keeps the odd part of the curve (what an odd curve can hold); even -> odd keeps the drawn half
+                c = Curve::from_odd_half(&if self.sym_mode { half } else { c.odd_half() });
                 self.sym_mode = true;
+                self.even = false;
+                self.kit.press = false;
+            } else if he && (!self.sym_mode || !self.even) {
+                c = Curve::from_even_half(&if self.sym_mode { half } else { c.even_half() });
+                self.sym_mode = true;
+                self.even = true;
                 self.kit.press = false;
             }
         }
         let sym = self.sym_mode;
+        // y of the mirror image: odd = point reflection (-y), even = Y mirror (+y)
+        let m: f32 = if self.even { 1.0 } else { -1.0 };
         // domain [-1,1]^2 is inset so end points and the icons never collide (symmetric margins keep the centre cross true)
         let (ex, ey, ew, eh) = (x + 9.0, y + 14.0, w - 18.0, h - 28.0);
         let (px, py) = (|vx: f32| ex + (vx + 1.0) * 0.5 * (ew - 1.0), |vy: f32| ey + (1.0 - (vy + 1.0) * 0.5) * (eh - 1.0));
@@ -2148,7 +2167,7 @@ impl<'a> Gui<'a> {
             for (i, &(vx, vy)) in hv.iter().enumerate() {
                 let mut d = ((s.kit.mx - px(vx)).powi(2) + (s.kit.my - py(vy)).powi(2)).sqrt();
                 if sym {
-                    d = d.min(((s.kit.mx - px(-vx)).powi(2) + (s.kit.my - py(-vy)).powi(2)).sqrt());
+                    d = d.min(((s.kit.mx - px(-vx)).powi(2) + (s.kit.my - py(m * vy)).powi(2)).sqrt());
                 }
                 if d <= 6.0 && best.map_or(true, |b| d < b.1) {
                     best = Some((i, d));
@@ -2156,7 +2175,7 @@ impl<'a> Gui<'a> {
             }
             best.map(|b| b.0)
         };
-        let in_box = self.hit(x, y, w, h) && !self.hit(sym_x, y + 2.0, 56.0, 12.0);
+        let in_box = self.hit(x, y, w, h) && !self.hit(pen_x, y + 2.0, 56.0, 12.0);
         if in_box && self.kit.press && self.kit.act == 0 {
             let n = hv.len();
             if let Some(i) = pick(self, &hv) {
@@ -2171,7 +2190,7 @@ impl<'a> Gui<'a> {
                 let (mut vx, mut vy) = to_v(self.kit.mx, self.kit.my);
                 if sym && vx < 0.0 {
                     vx = -vx;
-                    vy = -vy;
+                    vy *= m;
                 }
                 let at = if sym { hv.iter().position(|p| p.0 > vx) } else { (1..n).find(|&k| hv[k].0 > vx) }.unwrap_or(n - 1);
                 let room = vx - xlo(&hv, at) >= MIN_GAP && hv[at].0 - vx >= MIN_GAP;
@@ -2191,7 +2210,7 @@ impl<'a> Gui<'a> {
                 // dragging the ghost half moves the real point the other way round
                 if vx < 0.0 {
                     vx = -vx;
-                    vy = -vy;
+                    vy *= m;
                 }
             }
             let n = hv.len();
@@ -2200,7 +2219,7 @@ impl<'a> Gui<'a> {
             }
             hv[i].1 = vy.clamp(-1.0, 1.0);
         }
-        c = if sym { Curve::from_odd_half(&hv) } else { Curve::from_points(&hv) };
+        c = if !sym { Curve::from_points(&hv) } else if self.even { Curve::from_even_half(&hv) } else { Curve::from_odd_half(&hv) };
         if c != before {
             let cell = self.curve_cell(b);
             *cell.lock() = c.pts().to_vec();
@@ -2240,7 +2259,7 @@ impl<'a> Gui<'a> {
             }
             if sym {
                 // the mirrored partner: a dim outline you can grab just the same
-                let (gx, gy) = (px(-vx).round(), py(-vy).round());
+                let (gx, gy) = (px(-vx).round(), py(m * vy).round());
                 let pd = self.kit.dk;
                 self.set_dk(pd * 0.6);
                 self.cv.boxr(gx - 2.0, gy - 2.0, 5.0, 5.0);
@@ -2250,9 +2269,11 @@ impl<'a> Gui<'a> {
         self.setc(false);
         // tools: pencil (free draw), symmetry
         self.pencil_glyph(pen_x, y + 2.0, !sym, hp);
-        self.sym_glyph(sym_x, y + 2.0, sym, hs);
+        self.sym_glyph(sym_x, y + 2.0, sym && !self.even, hs);
+        self.even_glyph(ev_x, y + 2.0, sym && self.even, he);
         self.cv.set_font(1);
-        self.cv.text(x + 3.0, y + 3.0, "DRAW");
+        let tool = if !sym { "FREE" } else if self.even { "EVEN" } else { "ODD" };
+        self.cv.text(x + 3.0, y + 3.0, &format!("DRAW {tool}"));
         self.cv.textr(x, y + h - 11.0, w - 3.0, &format!("{}/{} PTS", c.n, MAX_PTS));
     }
 
@@ -2356,7 +2377,8 @@ impl<'a> Gui<'a> {
                 self.select_band(b);
             }
             // two-letter label left (after the on / off square), frequency range right, no unit
-            if b == sel {
+            let hot = b == sel || self.hit(x, y, tw, 16.0); // the selected band, or the pointer filling it
+            if hot {
                 self.cv.setbg();
             } else {
                 self.setc(false);
@@ -2365,7 +2387,7 @@ impl<'a> Gui<'a> {
             self.cv.text(x + 20.0, y + 4.0, BAND_LETTERS[b]);
             self.cv.textr(x, y + 4.0, tw - 5.0, &format!("{}-{}", short(ranges[b].0), short(ranges[b].1)));
             self.setc(false);
-            self.sqind(x + 7.0, y + 4.0, 8.0, on, b == sel, !on);
+            self.sqind(x + 7.0, y + 4.0, 8.0, on, hot, !on);
         }
         let base = band_base(sel);
         let (d, s) = (self.sget(base + DELTA) > 0.5, self.sget(base + SOLO) > 0.5);
@@ -2793,6 +2815,7 @@ impl<'a> Gui<'a> {
 
     // ------------------------------------------------------------------ frame
     pub fn frame(&mut self) {
+        self.meter_tick();
         let sh = self.env.shared;
         #[cfg(test)]
         {
@@ -2830,7 +2853,7 @@ impl<'a> Gui<'a> {
             self.curve_edit = false;
             self.menu = None;
         }
-        self.env.dsp = self.env.params.to_dsp();
+        self.env.dsp = self.s.live_dsp(self.env.params);
         self.update_gr();
         self.menu_frame();
 
@@ -2873,22 +2896,19 @@ impl<'a> Gui<'a> {
 
         // ---------- header: logo, title, preset bar, sidechain (not wired yet), EQ page toggle, output meter
         self.set_dk(1.0);
-        self.logo(13.0, 5.0);
+        self.logo(10.0, 6.0);
         self.setc(false);
-        self.cv.set_font(2);
-        let title = format!("SATXCOMP {}", version_short());
-        let tw = self.cv.text_w(&title);
-        if self.hit(42.0, 5.0, tw + 4.0, 21.0) && self.kit.press && self.kit.act == 0 {
-            self.app.about = if self.app.about == 0 { 1 } else { 0 };
-            self.app.about_scroll = 0;
+        // title: the name large with the version dimmed on its baseline, both centred on the icon (see Canvas::header_title)
+        let ver = version_short();
+        let tw = self.cv.header_title_w("SATXCOMP", &ver, 114.0);
+        let over = self.hit(31.0, 6.0, tw + 6.0, 20.0);
+        if over && self.kit.press && self.kit.act == 0 {
+            let pal = self.pal;
+            self.app.toggle_about(pal); // reopens on the tab it was left on
             self.kit.press = false;
         }
-        // hovering highlights the title (a UI-coloured rectangle behind it, the text in the background colour): it opens About
-        if self.hit(42.0, 5.0, tw + 4.0, 21.0) {
-            self.cv.fill(42.0, 8.0, tw + 4.0, 15.0);
-            self.cv.setbg();
-        }
-        self.cv.text(44.0, 12.0, &title);
+        // hovering highlights the lockup (a UI-coloured plate behind it, the text in the background colour): it opens About
+        self.cv.header_title(34.0, 16.0, 20.0, "SATXCOMP", &ver, 114.0, over);
         self.setc(false);
         self.preset_bar();
         // sidechain key: white = on and the host gave a bus, red = on but no bus
@@ -2908,9 +2928,10 @@ impl<'a> Gui<'a> {
             if self.btn(478.0, 8.0, 46.0, 16.0, "", self.eq_page as u8) {
                 self.eq_page = !self.eq_page;
             }
-            self.sqind(486.0, 12.0, 8.0, eq_any, self.eq_page, eq_byp);
+            let hot = self.eq_page || self.hit(478.0, 8.0, 46.0, 16.0);
+            self.sqind(486.0, 12.0, 8.0, eq_any, hot, eq_byp);
             // label drawn by hand so it keeps a clear gap from the square
-            if self.eq_page {
+            if hot {
                 self.cv.setbg();
             } else {
                 self.setc(false);
@@ -3027,6 +3048,34 @@ impl<'a> Gui<'a> {
                 self.unmask_in();
                 self.theme_osk(over);
             }
+        }
+    }
+}
+
+impl<'a> Gui<'a> {
+    /// Replay the audio thread's animation buckets up to the constant-rate clock: call once per frame, before anything reads a value.
+    fn meter_tick(&mut self) {
+        let ring = self.env.shared.meter.clone();
+        let dt = (self.now - self.meter_t).clamp(0.0, 0.25);
+        self.meter_t = self.now;
+        self.meter.update(ring.head(), dt, 1.0 / satcomp_dsp::ScopeRing::BUCKET_S, |i, c| ring.get(i)[c]);
+    }
+
+    /// Animation value `c` (see the plug-in's `meter` channels), continuous in audio time.
+    fn mval(&self, c: usize) -> f32 {
+        self.meter.value(c)
+    }
+}
+
+impl State {
+    /// The parameter snapshot the viewports are drawn from. The host applies a write of the editor only inside a later audio
+    /// callback, so while the editor has a fresh write pending (see the kit) the snapshot is taken from a parameter set that
+    /// already includes it: the waveshaper plot, EQ and crossover follow the mouse instead of trailing it.
+    pub fn live_dsp(&self, pr: &SatXCompParams) -> satxcomp_dsp::XParams {
+        if self.any_pending() {
+            pr.to_dsp_over(&|n| self.pending(n))
+        } else {
+            pr.to_dsp()
         }
     }
 }

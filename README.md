@@ -1,12 +1,13 @@
 # SatComp
 
-Three saturator-based dynamics plug-ins in one black-and-white (or any colour you like) monospace UI. Made with bricking intentions.
+A waveshaping-saturator-infused plug-ins suite: a compressor, a 4-band compressor, a clipper / limiter and a phase diffusor. Made with bricking intentions.
 
 | Plug-in | Version | What |
 |---|---|---|
-| [**SatComp**](#satcomp) | 0.5.2 | waveshaping saturator, compressor and a 2-stage 3-band EQ |
-| [**SatXComp**](#satxcomp) | 0.1.0 | 4-band multiband compressor with a saturator per band and a 5-band EQ |
-| [**SatLim**](#satlim) | 0.1.0 | saturator into an oversampled clipper and a true-peak brickwall limiter |
+| [**SatComp**](#satcomp) | 0.5.3 | waveshaping saturator, compressor and a 2-stage 3-band EQ |
+| [**SatXComp**](#satxcomp) | 0.1.1 | 4-band multiband compressor with a saturator per band and a 5-band EQ |
+| [**SatLim**](#satlim) | 0.1.1 | saturator into an oversampled clipper and a true-peak brickwall limiter |
+| [**SatDiff**](#satdiff) | 0.1.0 | A/B waveshaper saturator with morph, a phase rotator and colour effects |
 
 VST3 and CLAP for macOS (Apple silicon and Intel), Windows and Linux (experimental: see Install). Free, GPL-3.0-or-later.
 
@@ -14,7 +15,7 @@ VST3 and CLAP for macOS (Apple silicon and Intel), Windows and Linux (experiment
 
 A waveshaping saturator with a compressor and a 2-stage 3-band EQ. Give the compressor more spice to squash.
 
-![SatComp](docs/screenshot.png)
+![SatComp](docs/screenshots/satcomp.png)
 
 - **Saturator:** 15 shapers including a **Custom** one you draw yourself (pencil icon), drive, bias, ASYM (how much of the even-order part each shaper keeps, so lopsided curves do not drag DC into the signal), HP/LP split, tone, sat mix, SAT GAIN with auto-match, 1x/2x/4x oversampling.
 - **Sidechain:** external key from a second stereo input, with gain, HP and LP on the key and a SOLO to listen to it.
@@ -23,16 +24,17 @@ A waveshaping saturator with a compressor and a 2-stage 3-band EQ. Give the comp
 - **Output limiter:** a true-peak brickwall at -0.2 dBTP, on by default (LIM), with about 2 ms of latency that is always reported to the host.
 - **Metering and tools:** output meter, gain-reduction meter, post-saturator level meter, GAIN MATCH, DELTA monitor, plain BYPASS.
 - **Waveform scope:** click the icon in the corner of the compressor plot for a half or full wave view of the output with the gain reduction stacked on top (transient meter).
+- **Compressor plot:** the CEIL and FLOOR labels rescale it (up to +18 dB, so a clipped signal shows past a dashed 0 dB line), and the curve itself is draggable: the line above the threshold sets the ratio, the line below it the threshold.
 - **Presets:** save and load your own, step through them, six Drums factory presets included. A name wrapped in asterisks (`*NAME*`) means the preset has been modified.
 
 ## SatXComp
 
 A 4-band compressor with a waveshaping saturator on every band and a 5-band EQ. For surgical baking: split the signal, then drive each band to taste.
 
-![SatXComp](docs/screenshot-satxcomp.png)
+![SatXComp](docs/screenshots/satxcomp.png)
 
 - **Four bands** (LO, ML, MH, HI) split by three Linkwitz-Riley crossovers, each with a 12, 24, 48 or 96 dB slope. Drag the crossover lines in the spectrum or use the XOV sliders. The bands sum flat.
-- **Per band:** a saturator (same 15 shapers, custom curves with a symmetry tool, band-limited so it only adds harmonics inside the band), a compressor, SOLO and DELTA, and its own SAT GAIN auto-match.
+- **Per band:** a saturator (same 15 shapers, custom curves with ODD and EVEN mirror tools, band-limited so it only adds harmonics inside the band), a compressor, SOLO and DELTA, and its own SAT GAIN auto-match.
 - **Compressor modes per band:** DWNWARD (the plain compressor), UPWARD (lifts what is below the threshold, up to RANGE) or UP/DWN (both).
 - **Sidechain:** the external key is split across the bands, so it ducks like a dynamic EQ; KEY MIX blends it with the band's own level.
 - **Spectrum viewport:** the output over the dry signal. The accent colour shows where the compressor took gain away, its inverse where gain was added. Each band handle sits at the threshold with a bar for the gain reduction below it, the gain increase above it, and the in/out difference on top.
@@ -43,7 +45,7 @@ A 4-band compressor with a waveshaping saturator on every band and a 5-band EQ. 
 
 A 2-stage clipper/limiter with a waveshaping saturator. When you need to nuke it from orbit.
 
-![SatLim](docs/screenshot-satlim.png)
+<img src="docs/screenshots/satlim.png" alt="SatLim" width="420">
 
 - **Chain:** saturator (x1 to x8 oversampling) into a hard **CLIP** at the ceiling, then a true-peak brickwall limiter, then OUT GAIN. The output gain is after the limiter on purpose.
 - **THRESHOLD** is the input level that lands on the ceiling: lowering it chews the signal deeper. **CLIP** exposes and bricks more transients, **RELEASE** trades density against distortion.
@@ -51,13 +53,24 @@ A 2-stage clipper/limiter with a waveshaping saturator. When you need to nuke it
 - **Transient scope** shows the output with what the limiter removed (solid) and what the clipper removed (hatched) stacked on top; the GR meter splits the same way.
 - Auto-matched SAT GAIN, DELTA (what the clipper and limiter removed), plain BYPASS and six factory presets.
 
+## SatDiff
+
+A waveshaper saturator with phase colouring effects. Dedicated to sweet saturated sounds.
+
+<img src="docs/screenshots/satdiff.png" alt="SatDiff" width="340">
+
+- **Two saturators, A and B:** each scene has its own shaper, drawable curve (up to 30 points with bendable segments), tile, drive, bias, HPF / LPF, tone and ASYM. **MORPH** blends them: a static crossfade, or a compressor-style detector that moves the blend with the input level (shape A on silence, shape B on loud peaks).
+- **TILE** folds or repeats the curve so BIAS walks through copies of it.
+- **PHASE** rotator and a colour slot, before or after the saturators: diffusor, phaser, flanger, ring mod or frequency shifter, with COLOR MIX.
+- **Output:** a 24 dB per octave HPF with mid / side switches (side only is a mono sub), IN and OUT gain, a true-peak limiter, level-match on the SAT readout, plain BYPASS and eight factory presets.
+
 ## Shared
 
-- **27 colour schemes, each with a light mode, plus your own:** click the logo for the next scheme, double-click it for light/dark, right-click for the list. The **Preferences** tab (About page) has the mode switch, a scheme list with swatches, 11 fonts, a custom theme editor with a colour picker, and SET AS DEFAULT for new instances. User themes are saved in `~/Library/Application Support/SatComp/themes.json` (`%APPDATA%\SatComp\themes.json` on Windows).
+- **30 colour schemes, each with a light mode, plus your own:** click the logo for the next scheme, double-click it for light/dark, right-click for the list. The **Preferences** tab (About page) has the mode switch, a scheme list with swatches, 11 fonts, a custom theme editor with a colour picker, and SET AS DEFAULT for new instances. User themes are saved in `~/Library/Application Support/SatComp/themes.json` (`%APPDATA%\SatComp\themes.json` on Windows).
 - Resizable window (100% to 250%). Double-click any slider to reset it. Click the title for an About page with the signal flow, Preferences and the changelog.
 
 ## Install
-Download the zip for your plug-in and system from the [Releases](../../releases) page. Inside are `VST3/` and `CLAP/` folders that mirror the install locations, an `INSTALL.txt` and the plug-in's manual (PDF; the manuals are also in `docs/manual/`). Copy the bundle (`satcomp`, `satxcomp` or `satlim`) to:
+Download from the [Releases](../../releases) page: `SatComp-Suite-<version>-<platform>.zip` holds all four plug-ins and a joint manual (macOS also has a `.pkg` installer that puts them in place for all users; the joint manual is also attached on its own). Inside are `VST3/` and `CLAP/` folders that mirror the install locations, an `INSTALL.txt` and the manual (PDF; the per-plug-in manuals are also in `docs/manual/`). Copy the bundle (`satcomp`, `satxcomp`, `satlim` or `satdiff`) to:
 
 | | macOS | Windows |
 |---|---|---|

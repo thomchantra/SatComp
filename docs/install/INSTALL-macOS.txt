@@ -26,7 +26,7 @@ developer, run this in Terminal once (adjust the path to what you installed):
 Your settings and presets
 -------------------------
   Presets:  ~/Library/Application Support/@NAME@/Presets
-  Themes:   ~/Library/Application Support/SatComp/themes.json   (shared by SatComp, SatXComp and SatLim)
+  Themes:   ~/Library/Application Support/SatComp/themes.json   (shared by all the plug-ins)
 
 Uninstall: delete the files you copied.
 

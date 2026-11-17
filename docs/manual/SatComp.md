@@ -1,23 +1,21 @@
 ---
 title: SatComp
-version: 0.5.2
+version: 0.5.3
 tagline: waveshaping saturator with compressor and 2-stage 3-band EQ
-screenshot: ../screenshot.png
+screenshot: ../screenshots/satcomp.png
 ---
 
-# SatComp 0.5.2
+# SatComp 0.5.3
 
 A waveshaping saturator with a compressor and a 2-stage 3-band EQ. Give the compressor more spice to squash. Made with bricking intentions.
 
-![SatComp](../screenshot.png)
+<!--hero:satcomp-->
 
 ## 1. The idea
 
-SatComp is a single strip: a saturator that feeds a compressor, an EQ that can sit before or after it, and a true-peak limiter at the end.
+SatComp is a single strip: a saturator that feeds a compressor, with an EQ stage on either side of the compressor and a true-peak limiter at the end. The compressor sees what the saturator and the pre EQ made of the signal. MIX blends the compressor's input back in, in parallel.
 
-```
-IN > [pre EQ] > SAT > COMP > MIX > [post EQ] > OUT GAIN > LIM > OUT
-```
+<!--flow:satcomp-->
 
 The saturator comes first on purpose: driving the shaper changes what the compressor hears, so the harder you saturate, the more there is to squash.
 
@@ -27,7 +25,7 @@ The saturator comes first on purpose: driving the shaper changes what the compre
 |---|---|
 | Header | logo (themes), preset bar, window scale, oversampling, SIDECHAIN, EQ page, DELTA, BYPASS |
 | Saturator (left) | shaper, DRIVE, BIAS, ASYM, HP, LP, TONE, SAT MIX, SAT GAIN and the transfer plot |
-| Compressor plot (middle) | transfer curve with the live operating point, the threshold dot and the ratio square |
+| Compressor plot (middle) | transfer curve with the live operating point, the threshold dot and the ratio square; the range is adjustable and a dashed line marks 0 dB |
 | Compressor cells | THRESH, RATIO, ATTACK, RELEASE, KNEE, K.SHAPE, PEAK>RMS, LOW CUT, L.AHEAD, SPEED, FF>FB, GR DIST |
 | Output column | LIM / TRIM / PK / RMS readouts, GAIN MATCH, IN>OUT, MAKEUP, MIX, OUT GAIN |
 | Meters | post-saturator level meter, gain reduction meter, output meter |
@@ -46,13 +44,13 @@ The saturator comes first on purpose: driving the shaper changes what the compre
 | SAT GAIN | level after the saturator, which is also the compressor's input level. Click the **SAT** readout in the plot corner to auto-match it. |
 | x1 / x2 / x4 | oversampling of the saturator (less aliasing, more latency) |
 
-**Custom curve.** Click the pencil icon in the plot corner to draw your own curve (up to 10 points). The symmetry tool draws one half and mirrors the other.
+**Custom curve.** Click the pencil icon in the plot corner to draw your own curve (up to 20 points). The ODD and EVEN tools draw one half and mirror it, point-symmetric (ODD) or across the Y axis (EVEN).
 
 ## 4. Compressor
 
 | Control | What it does |
 |---|---|
-| THRESH / RATIO | where compression starts and how much. You can also drag the dot (threshold) and the square (ratio) in the plot. |
+| THRESH / RATIO | where compression starts and how much. You can also drag the dot (threshold) and the square (ratio) in the plot, or grab the curve itself: the line above the threshold drags the ratio, the line below it the threshold. |
 | ATTACK / RELEASE | how fast the gain reacts |
 | KNEE / K.SHAPE | width and curve of the transition around the threshold |
 | PEAK>RMS | detector type: 0 % peak, 100 % RMS |
@@ -61,6 +59,10 @@ The saturator comes first on purpose: driving the shaper changes what the compre
 | SPEED | scales attack and release together |
 | FF>FB | detector topology: 0 % feed-forward, 100 % feedback |
 | GR DIST | soft saturation after the gain reduction, growing with how hard the compressor works |
+
+### The plot
+
+Both axes show the same range in dB. **CEIL** (0 to +18 dB) and **FLOOR** (-12 to -72 dB), the two small labels in its lower right corner, set that range: drag them up or down, use the wheel, or double-click to reset. With the ceiling above 0 the plot shows what a hot signal does: dashed lines mark 0 dB, and the live level can run past them. The range is saved with the project.
 
 ### Sidechain
 

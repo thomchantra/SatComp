@@ -1,0 +1,38 @@
+SatComp suite @VER@ - installation (Windows)
+============================================
+
+This zip holds all four plug-ins, as VST3 and CLAP, plus one joint manual (PDF):
+
+  SatComp   compressor with a waveshaping saturator and EQ
+  SatXComp  4-band compressor with a saturator per band
+  SatLim    saturator into a clipper and a true-peak limiter
+  SatDiff   A/B waveshaper saturator with morph and phase colouring
+
+1. Unzip the download anywhere.
+2. VST3: copy the folders in  VST3\  (satcomp.vst3, satxcomp.vst3, ...) into
+       C:\Program Files\Common Files\VST3\
+   The .vst3 items are FOLDERS: copy the whole folder, do not open it. Windows asks for administrator
+   permission. No admin rights? Use  %LOCALAPPDATA%\Programs\Common\VST3\  instead; most hosts scan it.
+3. CLAP: copy the files in  CLAP\  into
+       C:\Program Files\Common Files\CLAP\
+   (or %LOCALAPPDATA%\Programs\Common\CLAP\)
+   Copy only the plug-ins you want, or all of them.
+4. Rescan plug-ins in your host (or restart it).
+
+Your settings and presets
+-------------------------
+  Presets:  %APPDATA%\<plug-in name>\Presets
+  Themes:   %APPDATA%\SatComp\themes.json   (shared by all the plug-ins)
+
+Uninstall: delete the folders and files you copied.
+
+Got issues?
+-----------
+Found a bug, or something sounds or looks odd? Please submit a bug report on GitHub:
+  https://github.com/thomchantra/SatComp/issues
+Say which plug-in and version, your host (DAW) and operating system, and what you did. A screenshot
+or a short description of how to reproduce it helps a lot.
+
+Enjoying it? You can support the project here: https://ko-fi.com/thomchantra
+
+Licence: GPL-3.0-or-later, see LICENSE.

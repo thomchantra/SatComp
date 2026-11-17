@@ -20,6 +20,8 @@ pub struct Shared {
     pub tap_dry: Arc<TapRing>,
     /// per 2 ms bucket: output peak and the same with the gain reduction added back (waveform scope)
     pub scope: Arc<ScopeRing>,
+    /// animation values per 2 ms bucket (live dots, level dots, gain-difference bar): replayed in audio time by the editor
+    pub meter: Arc<satcomp_dsp::MeterRing>,
     pub epoch: Instant,
     pub sample_rate: AtomicF32,
     // audio -> UI. Peaks accumulate with fetch_max and are consumed with swap(0).
@@ -67,6 +69,7 @@ impl Shared {
             tap_out: Arc::new(TapRing::new()),
             tap_dry: Arc::new(TapRing::new()),
             scope: Arc::new(ScopeRing::new()),
+            meter: Arc::new(satcomp_dsp::MeterRing::new()),
             epoch: Instant::now(),
             sample_rate: AtomicF32::new(48000.0),
             opk: [AtomicF32::new(0.0), AtomicF32::new(0.0)],
@@ -121,6 +124,7 @@ impl SatXComp {
         e.tap_out = self.shared.tap_out.clone();
         e.tap_dry = self.shared.tap_dry.clone();
         e.scope = self.shared.scope.clone();
+        e.meter = self.shared.meter.clone();
         e.match_trim = self.params.match_trim.load(Ordering::Relaxed) as f64;
         e
     }
@@ -133,6 +137,7 @@ impl Default for SatXComp {
         engine.tap_out = shared.tap_out.clone();
         engine.tap_dry = shared.tap_dry.clone();
         engine.scope = shared.scope.clone();
+        engine.meter = shared.meter.clone();
         Self { params: Arc::new(SatXCompParams::default()), shared, engine, last_latency: u32::MAX, last_curves: [Curve::linear(); 4], last_asym: [[100.0; satxcomp_dsp::params::SHAPER_COUNT]; 4] }
     }
 }
@@ -310,5 +315,26 @@ mod tests {
         }
         assert_eq!(<SatXComp as Vst3Plugin>::VST3_CLASS_ID.len(), 16);
         assert!(<SatXComp as ClapPlugin>::CLAP_ID.starts_with("com.thomchantra."));
+    }
+}
+
+#[cfg(test)]
+mod shadow_tests {
+    use crate::params::SatXCompParams;
+
+    #[test]
+    fn the_viewport_snapshot_takes_pending_writes_and_otherwise_equals_the_plain_one() {
+        let p = SatXCompParams::from_defaults(None);
+        let plain = p.to_dsp();
+        let same = p.to_dsp_over(&|_| None);
+        assert_eq!((same.x1, same.bands[0].drive, same.eq.tilt, same.bypass), (plain.x1, plain.bands[0].drive, plain.eq.tilt, plain.bypass));
+        // the first crossover (slot 1), the low band's drive (14), the EQ tilt (145) and BYPASS (8), written but not yet applied
+        let d = p.to_dsp_over(&|n| match n { 1 => Some(321.0), 14 => Some(37.0), 145 => Some(2.5), 8 => Some(1.0), _ => None });
+        assert_eq!(d.x1, 321.0);
+        assert_eq!(d.bands[0].drive, 37.0);
+        assert_eq!(d.eq.tilt, 2.5);
+        assert!(d.bypass);
+        assert_eq!(d.x2, plain.x2, "the rest stays as it is");
+        assert_eq!(p.to_dsp().x1, plain.x1, "the real parameters are untouched");
     }
 }

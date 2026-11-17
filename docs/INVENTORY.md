@@ -4,23 +4,25 @@ Internal record of what exists, at which version, and when it got there. Update 
 
 ## Plug-ins
 
-| | SatComp | SatXComp | SatLim |
-|---|---|---|---|
-| Version | 0.5.2 | 0.1.0 | 0.1.0 |
-| Crates | `satcomp-dsp` (shared blocks), `satcomp-plugin` | `satxcomp-dsp`, `satxcomp-plugin` | `satlim-dsp`, `satlim-plugin` |
-| Chain | saturator, compressor, two 3-band EQ stages (pre / post compressor) + tilt, sidechain, output limiter | 4-band split > per band sat > comp > comp mix/gain, 5-band post EQ, limiter, sidechain | sat (x1-x8) > clip > true-peak limiter > out gain |
-| VST3 class id | `TrtSatCompPlugin` | `thomchantraSatXC` | `thomchantraSatLm` |
-| CLAP id | `com.trirat.satcomp` | `com.thomchantra.satxcomp` | `com.thomchantra.satlim` |
-| Bundle names | `satcomp.vst3` / `.clap` | `satxcomp.vst3` / `.clap` | `satlim.vst3` / `.clap` |
-| Preset extension / folder | `.satcomp`, `SatComp/Presets` | `.satxcomp`, `SatXComp/Presets` | `.satlim`, `SatLim/Presets` |
-| Factory presets | 6 (Drums_*) | 4 | 6 |
-| Window (logical, base) | 560 x 336 | 664 x 400 | 340 x 496 |
-| Latency | constant ~2.2 ms at 48 kHz, reported | constant, reported | saturator + clipper oversamplers + lookahead, reported; changes with x1-x8 and L.AHEAD |
-| Docs | `PARAMETERS.md` (JSFX era), `FOUNDATION.md` | `FOUNDATION.md` | `SATLIM.md` |
+| | SatComp | SatXComp | SatLim | SatDiff |
+|---|---|---|---|---|
+| Version | 0.5.3 | 0.1.1 | 0.1.1 | 0.1.0 |
+| Crates | `satcomp-dsp` (shared blocks), `satcomp-plugin` | `satxcomp-dsp`, `satxcomp-plugin` | `satlim-dsp`, `satlim-plugin` | `satdiff-dsp`, `satdiff-plugin` |
+| Chain | saturator, compressor, two 3-band EQ stages (pre / post compressor) + tilt, sidechain, output limiter | 4-band split > per band sat > comp > comp mix/gain, 5-band post EQ, limiter, sidechain | sat (x1-x8) > clip > true-peak limiter > out gain | in gain > phase > colour fx (pre) > scene A / B saturators (morph) > colour fx (post) > out HPF (M/S) > out gain > true-peak limiter |
+| VST3 class id | `TrtSatCompPlugin` | `thomchantraSatXC` | `thomchantraSatLm` | `thomchantraSatDf` |
+| CLAP id | `com.trirat.satcomp` | `com.thomchantra.satxcomp` | `com.thomchantra.satlim` | `com.thomchantra.satdiff` |
+| Bundle names | `satcomp.vst3` / `.clap` | `satxcomp.vst3` / `.clap` | `satlim.vst3` / `.clap` | `satdiff.vst3` / `.clap` |
+| Preset extension / folder | `.satcomp`, `SatComp/Presets` | `.satxcomp`, `SatXComp/Presets` | `.satlim`, `SatLim/Presets` | `.satdiff`, `SatDiff/Presets` |
+| Factory presets | 6 (Drums_*) | 4 | 6 | 8 |
+| Window (logical, base) | 560 x 336 | 664 x 400 | 340 x 496 | 316 x 556 |
+| Latency | constant ~2.2 ms at 48 kHz, reported | constant, reported | saturator + clipper oversamplers + lookahead, reported; changes with x1-x8 and L.AHEAD | reported; follows the oversampling (a tile forces x4) |
+| Docs | `PARAMETERS.md` (JSFX era), `FOUNDATION.md` | `FOUNDATION.md` | `SATLIM.md` | manual only |
 
-Shared: `satcomp-ui` (canvas, 27 palettes, 11 embedded fonts, FFT, widget kit, About / Preferences / Changelog pages), `themes.json` and `defaults*.json` under `SatComp/` in the user's application-support folder. Parameter ids never change once released (presets, projects and automation depend on them).
+Shared: `satcomp-ui` (canvas, 30 palettes, 11 embedded fonts, FFT, widget kit, About / Preferences / Changelog pages), `themes.json` and `defaults*.json` under `SatComp/` in the user's application-support folder. Parameter ids never change once released (presets, projects and automation depend on them).
 
 **Platforms:** macOS (universal), Windows x64 and Linux x64 (experimental from 0.5.2: X11 only, built on ubuntu-22.04; known issue: the meters and the scope stutter on some systems, probably frame pacing under X11; `SATCOMP_FPS=1` and `SATCOMP_VSYNC=0|1` help diagnose it).
+
+**Released with 0.5.3:** SatDiff 0.1.0 (A/B waveshaper saturator with morph, phase rotator, colour fx). The whole-suite release also attaches `SatComp-Suite-<tag>-<platform>.zip` (and a macOS `.pkg`), built by `docs/install/make-suite.sh` in CI.
 
 **Not built:** SatEQ (5-band EQ with a waveshaper per band) exists only as a pitch, `docs/internal/SATEQ_PITCH.md`. The CI matrix knows the `sateq-v*` tag but there is no crate. AU is shelved (no demand yet).
 
@@ -42,17 +44,25 @@ Shared: `satcomp-ui` (canvas, 27 palettes, 11 embedded fonts, FFT, widget kit, A
 | v0.4 / v0.4.1 | 2026-11-09 | rebuilt in Rust as VST3 + CLAP, presets, resize, custom waveshaper, 20 schemes; CI for macOS universal + Windows; v0.4.1 fixes the PK readout |
 | v0.5.0 | 2026-11-09 | sidechain input, light mode for every scheme, scrolling About |
 | v0.5.1 | 2026-11-10 | fixed the enable/refocus thump; Appearance tab, custom themes, waveform scope |
+| v0.5.3 | 2026-11-17 | adjustable compressor plot, 20-point draw view + EVEN, hover on switches, header lockup, CPU work, Linux fixes |
 | v0.5.2 | 2026-11-13 | engine rebuilt from blocks (bit-identical audio), shared UI crate, true-peak output limiter, post-sat meter, ASYM, SAT GAIN, plain bypass, 27 schemes, 11 fonts, per-plug-in defaults |
 
 ### SatXComp
 | Version | Date | Milestone |
 |---|---|---|
 | (design) | 2026-11-10 | started as a 3-band multiband version of SatComp; `satxcomp-dsp` crossover |
+| 0.1.1 | 2026-11-17 | 0.5.3: 20-point draw view, UI pass, CPU 1.9 -> 0.6 % at defaults |
 | 0.1.0 | 2026-11-13 | frozen with 0.5.2: four bands, 12/24/48/96 dB crossovers, band-limited saturator, DWNWARD / UPWARD / UP/DWN compressor, per-band sidechain key, 5-band EQ, limiter, scope, gain-reduction and gain-increase view in the spectrum, 4 factory presets |
+
+### SatDiff
+| Version | Date | Milestone |
+|---|---|---|
+| 0.1.0 | 2026-11-17 | debut with 0.5.3: A/B saturator scenes and MORPH, 30-point curves, TILE, phase rotator, five colour fx, out HPF (M/S), limiter, 8 factory presets, manual |
 
 ### SatLim
 | Version | Date | Milestone |
 |---|---|---|
+| 0.1.1 | 2026-11-17 | 0.5.3: 20-point draw view, UI pass |
 | 0.1.0 | 2026-11-13 | frozen with 0.5.2: the SatComp saturator into an oversampled clipper and true-peak limiter with transient scope, 8x TRU.PK readout, 6 factory presets |
 
 ## Key milestones (project timeline)

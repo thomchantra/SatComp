@@ -29,10 +29,16 @@ fn scope_col(ring: &satcomp_dsp::ScopeRing, head: usize, j: i64, k: f64) -> (f32
             continue;
         }
         let (a, b) = ring.get(i as usize);
+        let (a, b) = (fin(a), fin(b));
         o = o.max(a);
         p = p.max(b);
     }
     (o, p.max(o))
+}
+
+/// a ring value made safe to draw: non-finite or negative peaks (only possible with broken audio upstream) read as 0
+fn fin(v: f32) -> f32 {
+    if v.is_finite() { v.max(0.0) } else { 0.0 }
 }
 
 fn fmt_db(db: i32) -> String {
@@ -113,19 +119,14 @@ impl<'a> Gui<'a> {
         let head = ring.head();
         let ncol = (w - 2.0) as usize;
         let k = WIN_S[win] as f64 / satcomp_dsp::ScopeRing::BUCKET_S / ncol as f64; // buckets per column (fractional)
-        // Steady scrolling: the audio thread delivers buckets in host-block chunks, and a column grouped relative to the newest
-        // bucket changes every frame. So (1) the read position eases toward the head instead of jumping with each chunk, and
-        // (2) columns sit on a fixed grid in absolute bucket time and only complete ones are drawn: a column's content never
-        // changes once it exists, the picture just advances.
-        let target = head as f64 - 4.0;
+        // Steady scrolling: the audio thread delivers buckets in host-block chunks (up to tens of ms on Linux), so (1) the read
+        // position is a free-running clock at the bucket rate, gently locked to the head (ScrollClock: constant speed whatever
+        // the block size, never ahead of the written buckets), and (2) columns sit on a fixed grid in absolute bucket time and
+        // only complete ones are drawn: a column's content never changes once it exists, the picture just advances.
         let dt = (self.now - self.scope_t).clamp(0.0, 0.25);
         self.scope_t = self.now;
-        if self.scope_pos <= 0.0 || (target - self.scope_pos).abs() > 4000.0 {
-            self.scope_pos = target;
-        } else {
-            self.scope_pos += (target - self.scope_pos) * (1.0 - (-dt * 10.0).exp());
-        }
-        let last = (self.scope_pos / k).floor() as i64 - 1; // newest complete column
+        let pos = self.scope_clk.update(head, dt, 1.0 / satcomp_dsp::ScopeRing::BUCKET_S);
+        let last = (pos / k).floor() as i64 - 1; // newest complete column
         let mut cols = vec![(0.0f32, 0.0f32); ncol];
         for (c, col) in cols.iter_mut().enumerate() {
             *col = scope_col(&ring, head, last - (ncol - 1 - c) as i64, k);
@@ -212,11 +213,19 @@ impl<'a> Gui<'a> {
                     self.sc_set(shift, bits, nx);
                 }
             }
+            // a click-to-cycle switch: the pointer over it fills the cell
+            let hv = self.hit(cx, y, w, h);
             self.setc(false);
-            self.cv.boxr(cx, y, w, h);
+            if hv {
+                self.cv.fill(cx, y, w, h);
+                self.cv.setbg();
+            } else {
+                self.cv.boxr(cx, y, w, h);
+            }
             self.cv.set_font(1);
             self.cv.text(cx + 4.0, y + 5.0, lbl);
             self.cv.textr(cx, y + 5.0, w - 4.0, names[cur]);
+            self.setc(false);
             cx += w - 1.0;
         }
         // WIN and CEIL: horizontal drag sliders over their cell, stepped

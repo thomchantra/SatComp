@@ -44,6 +44,8 @@ pub struct Strip {
     ims: f64,
     sms: f64,
     ms_c: f64,
+    /// the saturator is off and the band-limiter has rung out: what it added is exactly zero, so the filter is skipped
+    confine_idle: bool,
 }
 
 impl Default for Strip {
@@ -75,6 +77,7 @@ impl Strip {
             ims: 1e-9,
             sms: 1e-9,
             ms_c: 0.0,
+            confine_idle: false,
         }
     }
 
@@ -134,6 +137,11 @@ impl Strip {
     pub fn begin_block(&mut self, n: usize) {
         self.sat.begin_block();
         self.confine.begin_block(n);
+        // a saturator that is off adds exactly nothing; once the filter's tail is gone there is nothing left to run it for
+        self.confine_idle = !self.sat.is_on() && self.confine.is_quiet();
+        if self.confine_idle {
+            self.confine.snap_to_target();
+        }
     }
 
     #[inline]
@@ -145,7 +153,7 @@ impl Strip {
         let dd = self.dry.tap(self.latency());
         // the saturator's added content stays inside the band (see `confine`); the clean signal bypasses the filter
         let (raw, clean) = self.sat.tick_split(inp, smoothing);
-        let add = self.confine.tick([raw[0] - clean[0], raw[1] - clean[1]]);
+        let add = if self.confine_idle { [0.0, 0.0] } else { self.confine.tick([raw[0] - clean[0], raw[1] - clean[1]]) };
         let g = self.sat.gain_step();
         let shaped = [clean[0] + add[0], clean[1] + add[1]];
         ms_step(&mut self.ims, inp[0], inp[1], self.ms_c);

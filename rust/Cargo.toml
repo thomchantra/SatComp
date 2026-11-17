@@ -1,5 +1,5 @@
 [workspace]
-members = ["satcomp-dsp", "satcomp-ui", "satcomp-plugin", "satxcomp-dsp", "satxcomp-plugin", "satlim-dsp", "satlim-plugin", "xtask"]
+members = ["satcomp-dsp", "satcomp-ui", "satcomp-plugin", "satxcomp-dsp", "satxcomp-plugin", "satlim-dsp", "satlim-plugin", "satdiff-dsp", "satdiff-plugin", "xtask"]
 exclude = ["vendor"]
 resolver = "2"
 
@@ -11,3 +11,9 @@ strip = "symbols"
 inherits = "release"
 debug = true
 strip = "none"
+
+# SatComp patch: baseview's X11 backend closes a window with a flag only, so the host destroys the parent X window while the window
+# thread is still drawing into it, and Mesa then waits forever for a Present event (the REAPER-on-Linux freeze). The vendored copy
+# waits for the window thread to finish (bounded) in `WindowHandle::close` and bounds the wait in `open_parented`.
+[patch."https://github.com/RustAudio/baseview.git"]
+baseview = { path = "vendor/baseview" }

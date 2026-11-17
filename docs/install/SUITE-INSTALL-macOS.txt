@@ -1,0 +1,51 @@
+SatComp suite @VER@ - installation (macOS)
+==========================================
+
+This zip holds all four plug-ins, as VST3 and CLAP, plus one joint manual (PDF):
+
+  SatComp   compressor with a waveshaping saturator and EQ
+  SatXComp  4-band compressor with a saturator per band
+  SatLim    saturator into a clipper and a true-peak limiter
+  SatDiff   A/B waveshaper saturator with morph and phase colouring
+
+The build is universal (Apple silicon and Intel).
+
+Easiest: the installer
+----------------------
+Download the .pkg from the release page instead of this zip and open it. It installs every plug-in
+for all users into /Library/Audio/Plug-Ins/VST3 and /Library/Audio/Plug-Ins/CLAP.
+
+By hand
+-------
+1. Unzip the download.
+2. VST3: copy the .vst3 files from  VST3/  into  ~/Library/Audio/Plug-Ins/VST3/
+   CLAP: copy the .clap files from  CLAP/  into  ~/Library/Audio/Plug-Ins/CLAP/
+   (for all users use /Library/Audio/Plug-Ins/ instead of ~/Library/Audio/Plug-Ins/)
+   Copy only the plug-ins you want, or all of them.
+3. Rescan plug-ins in your host (or restart it).
+
+The builds are not notarized. If macOS says a plug-in is damaged or from an unidentified developer
+(or the .pkg will not open: right-click it and choose Open), run this in Terminal once:
+
+    xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/sat*.vst3
+    xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/sat*.clap
+
+(for the installer: use /Library/Audio/Plug-Ins/... in those paths)
+
+Your settings and presets
+-------------------------
+  Presets:  ~/Library/Application Support/<plug-in name>/Presets
+  Themes:   ~/Library/Application Support/SatComp/themes.json   (shared by all the plug-ins)
+
+Uninstall: delete the files you copied or the installer put in the folders above.
+
+Got issues?
+-----------
+Found a bug, or something sounds or looks odd? Please submit a bug report on GitHub:
+  https://github.com/thomchantra/SatComp/issues
+Say which plug-in and version, your host (DAW) and operating system, and what you did. A screenshot
+or a short description of how to reproduce it helps a lot.
+
+Enjoying it? You can support the project here: https://ko-fi.com/thomchantra
+
+Licence: GPL-3.0-or-later, see LICENSE.
