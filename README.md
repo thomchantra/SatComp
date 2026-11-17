@@ -1,13 +1,13 @@
 # SatComp
 
-A waveshaping-saturator-infused plug-ins suite: a compressor, a 4-band compressor, a clipper / limiter and a phase diffusor. Made with bricking intentions.
+A waveshaping saturator plug-ins suite: a compressor, a 4-band compressor, a clipper-limiter and a phase diffusor. Made with bricking intentions.
 
-| Plug-in | Version | What |
+| Plug-in | Version | Features |
 |---|---|---|
-| [**SatComp**](#satcomp) | 0.5.3 | waveshaping saturator, compressor and a 2-stage 3-band EQ |
-| [**SatXComp**](#satxcomp) | 0.1.1 | 4-band multiband compressor with a saturator per band and a 5-band EQ |
-| [**SatLim**](#satlim) | 0.1.1 | saturator into an oversampled clipper and a true-peak brickwall limiter |
-| [**SatDiff**](#satdiff) | 0.1.0 | A/B waveshaper saturator with morph, a phase rotator and colour effects |
+| [**SatComp**](#satcomp) | 0.5.3 | A waveshaping saturator, compressor and a 2-stage 3-band EQ |
+| [**SatXComp**](#satxcomp) | 0.1.1 | A 4-band multiband compressor with a saturator per band and a 5-band EQ |
+| [**SatLim**](#satlim) | 0.1.1 | A clipper and a true-peak brickwall limiter with a saturator |
+| [**SatDiff**](#satdiff) | 0.1.0 | A dual waveshaping saturator with phase coloration effects |
 
 VST3 and CLAP for macOS (Apple silicon and Intel), Windows and Linux (experimental: see Install). Free, GPL-3.0-or-later.
 
@@ -55,7 +55,7 @@ A 2-stage clipper/limiter with a waveshaping saturator. When you need to nuke it
 
 ## SatDiff
 
-A waveshaper saturator with phase colouring effects. Dedicated to sweet saturated sounds.
+A dual waveshaping saturator with phase colouring effects. Dedicated to sweet saturated sounds.
 
 <img src="docs/screenshots/satdiff.png" alt="SatDiff" width="340">
 
