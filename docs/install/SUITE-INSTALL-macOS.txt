@@ -1,7 +1,7 @@
 SatComp suite @VER@ - installation (macOS)
 ==========================================
 
-This zip holds all four plug-ins, as VST3 and CLAP, plus their manuals (PDF):
+This zip holds all four plug-ins, as VST3 and CLAP, plus one joint manual (PDF):
 
   SatComp   compressor with a waveshaping saturator and EQ
   SatXComp  4-band compressor with a saturator per band

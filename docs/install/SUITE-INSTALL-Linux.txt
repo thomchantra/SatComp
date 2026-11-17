@@ -4,8 +4,8 @@ SatComp suite @VER@ - installation (Linux, experimental)
 This Linux build is new and lightly tested. Known issue: the meters and the scope can stutter on some
 systems. Feedback is very welcome (see "Got issues?" below).
 
-This zip holds all four plug-ins (SatComp, SatXComp, SatLim, SatDiff) as VST3 and CLAP, plus their
-manuals (PDF). The VST3s are FOLDERS, not single files.
+This zip holds all four plug-ins (SatComp, SatXComp, SatLim, SatDiff) as VST3 and CLAP, plus one
+joint manual (PDF). The VST3s are FOLDERS, not single files.
 
 Easiest: the install script
 ---------------------------

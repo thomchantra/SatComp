@@ -115,8 +115,8 @@ jobs:
             *.zip
             *.pdf
 
-  # the all-in-one files of a whole-suite release (a plain v* tag): one zip per platform with every plug-in and manual, and a
-  # macOS installer (.pkg, all users). Built from the per-plug-in zips of the bundle job by docs/install/make-suite.sh.
+  # the all-in-one files of a whole-suite release (a plain v* tag): one zip per platform with every plug-in and the joint manual,
+  # the joint manual PDF on its own, and a macOS installer (.pkg, all users). Built from the per-plug-in zips of the bundle job by docs/install/make-suite.sh.
   suite:
     if: startsWith(github.ref_name, 'v') && startsWith(github.ref, 'refs/tags/')
     needs: bundle
@@ -134,6 +134,9 @@ jobs:
         with:
           path: zips
           merge-multiple: true
+      - name: Joint-manual tool (pdfunite)
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then brew install poppler; else sudo apt-get install -y poppler-utils; fi
       - name: Suite
         run: docs/install/make-suite.sh "${{ matrix.name }}" "${GITHUB_REF_NAME}" zips out
       - uses: actions/upload-artifact@v4
@@ -153,6 +156,13 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      # a whole-suite release (plain v* tag) attaches only the suite files: 3 zips, the macOS .pkg and the joint manual.
+      # A <plugin>-v* tag has no suite files, so its own zip is kept.
+      - name: Keep only the suite files on a suite release
+        run: |
+          if ls artifacts/SatComp-Suite-* >/dev/null 2>&1; then
+            find artifacts -maxdepth 1 -type f ! -name 'SatComp-Suite-*' -delete
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           files: |

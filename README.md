@@ -70,7 +70,7 @@ A waveshaper saturator with phase colouring effects. Dedicated to sweet saturate
 - Resizable window (100% to 250%). Double-click any slider to reset it. Click the title for an About page with the signal flow, Preferences and the changelog.
 
 ## Install
-Download from the [Releases](../../releases) page: `SatComp-Suite-<version>-<platform>.zip` holds every plug-in and manual (macOS also has a `.pkg` installer that puts them in place for all users), or take the zip of a single plug-in. Inside are `VST3/` and `CLAP/` folders that mirror the install locations, an `INSTALL.txt` and the plug-in's manual (PDF; the manuals are also in `docs/manual/`). Copy the bundle (`satcomp`, `satxcomp`, `satlim` or `satdiff`) to:
+Download from the [Releases](../../releases) page: `SatComp-Suite-<version>-<platform>.zip` holds all four plug-ins and a joint manual (macOS also has a `.pkg` installer that puts them in place for all users; the joint manual is also attached on its own). Inside are `VST3/` and `CLAP/` folders that mirror the install locations, an `INSTALL.txt` and the manual (PDF; the per-plug-in manuals are also in `docs/manual/`). Copy the bundle (`satcomp`, `satxcomp`, `satlim` or `satdiff`) to:
 
 | | macOS | Windows |
 |---|---|---|
