@@ -4,6 +4,7 @@ pub mod appearance;
 pub mod canvas;
 pub mod fft;
 pub mod kit;
+pub mod logo_art;
 pub mod meter;
 pub mod scroll;
 pub mod spectrum;
