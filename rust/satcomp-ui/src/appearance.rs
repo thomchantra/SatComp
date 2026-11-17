@@ -1537,10 +1537,10 @@ mod tests {
 
     #[test]
     fn the_new_schemes_are_in_the_table_and_ultramarine_has_the_lighter_accent() {
-        for n in ["Brick", "Bob", "Carbon", "Olive", "Jade", "Honey", "Stealth"] {
+        for n in ["Brick", "Bob", "Carbon", "Olive", "Jade", "Honey", "Stealth", "Canary", "Drabberry", "Citrus Mint"] {
             assert!(builtin_by_name(n).is_some(), "{n}");
         }
-        assert_eq!(PALETTES.len(), 27);
+        assert_eq!(PALETTES.len(), 30);
         let u = &PALETTES[builtin_by_name("Ultramarine").unwrap()];
         assert!((u.1[6] - 0x77 as f32 / 255.0).abs() < 0.001, "ultramarine accent {:?}", u.1);
         // names are unique, ignoring case

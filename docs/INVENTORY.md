@@ -18,7 +18,7 @@ Internal record of what exists, at which version, and when it got there. Update 
 | Latency | constant ~2.2 ms at 48 kHz, reported | constant, reported | saturator + clipper oversamplers + lookahead, reported; changes with x1-x8 and L.AHEAD | reported; follows the oversampling (a tile forces x4) |
 | Docs | `PARAMETERS.md` (JSFX era), `FOUNDATION.md` | `FOUNDATION.md` | `SATLIM.md` | manual only |
 
-Shared: `satcomp-ui` (canvas, 27 palettes, 11 embedded fonts, FFT, widget kit, About / Preferences / Changelog pages), `themes.json` and `defaults*.json` under `SatComp/` in the user's application-support folder. Parameter ids never change once released (presets, projects and automation depend on them).
+Shared: `satcomp-ui` (canvas, 30 palettes, 11 embedded fonts, FFT, widget kit, About / Preferences / Changelog pages), `themes.json` and `defaults*.json` under `SatComp/` in the user's application-support folder. Parameter ids never change once released (presets, projects and automation depend on them).
 
 **Platforms:** macOS (universal), Windows x64 and Linux x64 (experimental from 0.5.2: X11 only, built on ubuntu-22.04; known issue: the meters and the scope stutter on some systems, probably frame pacing under X11; `SATCOMP_FPS=1` and `SATCOMP_VSYNC=0|1` help diagnose it).
 

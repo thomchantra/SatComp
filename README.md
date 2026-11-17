@@ -66,7 +66,7 @@ A waveshaper saturator with phase colouring effects. Dedicated to sweet saturate
 
 ## Shared
 
-- **27 colour schemes, each with a light mode, plus your own:** click the logo for the next scheme, double-click it for light/dark, right-click for the list. The **Preferences** tab (About page) has the mode switch, a scheme list with swatches, 11 fonts, a custom theme editor with a colour picker, and SET AS DEFAULT for new instances. User themes are saved in `~/Library/Application Support/SatComp/themes.json` (`%APPDATA%\SatComp\themes.json` on Windows).
+- **30 colour schemes, each with a light mode, plus your own:** click the logo for the next scheme, double-click it for light/dark, right-click for the list. The **Preferences** tab (About page) has the mode switch, a scheme list with swatches, 11 fonts, a custom theme editor with a colour picker, and SET AS DEFAULT for new instances. User themes are saved in `~/Library/Application Support/SatComp/themes.json` (`%APPDATA%\SatComp\themes.json` on Windows).
 - Resizable window (100% to 250%). Double-click any slider to reset it. Click the title for an About page with the signal flow, Preferences and the changelog.
 
 ## Install
