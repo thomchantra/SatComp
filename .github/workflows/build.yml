@@ -118,7 +118,8 @@ jobs:
   # the all-in-one files of a whole-suite release (a plain v* tag): one zip per platform with every plug-in and the joint manual,
   # the joint manual PDF on its own, and a macOS installer (.pkg, all users). Built from the per-plug-in zips of the bundle job by docs/install/make-suite.sh.
   suite:
-    if: startsWith(github.ref_name, 'v') && startsWith(github.ref, 'refs/tags/')
+    # every build except a single-plug-in tag, so the suite files can be checked from a branch / PR run before tagging
+    if: ${{ !startsWith(github.ref_name, 'satxcomp-v') && !startsWith(github.ref_name, 'satlim-v') && !startsWith(github.ref_name, 'sateq-v') }}
     needs: bundle
     strategy:
       fail-fast: false
@@ -138,7 +139,11 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = macOS ]; then brew install poppler; else sudo apt-get install -y poppler-utils; fi
       - name: Suite
-        run: docs/install/make-suite.sh "${{ matrix.name }}" "${GITHUB_REF_NAME}" zips out
+        run: |
+          # the suite is versioned like SatComp: the release tag on a tag build, else SatComp's version with -dev
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then ver="$GITHUB_REF_NAME"
+          else ver="v$(grep -m1 '^version' rust/satcomp-plugin/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')-dev"; fi
+          docs/install/make-suite.sh "${{ matrix.name }}" "$ver" zips out
       - uses: actions/upload-artifact@v4
         with:
           name: suite-${{ matrix.name }}
